@@ -1,0 +1,63 @@
+import { NextResponse } from "next/server";
+import { assignLockbox, unassignLockbox } from "@/lib/google/lockboxes-repository";
+import { triggerLockboxAssigned, triggerLockboxUnassigned } from "@/lib/n8n/webhooks";
+import { getLockboxById } from "@/lib/google/lockboxes-repository";
+import { z } from "zod";
+
+const assignSchema = z.object({ lockbox_id: z.string().min(1) });
+
+export async function PUT(
+  req: Request,
+  { params }: { params: Promise<{ propertyKey: string }> }
+) {
+  try {
+    const { propertyKey } = await params;
+    const body = await req.json();
+    const parsed = assignSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: "lockbox_id is required" }, { status: 400 });
+    }
+
+    const actor = "dashboard-user";
+    const lockbox = await assignLockbox(propertyKey, parsed.data.lockbox_id, actor);
+    triggerLockboxAssigned(propertyKey, lockbox.lockbox_id, lockbox.serial_number, actor).catch(() => {});
+    return NextResponse.json({ lockbox });
+  } catch (err) {
+    console.error("[PUT /api/properties/lockbox]", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to assign lockbox" },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(
+  _req: Request,
+  { params }: { params: Promise<{ propertyKey: string }> }
+) {
+  try {
+    const { propertyKey } = await params;
+    const actor = "dashboard-user";
+
+    // Capture lockbox ID before unassigning for webhook
+    const { listLockboxes } = await import("@/lib/google/lockboxes-repository");
+    const lockboxes = await listLockboxes();
+    const assigned = lockboxes.find(
+      (l) => l.assigned_property_key === propertyKey && l.status === "assigned"
+    );
+
+    await unassignLockbox(propertyKey, actor);
+
+    if (assigned) {
+      triggerLockboxUnassigned(propertyKey, assigned.lockbox_id, actor).catch(() => {});
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    console.error("[DELETE /api/properties/lockbox]", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to unassign lockbox" },
+      { status: 500 }
+    );
+  }
+}
