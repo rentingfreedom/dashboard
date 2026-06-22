@@ -4,7 +4,7 @@ import type { NextRequest } from "next/server";
 const COOKIE_NAME = "rf_session";
 const PUBLIC_PATHS = ["/login", "/api/auth/login"];
 
-export function middleware(req: NextRequest) {
+export function middleware(req: NextRequest): NextResponse {
   const { pathname } = req.nextUrl;
 
   // Always allow public paths, static assets, and PWA files
