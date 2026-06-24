@@ -13,7 +13,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { NativeSelect } from "@/components/ui/native-select";
 import { toast } from "sonner";
 import { OwnerPicker } from "./owner-picker";
@@ -24,7 +23,6 @@ const schema = z.object({
   owner_label: z.string().max(200).optional(),
   status: z.enum(["vacant", "occupied"]),
   lockbox_id: z.string().optional(),
-  notes: z.string().max(1000).optional(),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -74,7 +72,6 @@ export function AddPropertyDialog({
           street_address: values.street_address,
           owner_label: values.owner_label,
           status: values.status,
-          notes: values.notes,
         }),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? "Failed to create");
@@ -179,17 +176,6 @@ export function AddPropertyDialog({
             <p className="text-xs text-gray-400">
               Pick an existing owner or add a new one.
             </p>
-          </div>
-
-          {/* Notes */}
-          <div className="space-y-1.5">
-            <Label htmlFor="add_notes">Notes</Label>
-            <Textarea
-              id="add_notes"
-              placeholder="Any additional notes…"
-              rows={3}
-              {...register("notes")}
-            />
           </div>
 
           <div className="rounded-md bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 px-3 py-2">

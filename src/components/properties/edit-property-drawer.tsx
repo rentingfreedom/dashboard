@@ -12,7 +12,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Separator } from "@/components/ui/separator";
 import { OwnerPicker } from "./owner-picker";
@@ -51,7 +50,6 @@ export function EditPropertyDrawer({
         street_address: property.street_address,
         owner_label: property.owner_label,
         status: property.status as "vacant" | "occupied",
-        notes: property.notes,
       });
     }
   }, [property, reset]);
@@ -129,12 +127,6 @@ export function EditPropertyDrawer({
                   />
                 )}
               />
-            </div>
-
-            {/* Notes */}
-            <div className="space-y-1.5">
-              <Label htmlFor="edit_notes">Notes</Label>
-              <Textarea id="edit_notes" rows={4} {...register("notes")} />
             </div>
 
             <Separator />

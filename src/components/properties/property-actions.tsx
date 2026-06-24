@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { MoreHorizontal, UserCheck, UserX, Lock, Unlock, PowerOff, Pencil } from "lucide-react";
+import { MoreHorizontal, UserCheck, UserX, Lock, Unlock, PowerOff, Pencil, Trash2 } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import type { Property, Lockbox } from "@/lib/types";
 import { DeactivateDialog } from "./deactivate-dialog";
+import { DeleteDialog } from "./delete-dialog";
 import { AssignLockboxDialog } from "./assign-lockbox-dialog";
 
 interface PropertyActionsProps {
@@ -24,6 +25,7 @@ interface PropertyActionsProps {
 
 export function PropertyActions({ property, availableLockboxes, onRefresh, onEdit }: PropertyActionsProps) {
   const [deactivateOpen, setDeactivateOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -118,6 +120,14 @@ export function PropertyActions({ property, availableLockboxes, onRefresh, onEdi
               </DropdownMenuItem>
             </>
           )}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onClick={() => setDeleteOpen(true)}
+            className="text-red-600 focus:text-red-600"
+          >
+            <Trash2 className="h-4 w-4 mr-2" />
+            Delete
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
 
@@ -126,6 +136,12 @@ export function PropertyActions({ property, availableLockboxes, onRefresh, onEdi
         onOpenChange={setDeactivateOpen}
         property={property}
         onSuccess={() => { setDeactivateOpen(false); onRefresh(); }}
+      />
+      <DeleteDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        property={property}
+        onSuccess={() => { setDeleteOpen(false); onRefresh(); }}
       />
       <AssignLockboxDialog
         open={assignOpen}

@@ -198,6 +198,36 @@ export async function setPropertyStatus(
   return updateProperty(propertyKey, { status }, actor);
 }
 
+export async function deleteProperty(
+  propertyKey: string,
+  actor: string
+): Promise<Property> {
+  const { headers, rawObjects } = await readAll();
+  const rawIdx = rawObjects.findIndex((o) => o.property_key === propertyKey);
+  if (rawIdx === -1) throw new Error(`Property "${propertyKey}" not found.`);
+
+  const existing = rawObjects[rawIdx];
+  const rowIndex = parseInt(existing._rowIndex!);
+  const updates: Record<string, string> = { active: "Delete" };
+
+  await updateSpecificColumns(TAB, rowIndex, updates, headers);
+
+  await writeAuditLog({
+    timestamp: new Date().toISOString(),
+    actor,
+    action: "property.deleted",
+    entity_type: "property",
+    entity_id: propertyKey,
+    property_key: propertyKey,
+    before_json: JSON.stringify(parseProperty(existing)),
+    after_json: JSON.stringify(updates),
+    source: "dashboard",
+    notes: "",
+  });
+
+  return parseProperty({ ...existing, ...updates });
+}
+
 export async function deactivateProperty(
   propertyKey: string,
   actor: string
