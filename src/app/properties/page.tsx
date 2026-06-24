@@ -20,6 +20,10 @@ export default function PropertiesPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [editProperty, setEditProperty] = useState<Property | null>(null);
 
+  const workflowBusy = properties.some(
+    (p) => p.provisioning_status === "pending_create" || p.provisioning_status === "pending_delete"
+  );
+
   const ownerLabels = Array.from(
     new Set(properties.map((p) => p.owner_label?.trim()).filter(Boolean) as string[])
   ).sort();
@@ -96,6 +100,7 @@ export default function PropertiesPage() {
               lockboxes={lockboxes}
               onRefresh={() => load(true)}
               onEdit={(property) => setEditProperty(property)}
+              workflowBusy={workflowBusy}
             />
           </>
         )}
@@ -107,6 +112,7 @@ export default function PropertiesPage() {
         onSuccess={() => load(true)}
         ownerLabels={ownerLabels}
         availableLockboxes={availableLockboxes}
+        workflowBusy={workflowBusy}
       />
 
       <EditPropertyDrawer

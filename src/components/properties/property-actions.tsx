@@ -21,9 +21,10 @@ interface PropertyActionsProps {
   availableLockboxes: Lockbox[];
   onRefresh: () => void;
   onEdit: (property: Property) => void;
+  workflowBusy: boolean;
 }
 
-export function PropertyActions({ property, availableLockboxes, onRefresh, onEdit }: PropertyActionsProps) {
+export function PropertyActions({ property, availableLockboxes, onRefresh, onEdit, workflowBusy }: PropertyActionsProps) {
   const [deactivateOpen, setDeactivateOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
@@ -142,6 +143,7 @@ export function PropertyActions({ property, availableLockboxes, onRefresh, onEdi
         onOpenChange={setDeleteOpen}
         property={property}
         onSuccess={() => { setDeleteOpen(false); onRefresh(); }}
+        workflowBusy={workflowBusy}
       />
       <AssignLockboxDialog
         open={assignOpen}

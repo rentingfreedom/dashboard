@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
+import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { OwnerPicker } from "./owner-picker";
 import type { Lockbox } from "@/lib/types";
@@ -33,6 +34,7 @@ interface AddPropertyDialogProps {
   onSuccess: () => void;
   ownerLabels: string[];
   availableLockboxes: Lockbox[];
+  workflowBusy: boolean;
 }
 
 function deriveKey(address: string) {
@@ -45,6 +47,7 @@ export function AddPropertyDialog({
   onSuccess,
   ownerLabels,
   availableLockboxes,
+  workflowBusy,
 }: AddPropertyDialogProps) {
   const {
     register,
@@ -177,6 +180,13 @@ export function AddPropertyDialog({
               Pick an existing owner or add a new one.
             </p>
           </div>
+
+          {workflowBusy && (
+            <div className="flex gap-2.5 rounded-md border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950 px-3 py-2.5 text-sm text-amber-800 dark:text-amber-300">
+              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+              <span>Another add or delete is still being processed by the automation. Proceeding now may cause that operation to be skipped.</span>
+            </div>
+          )}
 
           <div className="rounded-md bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 px-3 py-2">
             <p className="text-xs text-blue-700 dark:text-blue-300">

@@ -75,9 +75,10 @@ interface PropertiesTableProps {
   lockboxes: Lockbox[];
   onRefresh: () => void;
   onEdit: (property: Property) => void;
+  workflowBusy: boolean;
 }
 
-export function PropertiesTable({ properties, lockboxes, onRefresh, onEdit }: PropertiesTableProps) {
+export function PropertiesTable({ properties, lockboxes, onRefresh, onEdit, workflowBusy }: PropertiesTableProps) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
@@ -193,11 +194,12 @@ export function PropertiesTable({ properties, lockboxes, onRefresh, onEdit }: Pr
             availableLockboxes={availableLockboxes}
             onRefresh={onRefresh}
             onEdit={onEdit}
+            workflowBusy={workflowBusy}
           />
         ),
       }),
     ],
-    [availableLockboxes, onRefresh]
+    [availableLockboxes, onRefresh, workflowBusy]
   );
 
   const filteredData = useMemo(() => {

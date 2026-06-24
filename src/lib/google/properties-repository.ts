@@ -208,7 +208,7 @@ export async function deleteProperty(
 
   const existing = rawObjects[rawIdx];
   const rowIndex = parseInt(existing._rowIndex!);
-  const updates: Record<string, string> = { active: "Delete" };
+  const updates: Record<string, string> = { active: "Delete", provisioning_status: "pending_delete" };
 
   await updateSpecificColumns(TAB, rowIndex, updates, headers);
 
