@@ -52,8 +52,8 @@ function InlineStatusSelect({
 }) {
   const [saving, setSaving] = useState(false);
 
-  async function handleChange(next: string) {
-    if (next === status || saving) return;
+  async function handleChange(next: string | null) {
+    if (!next || next === status || saving) return;
     setSaving(true);
     try {
       await fetch(`/api/properties/${encodeURIComponent(propertyKey)}/status`, {
