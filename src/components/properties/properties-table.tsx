@@ -11,7 +11,7 @@ import {
   type ColumnFiltersState,
 } from "@tanstack/react-table";
 import { useState, useMemo } from "react";
-import { ExternalLink, ArrowUpDown, Lock, Unlock, Copy, Check } from "lucide-react";
+import { ExternalLink, ArrowUpDown, Lock, Unlock, Copy, Check, X } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -29,12 +29,65 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { StatusBadge, ProvisioningBadge } from "./status-badge";
+import { ProvisioningBadge } from "./status-badge";
 import { PropertyActions } from "./property-actions";
 import type { Property, Lockbox } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const col = createColumnHelper<Property>();
+
+const STATUS_STYLES: Record<string, string> = {
+  occupied: "bg-green-100 text-green-700 border-green-200 hover:bg-green-200",
+  vacant:   "bg-amber-100 text-amber-700 border-amber-200 hover:bg-amber-200",
+};
+
+function InlineStatusSelect({
+  propertyKey,
+  status,
+  onRefresh,
+}: {
+  propertyKey: string;
+  status: string;
+  onRefresh: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+
+  async function handleChange(next: string) {
+    if (next === status || saving) return;
+    setSaving(true);
+    try {
+      await fetch(`/api/properties/${encodeURIComponent(propertyKey)}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: next }),
+      });
+      onRefresh();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const s = status?.toLowerCase();
+  const triggerStyles = STATUS_STYLES[s] ?? "bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200";
+
+  return (
+    <Select value={s} onValueChange={handleChange} disabled={saving}>
+      <SelectTrigger
+        className={cn(
+          "h-6 w-24 border text-xs font-medium rounded-full px-2 py-0 focus:ring-0 focus:ring-offset-0 [&>svg]:h-3 [&>svg]:w-3 [&>svg]:shrink-0",
+          triggerStyles,
+          saving && "opacity-60 cursor-wait"
+        )}
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="vacant">Vacant</SelectItem>
+        <SelectItem value="occupied">Occupied</SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
 
 function CopyLink({ href, label }: { href: string; label?: string }) {
   const [copied, setCopied] = useState(false);
@@ -122,7 +175,13 @@ export function PropertiesTable({ properties, lockboxes, onRefresh, onEdit, work
       }),
       col.accessor("status", {
         header: () => <span className="text-xs font-medium text-gray-500">Status</span>,
-        cell: ({ getValue }) => <StatusBadge status={getValue()} />,
+        cell: ({ getValue, row }) => (
+          <InlineStatusSelect
+            propertyKey={row.original.property_key}
+            status={getValue()}
+            onRefresh={onRefresh}
+          />
+        ),
         filterFn: "equals",
       }),
       col.accessor("populife_lock_id", {
@@ -199,7 +258,7 @@ export function PropertiesTable({ properties, lockboxes, onRefresh, onEdit, work
         ),
       }),
     ],
-    [availableLockboxes, onRefresh, workflowBusy]
+    [availableLockboxes, onRefresh, onEdit, workflowBusy]
   );
 
   const filteredData = useMemo(() => {
@@ -233,12 +292,22 @@ export function PropertiesTable({ properties, lockboxes, onRefresh, onEdit, work
     <div className="space-y-4">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3">
-        <Input
-          placeholder="Search properties…"
-          value={globalFilter}
-          onChange={(e) => setGlobalFilter(e.target.value)}
-          className="h-8 w-56 text-sm"
-        />
+        <div className="relative">
+          <Input
+            placeholder="Search properties…"
+            value={globalFilter}
+            onChange={(e) => setGlobalFilter(e.target.value)}
+            className="h-8 w-56 text-sm pr-7"
+          />
+          {globalFilter && (
+            <button
+              onClick={() => setGlobalFilter("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
         <div className="flex items-center gap-1.5">
           <span className="text-xs text-gray-500 font-medium">Status</span>
           <Select
