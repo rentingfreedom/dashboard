@@ -62,6 +62,8 @@ export type LockboxStatus =
 
 export interface Lockbox {
   lockbox_id: string;
+  lock_id: string;
+  lock_name: string;
   serial_number: string;
   status: LockboxStatus | string;
   assigned_property_key: string;
@@ -75,6 +77,34 @@ export interface Lockbox {
   _rowIndex?: number;
 }
 
+// ─── Showing ─────────────────────────────────────────────────────────────────
+
+export type ShowingStatus =
+  | "scheduled"
+  | "code_sent"
+  | "completed"
+  | "cancelled"
+  | "";
+
+export interface Showing {
+  booking_uid: string;
+  property_key: string;
+  property_address: string;
+  person_id: string;
+  person_name: string;
+  person_email: string;
+  person_phone: string;
+  showing_time: string;       // ISO datetime string from n8n
+  status: ShowingStatus | string;
+  populife_lock_id: string;
+  access_code: string;
+  access_code_id: string;
+  code_sent_at: string;       // ISO datetime string
+  created_at: string;
+  updated_at: string;
+  _rowIndex?: number;
+}
+
 // ─── Audit Log ───────────────────────────────────────────────────────────────
 
 export type AuditAction =
@@ -84,10 +114,14 @@ export type AuditAction =
   | "property.deactivated"
   | "property.reactivated"
   | "lockbox.created"
+  | "lockbox.updated"
   | "lockbox.assigned"
   | "lockbox.unassigned"
   | "lockbox.status_changed"
-  | "lockbox.retired";
+  | "lockbox.retired"
+  | "showing.created"
+  | "showing.updated"
+  | "showing.cancelled";
 
 export interface AuditLogEntry {
   timestamp: string;
@@ -125,6 +159,8 @@ export interface UpdatePropertyInput {
 
 export interface CreateLockboxInput {
   lockbox_id: string;
+  lock_id?: string;
+  lock_name?: string;
   serial_number: string;
   notes?: string;
 }

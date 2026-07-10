@@ -24,6 +24,48 @@ interface LockboxesTableProps {
   onRefresh: () => void;
 }
 
+function InlineLockNameInput({
+  lockboxId,
+  lockName,
+  onRefresh,
+}: {
+  lockboxId: string;
+  lockName: string;
+  onRefresh: () => void;
+}) {
+  const [value, setValue] = useState(lockName);
+  const [saving, setSaving] = useState(false);
+
+  async function commit() {
+    if (value === lockName || saving) return;
+    setSaving(true);
+    try {
+      await fetch(`/api/lockboxes/${encodeURIComponent(lockboxId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lock_name: value }),
+      });
+      onRefresh();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Input
+      key={lockName}
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+      }}
+      disabled={saving}
+      className={cn("h-7 w-32 text-xs", saving && "opacity-60 cursor-wait")}
+    />
+  );
+}
+
 export function LockboxesTable({ lockboxes, onRefresh }: LockboxesTableProps) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
@@ -36,11 +78,27 @@ export function LockboxesTable({ lockboxes, onRefresh }: LockboxesTableProps) {
           className="flex items-center gap-1 text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
           onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
         >
-          Lockbox ID <ArrowUpDown className="h-3 w-3" />
+          Populife Lock ID <ArrowUpDown className="h-3 w-3" />
         </button>
       ),
       cell: ({ getValue }) => (
         <span className="font-medium text-gray-900 dark:text-gray-100 text-sm">{getValue()}</span>
+      ),
+    }),
+    col.accessor("lock_id", {
+      header: () => <span className="text-xs font-medium text-gray-500">Populife Lock ID</span>,
+      cell: ({ getValue }) => (
+        <span className="text-xs font-mono text-gray-600 dark:text-gray-400">{getValue() || "—"}</span>
+      ),
+    }),
+    col.accessor("lock_name", {
+      header: () => <span className="text-xs font-medium text-gray-500">Lock Name</span>,
+      cell: ({ getValue, row }) => (
+        <InlineLockNameInput
+          lockboxId={row.original.lockbox_id}
+          lockName={getValue() ?? ""}
+          onRefresh={onRefresh}
+        />
       ),
     }),
     col.accessor("serial_number", {

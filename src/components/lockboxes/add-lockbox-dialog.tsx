@@ -63,6 +63,27 @@ export function AddLockboxDialog({ open, onOpenChange, onSuccess }: AddLockboxDi
             {errors.lockbox_id && <p className="text-xs text-red-500">{errors.lockbox_id.message}</p>}
           </div>
           <div className="space-y-1.5">
+            <Label htmlFor="lb_lock_id">Populife Lock ID <span className="text-red-500">*</span></Label>
+            <Input
+              id="lb_lock_id"
+              placeholder="e.g. 723716"
+              {...register("lock_id")}
+              className={errors.lock_id ? "border-red-400" : ""}
+            />
+            {errors.lock_id && <p className="text-xs text-red-500">{errors.lock_id.message}</p>}
+            <p className="text-xs text-muted-foreground">Enter the numeric lock ID from the Populife app or API.</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="lb_lock_name">Lock Name</Label>
+            <Input
+              id="lb_lock_name"
+              placeholder="e.g. One"
+              {...register("lock_name")}
+              className={errors.lock_name ? "border-red-400" : ""}
+            />
+            {errors.lock_name && <p className="text-xs text-red-500">{errors.lock_name.message}</p>}
+          </div>
+          <div className="space-y-1.5">
             <Label htmlFor="lb_serial">Serial Number <span className="text-red-500">*</span></Label>
             <Input
               id="lb_serial"

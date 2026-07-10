@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Building2, Lock, Activity, Settings, Sun, Moon, LogOut } from "lucide-react";
+import { Building2, Lock, CalendarCheck, Activity, Settings, Sun, Moon, LogOut } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 const navItems = [
   { href: "/properties", label: "Properties", icon: Building2 },
   { href: "/lockboxes", label: "Lockboxes", icon: Lock },
+  { href: "/showings", label: "Showings", icon: CalendarCheck },
   { href: "/activity", label: "Activity", icon: Activity },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

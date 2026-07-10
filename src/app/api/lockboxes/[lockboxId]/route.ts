@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
-import { updateLockboxStatus, retireLockbox } from "@/lib/google/lockboxes-repository";
-import { lockboxStatusSchema } from "@/lib/validation/lockbox-schema";
+import {
+  updateLockboxStatus,
+  updateLockboxName,
+  retireLockbox,
+} from "@/lib/google/lockboxes-repository";
+import { lockboxStatusSchema, updateLockboxNameSchema } from "@/lib/validation/lockbox-schema";
 
 export async function PATCH(
   req: Request,
@@ -9,12 +13,26 @@ export async function PATCH(
   try {
     const { lockboxId } = await params;
     const body = await req.json();
-    const parsed = lockboxStatusSchema.safeParse(body.status);
-    if (!parsed.success) {
-      return NextResponse.json({ error: "Invalid status" }, { status: 400 });
+
+    if (body.status !== undefined) {
+      const parsed = lockboxStatusSchema.safeParse(body.status);
+      if (!parsed.success) {
+        return NextResponse.json({ error: "Invalid status" }, { status: 400 });
+      }
+      const lockbox = await updateLockboxStatus(lockboxId, parsed.data, "dashboard-user");
+      return NextResponse.json({ lockbox });
     }
-    const lockbox = await updateLockboxStatus(lockboxId, parsed.data, "dashboard-user");
-    return NextResponse.json({ lockbox });
+
+    if (body.lock_name !== undefined) {
+      const parsed = updateLockboxNameSchema.safeParse(body);
+      if (!parsed.success) {
+        return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
+      }
+      const lockbox = await updateLockboxName(lockboxId, parsed.data.lock_name, "dashboard-user");
+      return NextResponse.json({ lockbox });
+    }
+
+    return NextResponse.json({ error: "No recognized fields to update" }, { status: 400 });
   } catch (err) {
     console.error("[PATCH /api/lockboxes/:id]", err);
     return NextResponse.json(

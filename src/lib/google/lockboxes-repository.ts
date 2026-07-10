@@ -20,6 +20,8 @@ function normalizeHeaders(headers: string[]): string[] {
 function parseLockbox(raw: Record<string, string>): Lockbox {
   return {
     lockbox_id: raw.lockbox_id ?? "",
+    lock_id: raw.lock_id ?? "",
+    lock_name: raw.lock_name ?? "",
     serial_number: raw.serial_number ?? "",
     status: (raw.status as LockboxStatus) || "available",
     assigned_property_key: raw.assigned_property_key ?? "",
@@ -90,6 +92,8 @@ export async function createLockbox(
   // Build a minimal append row using the normalized header order
   const newData: Record<string, string> = {
     lockbox_id: input.lockbox_id,
+    lock_id: input.lock_id ?? "",
+    lock_name: input.lock_name ?? "",
     serial_number: input.serial_number,
     status: "available",
     assigned_property_key: "",
@@ -160,7 +164,7 @@ export async function assignLockbox(
   };
 
   await updateSpecificColumns(TAB, rowIndex, updates, resolveHeaders(normalHeaders));
-  await updateProperty(propertyKey, { populife_lock_id: lockboxId }, actor);
+  await updateProperty(propertyKey, { populife_lock_id: lockbox.lock_id }, actor);
 
   await writeAuditLog({
     timestamp: now,
@@ -261,4 +265,38 @@ export async function updateLockboxStatus(
 
 export async function retireLockbox(lockboxId: string, actor: string): Promise<Lockbox> {
   return updateLockboxStatus(lockboxId, "retired", actor);
+}
+
+export async function updateLockboxName(
+  lockboxId: string,
+  lockName: string,
+  actor: string
+): Promise<Lockbox> {
+  const { normalHeaders, rawObjects, lockboxes } = await readAll();
+
+  const idx = rawObjects.findIndex((o) => o.lockbox_id === lockboxId);
+  if (idx === -1) throw new Error(`Lockbox "${lockboxId}" not found.`);
+
+  const existing = rawObjects[idx];
+  const before = lockboxes[idx];
+  const rowIndex = parseInt(existing._rowIndex!);
+
+  const updates: Record<string, string> = { lock_name: lockName };
+
+  await updateSpecificColumns(TAB, rowIndex, updates, resolveHeaders(normalHeaders));
+
+  await writeAuditLog({
+    timestamp: new Date().toISOString(),
+    actor,
+    action: "lockbox.updated",
+    entity_type: "lockbox",
+    entity_id: lockboxId,
+    property_key: before.assigned_property_key,
+    before_json: JSON.stringify({ lock_name: before.lock_name }),
+    after_json: JSON.stringify(updates),
+    source: "dashboard",
+    notes: "",
+  });
+
+  return parseLockbox({ ...existing, ...updates });
 }
