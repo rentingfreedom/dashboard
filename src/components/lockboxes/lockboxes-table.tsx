@@ -72,23 +72,17 @@ export function LockboxesTable({ lockboxes, onRefresh }: LockboxesTableProps) {
   const [statusFilter, setStatusFilter] = useState("active");
 
   const columns = useMemo(() => [
-    col.accessor("lockbox_id", {
+    col.accessor("lock_id", {
       header: ({ column }) => (
         <button
           className="flex items-center gap-1 text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
           onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
         >
-          Lockbox ID <ArrowUpDown className="h-3 w-3" />
+          Populife Lock ID <ArrowUpDown className="h-3 w-3" />
         </button>
       ),
       cell: ({ getValue }) => (
         <span className="font-medium text-gray-900 dark:text-gray-100 text-sm">{getValue() || "—"}</span>
-      ),
-    }),
-    col.accessor("lock_id", {
-      header: () => <span className="text-xs font-medium text-gray-500">Populife Lock ID</span>,
-      cell: ({ getValue }) => (
-        <span className="text-xs font-mono text-gray-600 dark:text-gray-400">{getValue() || "—"}</span>
       ),
     }),
     col.accessor("lock_name", {
