@@ -53,16 +53,6 @@ export function AddLockboxDialog({ open, onOpenChange, onSuccess }: AddLockboxDi
         </DialogHeader>
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-1">
           <div className="space-y-1.5">
-            <Label htmlFor="lb_id">Lockbox ID <span className="text-red-500">*</span></Label>
-            <Input
-              id="lb_id"
-              placeholder="e.g. Three"
-              {...register("lockbox_id")}
-              className={errors.lockbox_id ? "border-red-400" : ""}
-            />
-            {errors.lockbox_id && <p className="text-xs text-red-500">{errors.lockbox_id.message}</p>}
-          </div>
-          <div className="space-y-1.5">
             <Label htmlFor="lb_lock_id">Populife Lock ID <span className="text-red-500">*</span></Label>
             <Input
               id="lb_lock_id"

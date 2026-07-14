@@ -1,10 +1,6 @@
 import { z } from "zod";
 
 export const createLockboxSchema = z.object({
-  lockbox_id: z
-    .string()
-    .min(1, "Lockbox ID is required.")
-    .max(100),
   lock_id: z
     .string()
     .min(1, "Populife Lock ID is required.")

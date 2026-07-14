@@ -45,7 +45,7 @@ export function AssignLockboxDialog({
       const res = await fetch(`/api/properties/${property.property_key}/lockbox`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lockbox_id: selectedId }),
+        body: JSON.stringify({ lock_id: selectedId }),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
       toast.success("Lockbox assigned");
@@ -83,8 +83,8 @@ export function AssignLockboxDialog({
                 </SelectTrigger>
                 <SelectContent>
                   {availableLockboxes.map((lb) => (
-                    <SelectItem key={lb.lockbox_id} value={lb.lockbox_id}>
-                      {lb.lockbox_id}
+                    <SelectItem key={lb.lock_id} value={lb.lock_id}>
+                      {lb.lock_name || lb.lock_id}
                     </SelectItem>
                   ))}
                 </SelectContent>

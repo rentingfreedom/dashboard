@@ -23,7 +23,7 @@ const schema = z.object({
   street_address: z.string().min(5, "Street address must be at least 5 characters.").max(200),
   owner_label: z.string().max(200).optional(),
   status: z.enum(["vacant", "occupied"]),
-  lockbox_id: z.string().optional(),
+  lock_id: z.string().optional(),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -80,12 +80,12 @@ export function AddPropertyDialog({
       if (!res.ok) throw new Error((await res.json()).error ?? "Failed to create");
 
       // Assign lockbox if selected
-      if (values.lockbox_id && values.lockbox_id !== "") {
+      if (values.lock_id && values.lock_id !== "") {
         const derivedKey = deriveKey(values.street_address);
         const lbRes = await fetch(`/api/properties/${derivedKey}/lockbox`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lockbox_id: values.lockbox_id }),
+          body: JSON.stringify({ lock_id: values.lock_id }),
         });
         if (!lbRes.ok) {
           toast.warning("Property created but lockbox assignment failed. You can assign it manually.");
@@ -150,11 +150,11 @@ export function AddPropertyDialog({
           {status === "vacant" && (
             <div className="space-y-1.5">
               <Label htmlFor="add_lockbox">Assign Lockbox</Label>
-              <NativeSelect id="add_lockbox" {...register("lockbox_id")}>
+              <NativeSelect id="add_lockbox" {...register("lock_id")}>
                 <option value="">Assign later</option>
                 {availableLockboxes.map((lb) => (
-                  <option key={lb.lockbox_id} value={lb.lockbox_id}>
-                    {lb.lockbox_id}
+                  <option key={lb.lock_id} value={lb.lock_id}>
+                    {lb.lock_name || lb.lock_id}
                   </option>
                 ))}
               </NativeSelect>

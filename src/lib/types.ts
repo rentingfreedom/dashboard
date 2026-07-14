@@ -61,7 +61,6 @@ export type LockboxStatus =
   | "retired";
 
 export interface Lockbox {
-  lockbox_id: string;
   lock_id: string;
   lock_name: string;
   serial_number: string;
@@ -158,8 +157,7 @@ export interface UpdatePropertyInput {
 }
 
 export interface CreateLockboxInput {
-  lockbox_id: string;
-  lock_id?: string;
+  lock_id: string;
   lock_name?: string;
   serial_number: string;
   notes?: string;

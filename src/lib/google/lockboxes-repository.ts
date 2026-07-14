@@ -10,16 +10,8 @@ import { updateProperty } from "./properties-repository";
 
 const TAB = "Lockboxes";
 
-// The sheet has a typo in the header — normalize on read, write back with original key
-const LOCKBOX_ID_ALIAS = "loxkbox_id";
-
-function normalizeHeaders(headers: string[]): string[] {
-  return headers.map((h) => (h === LOCKBOX_ID_ALIAS ? "lockbox_id" : h));
-}
-
 function parseLockbox(raw: Record<string, string>): Lockbox {
   return {
-    lockbox_id: raw.lockbox_id ?? "",
     lock_id: raw.lock_id ?? "",
     lock_name: raw.lock_name ?? "",
     serial_number: raw.serial_number ?? "",
@@ -35,36 +27,18 @@ function parseLockbox(raw: Record<string, string>): Lockbox {
 }
 
 async function readAll(): Promise<{
-  headers: string[];          // original headers (may have typo)
-  normalHeaders: string[];    // normalized (lockbox_id corrected)
+  headers: string[];
   lockboxes: Lockbox[];
   rawObjects: Record<string, string>[];
 }> {
   const rows = await readSheet(TAB);
   const { headers, objects } = rowsToObjects(rows);
-  const normalHeaders = normalizeHeaders(headers);
-
-  const normalObjects = objects.map((obj) => {
-    if (LOCKBOX_ID_ALIAS in obj) {
-      const { [LOCKBOX_ID_ALIAS]: val, ...rest } = obj;
-      return { ...rest, lockbox_id: val };
-    }
-    return obj;
-  });
 
   return {
     headers,
-    normalHeaders,
-    lockboxes: normalObjects.map(parseLockbox),
-    rawObjects: normalObjects,
+    lockboxes: objects.map(parseLockbox),
+    rawObjects: objects,
   };
-}
-
-/** Map from normalized column name → original header name (handles typo) */
-function resolveHeaders(normalHeaders: string[]): string[] {
-  // updateSpecificColumns looks up column index in this array.
-  // We pass normalHeaders so lockbox_id maps correctly.
-  return normalHeaders;
 }
 
 export async function listLockboxes(): Promise<Lockbox[]> {
@@ -72,27 +46,26 @@ export async function listLockboxes(): Promise<Lockbox[]> {
   return lockboxes;
 }
 
-export async function getLockboxById(lockboxId: string): Promise<Lockbox | null> {
+export async function getLockboxById(lockId: string): Promise<Lockbox | null> {
   const { lockboxes } = await readAll();
-  return lockboxes.find((l) => l.lockbox_id === lockboxId) ?? null;
+  return lockboxes.find((l) => l.lock_id === lockId) ?? null;
 }
 
 export async function createLockbox(
   input: CreateLockboxInput,
   actor: string
 ): Promise<Lockbox> {
-  const { normalHeaders, lockboxes } = await readAll();
+  const { headers, lockboxes } = await readAll();
 
-  if (lockboxes.find((l) => l.lockbox_id === input.lockbox_id)) {
-    throw new Error(`Lockbox with ID "${input.lockbox_id}" already exists.`);
+  if (lockboxes.find((l) => l.lock_id === input.lock_id)) {
+    throw new Error(`Lockbox with ID "${input.lock_id}" already exists.`);
   }
 
   const now = new Date().toISOString();
 
-  // Build a minimal append row using the normalized header order
+  // Build a minimal append row using the header order
   const newData: Record<string, string> = {
-    lockbox_id: input.lockbox_id,
-    lock_id: input.lock_id ?? "",
+    lock_id: input.lock_id,
     lock_name: input.lock_name ?? "",
     serial_number: input.serial_number,
     status: "available",
@@ -102,7 +75,7 @@ export async function createLockbox(
     active: "TRUE",
   };
 
-  const rowArr = normalHeaders.map((h) => newData[h] ?? "");
+  const rowArr = headers.map((h) => newData[h] ?? "");
   const newRowIndex = await appendRow(TAB, rowArr);
 
   await writeAuditLog({
@@ -110,7 +83,7 @@ export async function createLockbox(
     actor,
     action: "lockbox.created",
     entity_type: "lockbox",
-    entity_id: input.lockbox_id,
+    entity_id: input.lock_id,
     property_key: "",
     before_json: "",
     after_json: JSON.stringify(input),
@@ -123,13 +96,13 @@ export async function createLockbox(
 
 export async function assignLockbox(
   propertyKey: string,
-  lockboxId: string,
+  lockId: string,
   actor: string
 ): Promise<Lockbox> {
-  const { normalHeaders, rawObjects, lockboxes } = await readAll();
+  const { headers, rawObjects, lockboxes } = await readAll();
 
-  const lockboxIdx = rawObjects.findIndex((o) => o.lockbox_id === lockboxId);
-  if (lockboxIdx === -1) throw new Error(`Lockbox "${lockboxId}" not found.`);
+  const lockboxIdx = rawObjects.findIndex((o) => o.lock_id === lockId);
+  if (lockboxIdx === -1) throw new Error(`Lockbox "${lockId}" not found.`);
 
   const lockbox = lockboxes[lockboxIdx];
 
@@ -147,7 +120,7 @@ export async function assignLockbox(
   const properties = await listProperties();
   const property = properties.find((p) => p.property_key === propertyKey);
   if (!property) throw new Error(`Property "${propertyKey}" not found.`);
-  if (property.populife_lock_id && property.populife_lock_id !== lockboxId) {
+  if (property.populife_lock_id && property.populife_lock_id !== lockId) {
     throw new Error(
       `Property already has lockbox "${property.populife_lock_id}". Unassign it first.`
     );
@@ -163,7 +136,7 @@ export async function assignLockbox(
     assigned_date: now,
   };
 
-  await updateSpecificColumns(TAB, rowIndex, updates, resolveHeaders(normalHeaders));
+  await updateSpecificColumns(TAB, rowIndex, updates, headers);
   await updateProperty(propertyKey, { populife_lock_id: lockbox.lock_id }, actor);
 
   await writeAuditLog({
@@ -171,7 +144,7 @@ export async function assignLockbox(
     actor,
     action: "lockbox.assigned",
     entity_type: "lockbox",
-    entity_id: lockboxId,
+    entity_id: lockId,
     property_key: propertyKey,
     before_json: JSON.stringify(lockbox),
     after_json: JSON.stringify(updates),
@@ -186,7 +159,7 @@ export async function unassignLockbox(
   propertyKey: string,
   actor: string
 ): Promise<void> {
-  const { normalHeaders, rawObjects, lockboxes } = await readAll();
+  const { headers, rawObjects, lockboxes } = await readAll();
   const now = new Date().toISOString();
 
   const lockboxIdx = rawObjects.findIndex(
@@ -204,14 +177,14 @@ export async function unassignLockbox(
       assigned_date: "",
     };
 
-    await updateSpecificColumns(TAB, rowIndex, updates, resolveHeaders(normalHeaders));
+    await updateSpecificColumns(TAB, rowIndex, updates, headers);
 
     await writeAuditLog({
       timestamp: now,
       actor,
       action: "lockbox.unassigned",
       entity_type: "lockbox",
-      entity_id: lockbox.lockbox_id,
+      entity_id: lockbox.lock_id,
       property_key: propertyKey,
       before_json: JSON.stringify(lockbox),
       after_json: JSON.stringify(updates),
@@ -224,14 +197,14 @@ export async function unassignLockbox(
 }
 
 export async function updateLockboxStatus(
-  lockboxId: string,
+  lockId: string,
   status: LockboxStatus,
   actor: string
 ): Promise<Lockbox> {
-  const { normalHeaders, rawObjects, lockboxes } = await readAll();
+  const { headers, rawObjects, lockboxes } = await readAll();
 
-  const idx = rawObjects.findIndex((o) => o.lockbox_id === lockboxId);
-  if (idx === -1) throw new Error(`Lockbox "${lockboxId}" not found.`);
+  const idx = rawObjects.findIndex((o) => o.lock_id === lockId);
+  if (idx === -1) throw new Error(`Lockbox "${lockId}" not found.`);
 
   const existing = rawObjects[idx];
   const before = lockboxes[idx];
@@ -245,14 +218,14 @@ export async function updateLockboxStatus(
       : {}),
   };
 
-  await updateSpecificColumns(TAB, rowIndex, updates, resolveHeaders(normalHeaders));
+  await updateSpecificColumns(TAB, rowIndex, updates, headers);
 
   await writeAuditLog({
     timestamp: new Date().toISOString(),
     actor,
     action: "lockbox.status_changed",
     entity_type: "lockbox",
-    entity_id: lockboxId,
+    entity_id: lockId,
     property_key: before.assigned_property_key,
     before_json: JSON.stringify(before),
     after_json: JSON.stringify({ status }),
@@ -263,19 +236,19 @@ export async function updateLockboxStatus(
   return parseLockbox({ ...existing, ...updates });
 }
 
-export async function retireLockbox(lockboxId: string, actor: string): Promise<Lockbox> {
-  return updateLockboxStatus(lockboxId, "retired", actor);
+export async function retireLockbox(lockId: string, actor: string): Promise<Lockbox> {
+  return updateLockboxStatus(lockId, "retired", actor);
 }
 
 export async function updateLockboxName(
-  lockboxId: string,
+  lockId: string,
   lockName: string,
   actor: string
 ): Promise<Lockbox> {
-  const { normalHeaders, rawObjects, lockboxes } = await readAll();
+  const { headers, rawObjects, lockboxes } = await readAll();
 
-  const idx = rawObjects.findIndex((o) => o.lockbox_id === lockboxId);
-  if (idx === -1) throw new Error(`Lockbox "${lockboxId}" not found.`);
+  const idx = rawObjects.findIndex((o) => o.lock_id === lockId);
+  if (idx === -1) throw new Error(`Lockbox "${lockId}" not found.`);
 
   const existing = rawObjects[idx];
   const before = lockboxes[idx];
@@ -283,14 +256,14 @@ export async function updateLockboxName(
 
   const updates: Record<string, string> = { lock_name: lockName };
 
-  await updateSpecificColumns(TAB, rowIndex, updates, resolveHeaders(normalHeaders));
+  await updateSpecificColumns(TAB, rowIndex, updates, headers);
 
   await writeAuditLog({
     timestamp: new Date().toISOString(),
     actor,
     action: "lockbox.updated",
     entity_type: "lockbox",
-    entity_id: lockboxId,
+    entity_id: lockId,
     property_key: before.assigned_property_key,
     before_json: JSON.stringify({ lock_name: before.lock_name }),
     after_json: JSON.stringify(updates),

@@ -25,11 +25,11 @@ interface LockboxesTableProps {
 }
 
 function InlineLockNameInput({
-  lockboxId,
+  lockId,
   lockName,
   onRefresh,
 }: {
-  lockboxId: string;
+  lockId: string;
   lockName: string;
   onRefresh: () => void;
 }) {
@@ -40,7 +40,7 @@ function InlineLockNameInput({
     if (value === lockName || saving) return;
     setSaving(true);
     try {
-      await fetch(`/api/lockboxes/${encodeURIComponent(lockboxId)}`, {
+      await fetch(`/api/lockboxes/${encodeURIComponent(lockId)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lock_name: value }),
@@ -89,7 +89,7 @@ export function LockboxesTable({ lockboxes, onRefresh }: LockboxesTableProps) {
       header: () => <span className="text-xs font-medium text-gray-500">Lock Name</span>,
       cell: ({ getValue, row }) => (
         <InlineLockNameInput
-          lockboxId={row.original.lockbox_id}
+          lockId={row.original.lock_id}
           lockName={getValue() ?? ""}
           onRefresh={onRefresh}
         />
@@ -151,7 +151,8 @@ export function LockboxesTable({ lockboxes, onRefresh }: LockboxesTableProps) {
     globalFilterFn: (row, _id, filterValue) => {
       const s = filterValue.toLowerCase();
       return (
-        row.original.lockbox_id?.toLowerCase().includes(s) ||
+        row.original.lock_id?.toLowerCase().includes(s) ||
+        row.original.lock_name?.toLowerCase().includes(s) ||
         row.original.serial_number?.toLowerCase().includes(s) ||
         row.original.assigned_property_key?.toLowerCase().includes(s) ||
         false

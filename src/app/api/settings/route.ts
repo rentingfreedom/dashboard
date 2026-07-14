@@ -7,7 +7,7 @@ const EXPECTED_COLUMNS: Record<string, string[]> = {
     "populife_lock_id", "provisioning_status", "resource_calendar_email", "cal_link",
   ],
   Lockboxes: [
-    "lockbox_id", "serial_number", "status", "assigned_property_key", "active",
+    "lock_id", "serial_number", "status", "assigned_property_key", "active",
   ],
 };
 
@@ -52,9 +52,7 @@ export async function GET() {
         continue;
       }
       const rows = await readSheet(`${tab}!1:1`);
-      const headers = (rows[0] ?? []).map((h: string) =>
-        h === "loxkbox_id" ? "lockbox_id" : h.trim()
-      );
+      const headers = (rows[0] ?? []).map((h: string) => h.trim());
       result.columnStatus[tab] = {
         found: headers.length,
         missing: expectedCols.filter((c) => !headers.includes(c)),

@@ -26,7 +26,7 @@ export function LockboxActions({ lockbox, onRefresh }: LockboxActionsProps) {
   async function setStatus(status: string) {
     setLoading(true);
     try {
-      const res = await fetch(`/api/lockboxes/${lockbox.lockbox_id}`, {
+      const res = await fetch(`/api/lockboxes/${lockbox.lock_id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status }),
@@ -44,7 +44,7 @@ export function LockboxActions({ lockbox, onRefresh }: LockboxActionsProps) {
   async function handleRetire() {
     setLoading(true);
     try {
-      const res = await fetch(`/api/lockboxes/${lockbox.lockbox_id}`, { method: "DELETE" });
+      const res = await fetch(`/api/lockboxes/${lockbox.lock_id}`, { method: "DELETE" });
       if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
       toast.success("Lockbox retired.");
       setRetireOpen(false);
@@ -104,7 +104,7 @@ export function LockboxActions({ lockbox, onRefresh }: LockboxActionsProps) {
           <AlertDialogHeader>
             <AlertDialogTitle>Retire this lockbox?</AlertDialogTitle>
             <AlertDialogDescription>
-              <strong>{lockbox.lockbox_id}</strong> will be marked retired and removed from active
+              <strong>{lockbox.lock_id}</strong> will be marked retired and removed from active
               inventory. This action keeps the row for history.
             </AlertDialogDescription>
           </AlertDialogHeader>
