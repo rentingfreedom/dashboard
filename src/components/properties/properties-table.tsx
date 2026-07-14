@@ -156,6 +156,11 @@ export function PropertiesTable({ properties, lockboxes, onRefresh, onEdit, work
     [lockboxes]
   );
 
+  const lockNameById = useMemo(
+    () => new Map(lockboxes.map((l) => [l.lock_id, l.lock_name])),
+    [lockboxes]
+  );
+
   const columns = useMemo(
     () => [
       col.accessor("street_address", {
@@ -191,7 +196,7 @@ export function PropertiesTable({ properties, lockboxes, onRefresh, onEdit, work
           return id ? (
             <div className="flex items-center gap-1.5">
               <Lock className="h-3 w-3 text-blue-500 shrink-0" />
-              <span className="text-xs text-gray-700 dark:text-gray-300 font-mono">{id}</span>
+              <span className="text-xs text-gray-700 dark:text-gray-300">{lockNameById.get(id) || id}</span>
             </div>
           ) : (
             <div className="flex items-center gap-1.5 text-gray-300 dark:text-gray-600">
@@ -258,7 +263,7 @@ export function PropertiesTable({ properties, lockboxes, onRefresh, onEdit, work
         ),
       }),
     ],
-    [availableLockboxes, onRefresh, onEdit, workflowBusy]
+    [availableLockboxes, lockNameById, onRefresh, onEdit, workflowBusy]
   );
 
   const filteredData = useMemo(() => {

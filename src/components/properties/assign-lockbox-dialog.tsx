@@ -79,7 +79,13 @@ export function AssignLockboxDialog({
             ) : (
               <Select value={selectedId} onValueChange={(v) => setSelectedId(v ?? "")}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Select a lockbox…" />
+                  <SelectValue placeholder="Select a lockbox…">
+                    {(value: string | null) =>
+                      value
+                        ? availableLockboxes.find((lb) => lb.lock_id === value)?.lock_name || value
+                        : "Select a lockbox…"
+                    }
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {availableLockboxes.map((lb) => (
