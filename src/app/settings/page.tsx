@@ -8,25 +8,26 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
+interface Automation {
+  key: string;
+  label: string;
+  description: string;
+  webhookUrl: string;
+  workflowUrl: string;
+  source: string;
+}
+
 interface DiagnosticsResult {
   connected: boolean;
   spreadsheetId: string;
   credentialsConfigured: { serviceAccountEmail: boolean; privateKey: boolean };
   tabs: string[];
   columnStatus: Record<string, { found: number; missing: string[] }>;
-  webhooks: Record<string, boolean>;
+  automations: Automation[];
   appEnv: string;
   checkedAt: string;
   error: string | null;
 }
-
-const WEBHOOK_LABELS: Record<string, string> = {
-  N8N_PROPERTY_CREATED_WEBHOOK_URL: "Property created",
-  N8N_PROPERTY_DEACTIVATED_WEBHOOK_URL: "Property deactivated",
-  N8N_PROPERTY_UPDATED_WEBHOOK_URL: "Property updated",
-  N8N_LOCKBOX_ASSIGNED_WEBHOOK_URL: "Lockbox assigned",
-  N8N_LOCKBOX_UNASSIGNED_WEBHOOK_URL: "Lockbox unassigned",
-};
 
 function StatusIcon({ ok, warn }: { ok: boolean; warn?: boolean }) {
   if (ok) return <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />;
@@ -192,20 +193,49 @@ export default function SettingsPage() {
               </Card>
             )}
 
-            {/* n8n Webhooks */}
+            {/* Automations */}
             <Card className="border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-none">
               <CardHeader className="pb-2 pt-5 px-5">
-                <CardTitle className="text-sm font-semibold text-gray-900 dark:text-gray-100">n8n Webhooks</CardTitle>
+                <CardTitle className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                  Automations
+                </CardTitle>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                  n8n workflows triggered by external services
+                </p>
               </CardHeader>
-              <CardContent className="px-5 pb-5">
-                {data?.webhooks && Object.entries(data.webhooks).map(([key, configured]) => (
-                  <Row
-                    key={key}
-                    label={WEBHOOK_LABELS[key] ?? key}
-                    ok={configured}
-                    warn={!configured}
-                    value={configured ? "configured" : "not set (optional)"}
-                  />
+              <CardContent className="px-5 pb-5 space-y-3">
+                {data?.automations?.map((a) => (
+                  <div
+                    key={a.key}
+                    className="border border-gray-100 dark:border-gray-800 rounded-md p-3 space-y-1"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />
+                        <span className="text-sm font-medium text-gray-800 dark:text-gray-200">
+                          {a.label}
+                        </span>
+                        <Badge
+                          variant="outline"
+                          className="text-xs bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400"
+                        >
+                          {a.source}
+                        </Badge>
+                      </div>
+                      <a
+                        href={a.workflowUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 shrink-0"
+                      >
+                        Open in n8n <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 ml-6">{a.description}</p>
+                    <p className="text-xs font-mono text-gray-400 dark:text-gray-500 ml-6 break-all">
+                      {a.webhookUrl}
+                    </p>
+                  </div>
                 ))}
               </CardContent>
             </Card>

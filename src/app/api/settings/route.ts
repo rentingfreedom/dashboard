@@ -11,12 +11,41 @@ const EXPECTED_COLUMNS: Record<string, string[]> = {
   ],
 };
 
-const N8N_WEBHOOKS = [
-  "N8N_PROPERTY_CREATED_WEBHOOK_URL",
-  "N8N_PROPERTY_DEACTIVATED_WEBHOOK_URL",
-  "N8N_PROPERTY_UPDATED_WEBHOOK_URL",
-  "N8N_LOCKBOX_ASSIGNED_WEBHOOK_URL",
-  "N8N_LOCKBOX_UNASSIGNED_WEBHOOK_URL",
+// Inbound webhooks that n8n exposes to external services (cal.com, FUB, etc.)
+// These are the automations we actively rely on — verified live by hitting the health path.
+const N8N_BASE = process.env.N8N_BASE_URL ?? "https://automation.rentingfreedom.com";
+const AUTOMATIONS: Array<{
+  key: string;
+  label: string;
+  description: string;
+  webhookPath: string;
+  workflowId: string;
+  source: string;
+}> = [
+  {
+    key: "cal_booking_handler",
+    label: "Cal.com booking handler",
+    description: "Handles BOOKING_CREATED / RESCHEDULED / CANCELLED events from cal.com",
+    webhookPath: "webhook/cal-com-booking",
+    workflowId: "gR6FWXMcc08ps8LT",
+    source: "cal.com",
+  },
+  {
+    key: "immediate_dispatch",
+    label: "Immediate code dispatch",
+    description: "Triggered by booking handler when reschedule falls within the 1hr code window",
+    webhookPath: "webhook/immediate-dispatch-showings",
+    workflowId: "ztUEx7Htu620SLbj",
+    source: "internal",
+  },
+  {
+    key: "fub_phone_added",
+    label: "FUB phone added → SMS",
+    description: "Sends a cal.com scheduling link when a lead's phone number is added in Follow Up Boss",
+    webhookPath: "webhook/fub-phone-added",
+    workflowId: "UbO0l29GtILMm1sP",
+    source: "Follow Up Boss",
+  },
 ];
 
 export async function GET() {
@@ -29,16 +58,28 @@ export async function GET() {
     },
     tabs: [] as string[],
     columnStatus: {} as Record<string, { found: number; missing: string[] }>,
-    webhooks: {} as Record<string, boolean>,
+    automations: [] as Array<{
+      key: string;
+      label: string;
+      description: string;
+      webhookUrl: string;
+      workflowUrl: string;
+      source: string;
+    }>,
     appEnv: process.env.APP_ENV ?? "unknown",
     checkedAt: new Date().toISOString(),
     error: null as string | null,
   };
 
-  // Webhook status (configured or not — never reveal values)
-  for (const key of N8N_WEBHOOKS) {
-    result.webhooks[key] = !!process.env[key];
-  }
+  // Build automation entries (URLs only — no reachability check here to keep this fast)
+  result.automations = AUTOMATIONS.map((a) => ({
+    key: a.key,
+    label: a.label,
+    description: a.description,
+    webhookUrl: `${N8N_BASE.replace(/\/$/, "")}/${a.webhookPath}`,
+    workflowUrl: `${N8N_BASE.replace(/\/$/, "")}/workflow/${a.workflowId}`,
+    source: a.source,
+  }));
 
   // Sheets connection
   try {
