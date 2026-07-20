@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
@@ -20,17 +21,23 @@ export async function POST(req: Request) {
     return res;
   }
 
+  if (!process.env.AUTH_SECRET) {
+    throw new Error(
+      "AUTH_SECRET is not set. ADMIN_PASSWORD is configured, so AUTH_SECRET must also be set to sign session cookies."
+    );
+  }
+
   const body = await req.json().catch(() => ({}));
   if (body.password !== adminPassword) {
     return NextResponse.json({ error: "Incorrect password" }, { status: 401 });
   }
 
-  // Simple token: hash of password + a server secret
-  const token = Buffer.from(`${adminPassword}:${process.env.ADMIN_PASSWORD}`).toString("base64");
-
-  // TEMP DEBUG — remove after verifying env var parity between runtimes
-  console.log("[login] ADMIN_PASSWORD length:", (process.env.ADMIN_PASSWORD ?? "").length);
-  console.log("[login] token set:", token.slice(0, 12) + "...");
+  // Token = base64(HMAC-SHA256(AUTH_SECRET, "authenticated"))
+  // Static, stable, doesn't depend on password value
+  const token = crypto
+    .createHmac("sha256", process.env.AUTH_SECRET)
+    .update("authenticated")
+    .digest("base64");
 
   const res = NextResponse.json({ ok: true });
   res.cookies.set(COOKIE_NAME, token, {

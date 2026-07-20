@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
@@ -22,10 +23,19 @@ export function proxy(req: NextRequest): NextResponse {
     return NextResponse.next();
   }
 
+  if (!process.env.AUTH_SECRET) {
+    throw new Error(
+      "AUTH_SECRET is not set. ADMIN_PASSWORD is configured, so AUTH_SECRET must also be set to sign session cookies."
+    );
+  }
+
   const sessionCookie = req.cookies.get(COOKIE_NAME)?.value;
-  const expectedToken = Buffer.from(
-    `${process.env.ADMIN_PASSWORD}:${process.env.ADMIN_PASSWORD}`
-  ).toString("base64");
+  // Token = base64(HMAC-SHA256(AUTH_SECRET, "authenticated"))
+  // Static, stable, doesn't depend on password value
+  const expectedToken = crypto
+    .createHmac("sha256", process.env.AUTH_SECRET)
+    .update("authenticated")
+    .digest("base64");
 
   if (!sessionCookie || sessionCookie !== expectedToken) {
     const loginUrl = req.nextUrl.clone();
