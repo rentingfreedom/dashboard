@@ -28,6 +28,10 @@ export async function POST(req: Request) {
   // Simple token: hash of password + a server secret
   const token = Buffer.from(`${adminPassword}:${process.env.ADMIN_PASSWORD}`).toString("base64");
 
+  // TEMP DEBUG — remove after verifying env var parity between runtimes
+  console.log("[login] ADMIN_PASSWORD length:", (process.env.ADMIN_PASSWORD ?? "").length);
+  console.log("[login] token set:", token.slice(0, 12) + "...");
+
   const res = NextResponse.json({ ok: true });
   res.cookies.set(COOKIE_NAME, token, {
     httpOnly: true,
