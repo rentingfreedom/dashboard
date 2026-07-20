@@ -26,7 +26,6 @@ export default function LoginPage() {
       });
       if (res.ok) {
         router.push("/properties");
-        router.refresh();
       } else {
         setError("Incorrect password.");
       }

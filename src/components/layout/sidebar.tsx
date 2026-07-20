@@ -26,6 +26,10 @@ export function Sidebar() {
     router.refresh();
   }
 
+  if (pathname === "/login") {
+    return null;
+  }
+
   return (
     <aside className="w-56 shrink-0 flex flex-col bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 min-h-full">
       {/* Logo */}
