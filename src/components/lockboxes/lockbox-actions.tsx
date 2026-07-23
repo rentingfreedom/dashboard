@@ -29,7 +29,7 @@ export function LockboxActions({ lockbox, onRefresh }: LockboxActionsProps) {
       const res = await fetch(`/api/lockboxes/${lockbox.lock_id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, expected: { status: lockbox.status } }),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
       toast.success(`Lockbox marked as ${status}`);
@@ -44,7 +44,11 @@ export function LockboxActions({ lockbox, onRefresh }: LockboxActionsProps) {
   async function handleRetire() {
     setLoading(true);
     try {
-      const res = await fetch(`/api/lockboxes/${lockbox.lock_id}`, { method: "DELETE" });
+      const res = await fetch(`/api/lockboxes/${lockbox.lock_id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expected: { status: lockbox.status } }),
+      });
       if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
       toast.success("Lockbox retired.");
       setRetireOpen(false);

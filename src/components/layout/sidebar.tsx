@@ -2,33 +2,30 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Building2, Lock, CalendarCheck, Activity, Settings, Sun, Moon, LogOut } from "lucide-react";
+import { Building2, Lock, CalendarCheck, Activity, Settings, Sun, Moon } from "lucide-react";
 import { useTheme } from "next-themes";
-import { useRouter } from "next/navigation";
+import { UserButton } from "@clerk/nextjs";
 import { cn } from "@/lib/utils";
+import { useRole } from "@/lib/auth/use-role";
 
 const navItems = [
   { href: "/properties", label: "Properties", icon: Building2 },
   { href: "/lockboxes", label: "Lockboxes", icon: Lock },
   { href: "/showings", label: "Showings", icon: CalendarCheck },
   { href: "/activity", label: "Activity", icon: Activity },
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/settings", label: "Settings", icon: Settings, adminOnly: true },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
   const { theme, setTheme } = useTheme();
-  const router = useRouter();
+  const { isAdmin } = useRole();
 
-  async function handleLogout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.push("/login");
-    router.refresh();
-  }
-
-  if (pathname === "/login") {
+  if (pathname === "/sign-in") {
     return null;
   }
+
+  const visibleNavItems = navItems.filter((item) => !item.adminOnly || isAdmin);
 
   return (
     <aside className="w-56 shrink-0 flex flex-col bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 min-h-full">
@@ -46,7 +43,7 @@ export function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 py-4 px-3 space-y-0.5">
-        {navItems.map(({ href, label, icon: Icon }) => {
+        {visibleNavItems.map(({ href, label, icon: Icon }) => {
           const active = pathname.startsWith(href);
           return (
             <Link
@@ -82,15 +79,7 @@ export function Sidebar() {
           >
             {theme === "dark" ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
           </button>
-          {process.env.NEXT_PUBLIC_AUTH_ENABLED === "true" && (
-            <button
-              onClick={handleLogout}
-              className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-              title="Sign out"
-            >
-              <LogOut className="h-3.5 w-3.5" />
-            </button>
-          )}
+          <UserButton />
         </div>
       </div>
     </aside>

@@ -7,6 +7,7 @@ import {
 import type { Lockbox, CreateLockboxInput, LockboxStatus } from "@/lib/types";
 import { writeAuditLog } from "./audit-repository";
 import { updateProperty } from "./properties-repository";
+import { checkConflicts } from "./concurrency";
 
 const TAB = "Lockboxes";
 
@@ -137,7 +138,23 @@ export async function assignLockbox(
   };
 
   await updateSpecificColumns(TAB, rowIndex, updates, headers);
-  await updateProperty(propertyKey, { populife_lock_id: lockbox.lock_id }, actor);
+  try {
+    await updateProperty(propertyKey, { populife_lock_id: lockbox.lock_id }, actor);
+  } catch (err) {
+    // Property-side write failed after the lockbox-side write succeeded — revert
+    // the lockbox row so the two tabs don't disagree about the assignment.
+    await updateSpecificColumns(
+      TAB,
+      rowIndex,
+      {
+        status: existing.status ?? "available",
+        assigned_property_key: existing.assigned_property_key ?? "",
+        assigned_date: existing.assigned_date ?? "",
+      },
+      headers
+    ).catch((rollbackErr) => console.error("[assignLockbox] rollback failed", rollbackErr));
+    throw err;
+  }
 
   await writeAuditLog({
     timestamp: now,
@@ -179,6 +196,24 @@ export async function unassignLockbox(
 
     await updateSpecificColumns(TAB, rowIndex, updates, headers);
 
+    try {
+      await updateProperty(propertyKey, { populife_lock_id: "" }, actor);
+    } catch (err) {
+      // Property-side write failed after the lockbox-side write succeeded — revert
+      // the lockbox row so the two tabs don't disagree about the assignment.
+      await updateSpecificColumns(
+        TAB,
+        rowIndex,
+        {
+          status: existing.status ?? "assigned",
+          assigned_property_key: existing.assigned_property_key ?? "",
+          assigned_date: existing.assigned_date ?? "",
+        },
+        headers
+      ).catch((rollbackErr) => console.error("[unassignLockbox] rollback failed", rollbackErr));
+      throw err;
+    }
+
     await writeAuditLog({
       timestamp: now,
       actor,
@@ -191,6 +226,7 @@ export async function unassignLockbox(
       source: "dashboard",
       notes: "",
     });
+    return;
   }
 
   await updateProperty(propertyKey, { populife_lock_id: "" }, actor);
@@ -199,7 +235,8 @@ export async function unassignLockbox(
 export async function updateLockboxStatus(
   lockId: string,
   status: LockboxStatus,
-  actor: string
+  actor: string,
+  expected?: Partial<Lockbox>
 ): Promise<Lockbox> {
   const { headers, rawObjects, lockboxes } = await readAll();
 
@@ -208,6 +245,7 @@ export async function updateLockboxStatus(
 
   const existing = rawObjects[idx];
   const before = lockboxes[idx];
+  checkConflicts(before, expected);
   const rowIndex = parseInt(existing._rowIndex!);
 
   const updates: Record<string, string> = {
@@ -236,14 +274,19 @@ export async function updateLockboxStatus(
   return parseLockbox({ ...existing, ...updates });
 }
 
-export async function retireLockbox(lockId: string, actor: string): Promise<Lockbox> {
-  return updateLockboxStatus(lockId, "retired", actor);
+export async function retireLockbox(
+  lockId: string,
+  actor: string,
+  expected?: Partial<Lockbox>
+): Promise<Lockbox> {
+  return updateLockboxStatus(lockId, "retired", actor, expected);
 }
 
 export async function updateLockboxName(
   lockId: string,
   lockName: string,
-  actor: string
+  actor: string,
+  expected?: Partial<Lockbox>
 ): Promise<Lockbox> {
   const { headers, rawObjects, lockboxes } = await readAll();
 
@@ -252,6 +295,7 @@ export async function updateLockboxName(
 
   const existing = rawObjects[idx];
   const before = lockboxes[idx];
+  checkConflicts(before, expected);
   const rowIndex = parseInt(existing._rowIndex!);
 
   const updates: Record<string, string> = { lock_name: lockName };

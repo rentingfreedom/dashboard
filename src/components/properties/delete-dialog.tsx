@@ -31,6 +31,8 @@ export function DeleteDialog({ open, onOpenChange, property, onSuccess, workflow
     try {
       const res = await fetch(`/api/properties/${property.property_key}/delete`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expected: { active: property.active } }),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
       toast.success("Property marked for deletion.");

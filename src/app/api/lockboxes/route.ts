@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { listLockboxes, createLockbox } from "@/lib/google/lockboxes-repository";
 import { createLockboxSchema } from "@/lib/validation/lockbox-schema";
+import { requireRole } from "@/lib/auth/roles";
 
 export async function GET() {
   try {
@@ -17,12 +18,15 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
+    const auth = await requireRole(["admin", "user"]);
+    if (!auth.ok) return auth.response;
+
     const body = await req.json();
     const parsed = createLockboxSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
-    const lockbox = await createLockbox(parsed.data, "dashboard-user");
+    const lockbox = await createLockbox(parsed.data, auth.user.actorLabel);
     return NextResponse.json({ lockbox }, { status: 201 });
   } catch (err) {
     console.error("[POST /api/lockboxes]", err);

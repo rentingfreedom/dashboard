@@ -36,7 +36,7 @@ export function PropertyActions({ property, availableLockboxes, onRefresh, onEdi
       const res = await fetch(`/api/properties/${property.property_key}/status`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, expected: { status: property.status } }),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
       toast.success(`Marked as ${status}`);

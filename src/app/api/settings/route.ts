@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { listSheetNames, readSheet } from "@/lib/google/sheets-client";
+import { requireRole } from "@/lib/auth/roles";
 
 const EXPECTED_COLUMNS: Record<string, string[]> = {
   Properties: [
@@ -49,6 +50,9 @@ const AUTOMATIONS: Array<{
 ];
 
 export async function GET() {
+  const auth = await requireRole(["admin"]);
+  if (!auth.ok) return auth.response;
+
   const result = {
     connected: false,
     spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID ?? "",

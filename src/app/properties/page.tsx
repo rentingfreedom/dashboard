@@ -10,8 +10,10 @@ import { EditPropertyDrawer } from "@/components/properties/edit-property-drawer
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import type { Property, Lockbox } from "@/lib/types";
+import { useRole } from "@/lib/auth/use-role";
 
 export default function PropertiesPage() {
+  const { canWrite } = useRole();
   const [properties, setProperties] = useState<Property[]>([]);
   const [lockboxes, setLockboxes] = useState<Lockbox[]>([]);
   const [loading, setLoading] = useState(true);
@@ -74,14 +76,16 @@ export default function PropertiesPage() {
               <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
               Refresh
             </Button>
-            <Button
-              size="sm"
-              className="h-8 bg-amber-600 hover:bg-amber-700 text-white"
-              onClick={() => setAddOpen(true)}
-            >
-              <Plus className="h-3.5 w-3.5 mr-1.5" />
-              Add Property
-            </Button>
+            {canWrite && (
+              <Button
+                size="sm"
+                className="h-8 bg-amber-600 hover:bg-amber-700 text-white"
+                onClick={() => setAddOpen(true)}
+              >
+                <Plus className="h-3.5 w-3.5 mr-1.5" />
+                Add Property
+              </Button>
+            )}
           </div>
         </div>
       </div>
@@ -101,6 +105,7 @@ export default function PropertiesPage() {
               onRefresh={() => load(true)}
               onEdit={(property) => setEditProperty(property)}
               workflowBusy={workflowBusy}
+              canWrite={canWrite}
             />
           </>
         )}

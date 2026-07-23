@@ -29,6 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 import { ProvisioningBadge } from "./status-badge";
 import { PropertyActions } from "./property-actions";
 import type { Property, Lockbox } from "@/lib/types";
@@ -56,11 +57,17 @@ function InlineStatusSelect({
     if (!next || next === status || saving) return;
     setSaving(true);
     try {
-      await fetch(`/api/properties/${encodeURIComponent(propertyKey)}/status`, {
+      const res = await fetch(`/api/properties/${encodeURIComponent(propertyKey)}/status`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: next }),
+        body: JSON.stringify({ status: next, expected: { status } }),
       });
+      if (!res.ok) {
+        const { error } = await res.json();
+        toast.error(error ?? "Failed to update status");
+        onRefresh();
+        return;
+      }
       onRefresh();
     } finally {
       setSaving(false);
@@ -129,9 +136,10 @@ interface PropertiesTableProps {
   onRefresh: () => void;
   onEdit: (property: Property) => void;
   workflowBusy: boolean;
+  canWrite: boolean;
 }
 
-export function PropertiesTable({ properties, lockboxes, onRefresh, onEdit, workflowBusy }: PropertiesTableProps) {
+export function PropertiesTable({ properties, lockboxes, onRefresh, onEdit, workflowBusy, canWrite }: PropertiesTableProps) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
@@ -180,13 +188,23 @@ export function PropertiesTable({ properties, lockboxes, onRefresh, onEdit, work
       }),
       col.accessor("status", {
         header: () => <span className="text-xs font-medium text-gray-500">Status</span>,
-        cell: ({ getValue, row }) => (
-          <InlineStatusSelect
-            propertyKey={row.original.property_key}
-            status={getValue()}
-            onRefresh={onRefresh}
-          />
-        ),
+        cell: ({ getValue, row }) =>
+          canWrite ? (
+            <InlineStatusSelect
+              propertyKey={row.original.property_key}
+              status={getValue()}
+              onRefresh={onRefresh}
+            />
+          ) : (
+            <span
+              className={cn(
+                "inline-flex h-6 items-center rounded-full border px-2 text-xs font-medium",
+                STATUS_STYLES[getValue()?.toLowerCase()] ?? "bg-gray-100 text-gray-500 border-gray-200"
+              )}
+            >
+              {getValue()}
+            </span>
+          ),
         filterFn: "equals",
       }),
       col.accessor("populife_lock_id", {
@@ -249,21 +267,25 @@ export function PropertiesTable({ properties, lockboxes, onRefresh, onEdit, work
           }
         },
       }),
-      col.display({
-        id: "actions",
-        header: () => <span className="text-xs font-medium text-gray-500">Actions</span>,
-        cell: ({ row }) => (
-          <PropertyActions
-            property={row.original}
-            availableLockboxes={availableLockboxes}
-            onRefresh={onRefresh}
-            onEdit={onEdit}
-            workflowBusy={workflowBusy}
-          />
-        ),
-      }),
+      ...(canWrite
+        ? [
+            col.display({
+              id: "actions",
+              header: () => <span className="text-xs font-medium text-gray-500">Actions</span>,
+              cell: ({ row }: { row: { original: Property } }) => (
+                <PropertyActions
+                  property={row.original}
+                  availableLockboxes={availableLockboxes}
+                  onRefresh={onRefresh}
+                  onEdit={onEdit}
+                  workflowBusy={workflowBusy}
+                />
+              ),
+            }),
+          ]
+        : []),
     ],
-    [availableLockboxes, lockNameById, onRefresh, onEdit, workflowBusy]
+    [availableLockboxes, lockNameById, onRefresh, onEdit, workflowBusy, canWrite]
   );
 
   const filteredData = useMemo(() => {

@@ -29,6 +29,8 @@ export function DeactivateDialog({ open, onOpenChange, property, onSuccess }: De
     try {
       const res = await fetch(`/api/properties/${property.property_key}/deactivate`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expected: { active: property.active } }),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
       toast.success("Property deactivated. Cleanup workflow triggered.");

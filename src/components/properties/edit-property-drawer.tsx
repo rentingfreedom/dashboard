@@ -60,7 +60,14 @@ export function EditPropertyDrawer({
       const res = await fetch(`/api/properties/${property.property_key}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(values),
+        body: JSON.stringify({
+          ...values,
+          expected: {
+            street_address: property.street_address,
+            owner_label: property.owner_label,
+            status: property.status,
+          },
+        }),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? "Failed to update");
       toast.success("Property updated.");

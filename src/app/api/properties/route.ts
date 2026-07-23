@@ -3,6 +3,7 @@ import { listProperties, createProperty, derivePropertyKey } from "@/lib/google/
 import { listLockboxes } from "@/lib/google/lockboxes-repository";
 import { triggerPropertyCreated } from "@/lib/n8n/webhooks";
 import { createPropertySchema } from "@/lib/validation/property-schema";
+import { requireRole } from "@/lib/auth/roles";
 
 export async function GET() {
   try {
@@ -19,6 +20,9 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
+    const auth = await requireRole(["admin", "user"]);
+    if (!auth.ok) return auth.response;
+
     const body = await req.json();
     const parsed = createPropertySchema.safeParse(body);
     if (!parsed.success) {
@@ -28,7 +32,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const actor = "dashboard-user";
+    const actor = auth.user.actorLabel;
     const property = await createProperty(parsed.data, actor);
     const propertyKey = derivePropertyKey(parsed.data.street_address);
     triggerPropertyCreated(propertyKey, actor).catch(() => {});

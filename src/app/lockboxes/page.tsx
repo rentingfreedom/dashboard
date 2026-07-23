@@ -9,8 +9,10 @@ import { LockboxStatCards } from "@/components/lockboxes/lockbox-stat-cards";
 import { LockboxesTable } from "@/components/lockboxes/lockboxes-table";
 import { AddLockboxDialog } from "@/components/lockboxes/add-lockbox-dialog";
 import type { Lockbox } from "@/lib/types";
+import { useRole } from "@/lib/auth/use-role";
 
 export default function LockboxesPage() {
+  const { canWrite } = useRole();
   const [lockboxes, setLockboxes] = useState<Lockbox[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -54,10 +56,12 @@ export default function LockboxesPage() {
               <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
               Refresh
             </Button>
-            <Button size="sm" className="h-8 bg-amber-600 hover:bg-amber-700 text-white" onClick={() => setAddOpen(true)}>
-              <Plus className="h-3.5 w-3.5 mr-1.5" />
-              Add Lockbox
-            </Button>
+            {canWrite && (
+              <Button size="sm" className="h-8 bg-amber-600 hover:bg-amber-700 text-white" onClick={() => setAddOpen(true)}>
+                <Plus className="h-3.5 w-3.5 mr-1.5" />
+                Add Lockbox
+              </Button>
+            )}
           </div>
         </div>
       </div>
@@ -71,7 +75,7 @@ export default function LockboxesPage() {
         ) : (
           <>
             <LockboxStatCards lockboxes={lockboxes} />
-            <LockboxesTable lockboxes={lockboxes} onRefresh={() => load(true)} />
+            <LockboxesTable lockboxes={lockboxes} onRefresh={() => load(true)} canWrite={canWrite} />
           </>
         )}
       </div>

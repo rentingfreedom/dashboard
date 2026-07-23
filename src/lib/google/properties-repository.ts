@@ -11,6 +11,7 @@ import type {
   PropertyStatus,
 } from "@/lib/types";
 import { writeAuditLog } from "./audit-repository";
+import { checkConflicts } from "./concurrency";
 
 const TAB = "Properties";
 
@@ -150,7 +151,8 @@ export async function createProperty(
 export async function updateProperty(
   propertyKey: string,
   patch: UpdatePropertyInput,
-  actor: string
+  actor: string,
+  expected?: Partial<Property>
 ): Promise<Property> {
   const { headers, rawObjects } = await readAll();
 
@@ -159,6 +161,7 @@ export async function updateProperty(
 
   const existing = rawObjects[rawIdx];
   const before = parseProperty(existing);
+  checkConflicts(before, expected);
   const rowIndex = parseInt(existing._rowIndex!);
 
   // Only write columns that are in SAFE_COLUMNS and present in the patch
@@ -193,20 +196,23 @@ export async function updateProperty(
 export async function setPropertyStatus(
   propertyKey: string,
   status: PropertyStatus,
-  actor: string
+  actor: string,
+  expected?: Partial<Property>
 ): Promise<Property> {
-  return updateProperty(propertyKey, { status }, actor);
+  return updateProperty(propertyKey, { status }, actor, expected);
 }
 
 export async function deleteProperty(
   propertyKey: string,
-  actor: string
+  actor: string,
+  expected?: Partial<Property>
 ): Promise<Property> {
   const { headers, rawObjects } = await readAll();
   const rawIdx = rawObjects.findIndex((o) => o.property_key === propertyKey);
   if (rawIdx === -1) throw new Error(`Property "${propertyKey}" not found.`);
 
   const existing = rawObjects[rawIdx];
+  checkConflicts(parseProperty(existing), expected);
   const rowIndex = parseInt(existing._rowIndex!);
   const updates: Record<string, string> = { active: "Delete", provisioning_status: "pending_delete" };
 
@@ -230,13 +236,15 @@ export async function deleteProperty(
 
 export async function deactivateProperty(
   propertyKey: string,
-  actor: string
+  actor: string,
+  expected?: Partial<Property>
 ): Promise<Property> {
   const { headers, rawObjects } = await readAll();
   const rawIdx = rawObjects.findIndex((o) => o.property_key === propertyKey);
   if (rawIdx === -1) throw new Error(`Property "${propertyKey}" not found.`);
 
   const existing = rawObjects[rawIdx];
+  checkConflicts(parseProperty(existing), expected);
   if (existing.active?.toUpperCase() !== "TRUE") {
     throw new Error(`Property "${propertyKey}" is already inactive.`);
   }

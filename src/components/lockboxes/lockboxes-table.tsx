@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 import { LockboxStatusBadge } from "./lockbox-status-badge";
 import { LockboxActions } from "./lockbox-actions";
 import { cn } from "@/lib/utils";
@@ -22,6 +23,7 @@ const col = createColumnHelper<Lockbox>();
 interface LockboxesTableProps {
   lockboxes: Lockbox[];
   onRefresh: () => void;
+  canWrite: boolean;
 }
 
 function InlineLockNameInput({
@@ -40,11 +42,15 @@ function InlineLockNameInput({
     if (value === lockName || saving) return;
     setSaving(true);
     try {
-      await fetch(`/api/lockboxes/${encodeURIComponent(lockId)}`, {
+      const res = await fetch(`/api/lockboxes/${encodeURIComponent(lockId)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lock_name: value }),
+        body: JSON.stringify({ lock_name: value, expected: { lock_name: lockName } }),
       });
+      if (!res.ok) {
+        const { error } = await res.json();
+        toast.error(error ?? "Failed to update lock name");
+      }
       onRefresh();
     } finally {
       setSaving(false);
@@ -66,7 +72,7 @@ function InlineLockNameInput({
   );
 }
 
-export function LockboxesTable({ lockboxes, onRefresh }: LockboxesTableProps) {
+export function LockboxesTable({ lockboxes, onRefresh, canWrite }: LockboxesTableProps) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("active");
@@ -87,13 +93,16 @@ export function LockboxesTable({ lockboxes, onRefresh }: LockboxesTableProps) {
     }),
     col.accessor("lock_name", {
       header: () => <span className="text-xs font-medium text-gray-500">Lock Name</span>,
-      cell: ({ getValue, row }) => (
-        <InlineLockNameInput
-          lockId={row.original.lock_id}
-          lockName={getValue() ?? ""}
-          onRefresh={onRefresh}
-        />
-      ),
+      cell: ({ getValue, row }) =>
+        canWrite ? (
+          <InlineLockNameInput
+            lockId={row.original.lock_id}
+            lockName={getValue() ?? ""}
+            onRefresh={onRefresh}
+          />
+        ) : (
+          <span className="text-xs text-gray-700 dark:text-gray-300">{getValue() || "—"}</span>
+        ),
     }),
     col.accessor("status", {
       header: () => <span className="text-xs font-medium text-gray-500">Status</span>,
@@ -126,12 +135,18 @@ export function LockboxesTable({ lockboxes, onRefresh }: LockboxesTableProps) {
         <span className="text-xs text-gray-500 dark:text-gray-400 max-w-[200px] truncate block">{getValue() || "—"}</span>
       ),
     }),
-    col.display({
-      id: "actions",
-      header: () => <span className="text-xs font-medium text-gray-500">Actions</span>,
-      cell: ({ row }) => <LockboxActions lockbox={row.original} onRefresh={onRefresh} />,
-    }),
-  ], [onRefresh]);
+    ...(canWrite
+      ? [
+          col.display({
+            id: "actions",
+            header: () => <span className="text-xs font-medium text-gray-500">Actions</span>,
+            cell: ({ row }: { row: { original: Lockbox } }) => (
+              <LockboxActions lockbox={row.original} onRefresh={onRefresh} />
+            ),
+          }),
+        ]
+      : []),
+  ], [onRefresh, canWrite]);
 
   const filteredData = useMemo(() => {
     if (statusFilter === "all") return lockboxes;

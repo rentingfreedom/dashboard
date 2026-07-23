@@ -68,8 +68,8 @@ This prints connection status, found tabs, and any missing columns.
 | `N8N_LOCKBOX_UNASSIGNED_WEBHOOK_URL` | Optional | Triggered when a lockbox is unassigned |
 | `APP_BASE_URL` | Optional | Full URL of the app (included in webhook payloads) |
 | `APP_ENV` | Optional | `development` or `production` |
-| `ADMIN_PASSWORD` | Optional | Enables password protection if set |
-| `NEXT_PUBLIC_AUTH_ENABLED` | Optional | Set to `true` to show the logout button in the UI |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Required | Clerk publishable key |
+| `CLERK_SECRET_KEY` | Required | Clerk secret key |
 
 **Private key formatting:** Copy the `private_key` value from the downloaded JSON file exactly. It should start with `-----BEGIN PRIVATE KEY-----` and contain literal `\n` characters. Wrap the entire value in double quotes in `.env.local`.
 
@@ -135,23 +135,9 @@ n8n writes results (cal link, resource calendar, provisioning status) back to th
 
 ## Authentication
 
-By default, auth is **disabled** for easier local development.
+Auth is handled by [Clerk](https://clerk.com). Every route requires a signed-in user (enforced in `src/proxy.ts`); unauthenticated requests redirect to `/sign-in`.
 
-### Enable simple password protection
-
-1. Set `ADMIN_PASSWORD=your-password` in `.env.local` (or Vercel env vars)
-2. Set `NEXT_PUBLIC_AUTH_ENABLED=true`
-3. Redeploy
-
-A login page will appear at `/login`. Sessions last 7 days via an httpOnly cookie.
-
-### Upgrading to Google OAuth / Clerk (recommended for production handoff)
-
-The middleware lives in `src/middleware.ts`. The current check (`rf_session` cookie) can be replaced with any auth provider:
-
-- **Clerk:** `npm install @clerk/nextjs`, wrap the middleware with `clerkMiddleware()`, add `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY`
-- **Auth.js (NextAuth):** `npm install next-auth`, configure a Google provider, replace the cookie check with `auth()` from `next-auth`
-- **Vercel SSO:** Enable in Vercel project settings (requires Pro plan) — requires no code changes
+Set `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` in `.env.local` (or Vercel env vars), from the Clerk application's API Keys page.
 
 ---
 

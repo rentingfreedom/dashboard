@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Plus_Jakarta_Sans } from "next/font/google";
+import { ClerkProvider } from "@clerk/nextjs";
 import "./globals.css";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Toaster } from "@/components/ui/sonner";
@@ -24,13 +25,15 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${font.variable} h-full antialiased`} suppressHydrationWarning>
       <body className="h-full flex bg-gray-50 dark:bg-gray-950 font-sans">
-        <ThemeProvider>
-          <Sidebar />
-          <main className="flex-1 flex flex-col min-h-full overflow-x-hidden">
-            {children}
-          </main>
-          <Toaster richColors position="top-right" />
-        </ThemeProvider>
+        <ClerkProvider afterSignOutUrl="/sign-in">
+          <ThemeProvider>
+            <Sidebar />
+            <main className="flex-1 flex flex-col min-h-full overflow-x-hidden">
+              {children}
+            </main>
+            <Toaster richColors position="top-right" />
+          </ThemeProvider>
+        </ClerkProvider>
       </body>
     </html>
   );
