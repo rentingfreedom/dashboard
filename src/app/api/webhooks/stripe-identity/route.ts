@@ -68,8 +68,8 @@ export async function POST(req: Request) {
           leadId,
           sessionId: session.id,
           status,
-          errorCode: session.last_error?.code,
-          errorReason: session.last_error?.reason,
+          errorCode: session.last_error?.code ?? undefined,
+          errorReason: session.last_error?.reason ?? undefined,
         });
         break;
       }
