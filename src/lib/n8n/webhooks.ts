@@ -105,3 +105,26 @@ export async function triggerLockboxUnassigned(
     lockbox_id: lockboxId,
   });
 }
+
+// Outbound: forwards a Stripe Identity result to n8n so it can do the FUB
+// write-back and (for failed/flagged sessions) kick off the human-in-the-loop
+// staff notification — both of those already live in n8n's FUB integration,
+// not in this app, so we don't duplicate that logic here.
+export async function triggerIdentityVerificationResult(params: {
+  leadId: string;
+  sessionId: string;
+  status: "verified" | "requires_input" | "canceled";
+  errorCode?: string;
+  errorReason?: string;
+}): Promise<void> {
+  const url = process.env.N8N_IDENTITY_RESULT_WEBHOOK_URL;
+  if (!url) return;
+  await sendWebhook(url, {
+    ...basePayload("identity_verification.result", "stripe", "n/a"),
+    lead_id: params.leadId,
+    session_id: params.sessionId,
+    status: params.status,
+    error_code: params.errorCode ?? "",
+    error_reason: params.errorReason ?? "",
+  });
+}
