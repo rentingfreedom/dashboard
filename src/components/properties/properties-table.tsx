@@ -11,7 +11,7 @@ import {
   type ColumnFiltersState,
 } from "@tanstack/react-table";
 import { useState, useMemo } from "react";
-import { ExternalLink, ArrowUpDown, Lock, Unlock, Copy, Check, X } from "lucide-react";
+import { ExternalLink, ArrowUpDown, Lock, Unlock, Copy, Check, X, Flag, RotateCcw } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -42,16 +42,41 @@ const STATUS_STYLES: Record<string, string> = {
   vacant:   "bg-amber-100 text-amber-700 border-amber-200 hover:bg-amber-200",
 };
 
-function InlineStatusSelect({
-  propertyKey,
-  status,
+function StatusPill({ status }: { status: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex h-6 items-center rounded-full border px-2 text-xs font-medium capitalize",
+        STATUS_STYLES[status?.toLowerCase()] ?? "bg-gray-100 text-gray-500 border-gray-200"
+      )}
+    >
+      {status || "—"}
+    </span>
+  );
+}
+
+/**
+ * Status cell.
+ *
+ * DoorLoop is the source of truth for `status` on any row it syncs. Editing is
+ * therefore admin-only and, on a synced row, records an explicit override that
+ * the hourly sync honours — visibly flagged here so an overridden value is never
+ * mistaken for the live DoorLoop one.
+ */
+function StatusCell({
+  property,
+  canEdit,
   onRefresh,
 }: {
-  propertyKey: string;
-  status: string;
+  property: Property;
+  canEdit: boolean;
   onRefresh: () => void;
 }) {
   const [saving, setSaving] = useState(false);
+
+  const { property_key: propertyKey, status } = property;
+  const isSynced = property.doorloop_property_id.trim() !== "";
+  const isOverridden = property.status_override.trim() !== "";
 
   async function handleChange(next: string | null) {
     if (!next || next === status || saving) return;
@@ -65,8 +90,29 @@ function InlineStatusSelect({
       if (!res.ok) {
         const { error } = await res.json();
         toast.error(error ?? "Failed to update status");
-        onRefresh();
-        return;
+      } else if (isSynced) {
+        toast.success(`Overrode DoorLoop — marked ${next}`);
+      }
+      onRefresh();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleClearOverride() {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/properties/${encodeURIComponent(propertyKey)}/status`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expected: { status_override: property.status_override } }),
+      });
+      if (!res.ok) {
+        const { error } = await res.json();
+        toast.error(error ?? "Failed to clear override");
+      } else {
+        toast.success("Override cleared — status follows DoorLoop again");
       }
       onRefresh();
     } finally {
@@ -77,22 +123,68 @@ function InlineStatusSelect({
   const s = status?.toLowerCase();
   const triggerStyles = STATUS_STYLES[s] ?? "bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200";
 
+  const overrideTitle = isOverridden
+    ? `Manual override by ${property.status_override_by || "unknown"}` +
+      (property.status_override_at ? ` on ${new Date(property.status_override_at).toLocaleString()}` : "") +
+      `. DoorLoop reports: ${property.doorloop_status || "not yet synced"}.`
+    : "";
+
   return (
-    <Select value={s} onValueChange={handleChange} disabled={saving}>
-      <SelectTrigger
-        className={cn(
-          "h-6 w-24 border text-xs font-medium rounded-full px-2 py-0 focus:ring-0 focus:ring-offset-0 [&>svg]:h-3 [&>svg]:w-3 [&>svg]:shrink-0",
-          triggerStyles,
-          saving && "opacity-60 cursor-wait"
-        )}
-      >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="vacant">Vacant</SelectItem>
-        <SelectItem value="occupied">Occupied</SelectItem>
-      </SelectContent>
-    </Select>
+    <div className="flex items-center gap-1">
+      {canEdit ? (
+        <Select value={s} onValueChange={handleChange} disabled={saving}>
+          <SelectTrigger
+            className={cn(
+              "h-6 w-24 border text-xs font-medium rounded-full px-2 py-0 focus:ring-0 focus:ring-offset-0 [&>svg]:h-3 [&>svg]:w-3 [&>svg]:shrink-0",
+              triggerStyles,
+              saving && "opacity-60 cursor-wait"
+            )}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="vacant">Vacant</SelectItem>
+            <SelectItem value="occupied">Occupied</SelectItem>
+          </SelectContent>
+        </Select>
+      ) : (
+        <StatusPill status={status} />
+      )}
+
+      {isOverridden && (
+        <span
+          title={overrideTitle}
+          className="inline-flex items-center gap-0.5 rounded-full border border-purple-200 bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700"
+        >
+          <Flag className="h-2.5 w-2.5" />
+          Override
+        </span>
+      )}
+
+      {isOverridden && canEdit && (
+        <button
+          onClick={handleClearOverride}
+          disabled={saving}
+          title="Clear override and follow DoorLoop again"
+          className="p-0.5 rounded text-gray-400 hover:text-gray-700 disabled:opacity-50"
+        >
+          <RotateCcw className="h-3 w-3" />
+        </button>
+      )}
+
+      {isSynced && !isOverridden && (
+        <span
+          title={
+            property.doorloop_synced_at
+              ? `Synced from DoorLoop ${new Date(property.doorloop_synced_at).toLocaleString()}`
+              : "Linked to DoorLoop — not yet synced"
+          }
+          className="text-[10px] text-gray-400"
+        >
+          DoorLoop
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -137,9 +229,10 @@ interface PropertiesTableProps {
   onEdit: (property: Property) => void;
   workflowBusy: boolean;
   canWrite: boolean;
+  isAdmin: boolean;
 }
 
-export function PropertiesTable({ properties, lockboxes, onRefresh, onEdit, workflowBusy, canWrite }: PropertiesTableProps) {
+export function PropertiesTable({ properties, lockboxes, onRefresh, onEdit, workflowBusy, canWrite, isAdmin }: PropertiesTableProps) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
@@ -188,23 +281,11 @@ export function PropertiesTable({ properties, lockboxes, onRefresh, onEdit, work
       }),
       col.accessor("status", {
         header: () => <span className="text-xs font-medium text-gray-500">Status</span>,
-        cell: ({ getValue, row }) =>
-          canWrite ? (
-            <InlineStatusSelect
-              propertyKey={row.original.property_key}
-              status={getValue()}
-              onRefresh={onRefresh}
-            />
-          ) : (
-            <span
-              className={cn(
-                "inline-flex h-6 items-center rounded-full border px-2 text-xs font-medium",
-                STATUS_STYLES[getValue()?.toLowerCase()] ?? "bg-gray-100 text-gray-500 border-gray-200"
-              )}
-            >
-              {getValue()}
-            </span>
-          ),
+        // Editing is gated on isAdmin, not canWrite: DoorLoop owns this field now,
+        // so contradicting it is an admin-level action.
+        cell: ({ row }) => (
+          <StatusCell property={row.original} canEdit={isAdmin} onRefresh={onRefresh} />
+        ),
         filterFn: "equals",
       }),
       col.accessor("populife_lock_id", {
@@ -279,13 +360,14 @@ export function PropertiesTable({ properties, lockboxes, onRefresh, onEdit, work
                   onRefresh={onRefresh}
                   onEdit={onEdit}
                   workflowBusy={workflowBusy}
+                  isAdmin={isAdmin}
                 />
               ),
             }),
           ]
         : []),
     ],
-    [availableLockboxes, lockNameById, onRefresh, onEdit, workflowBusy, canWrite]
+    [availableLockboxes, lockNameById, onRefresh, onEdit, workflowBusy, canWrite, isAdmin]
   );
 
   const filteredData = useMemo(() => {

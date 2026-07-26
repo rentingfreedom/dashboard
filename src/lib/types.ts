@@ -47,6 +47,20 @@ export interface Property {
   calendar_subscribe_status: string;
   calendar_subscribe_message: string;
 
+  // DoorLoop sync — n8n-owned, read-only in dashboard.
+  // doorloop_property_id holds the matched DoorLoop UNIT id (see
+  // scripts/doorloop-match.mjs for why the unit id and not the property id).
+  // Empty means this row has no DoorLoop counterpart, so `status` stays manual.
+  doorloop_property_id: string;
+  doorloop_status: PropertyStatus | string;  // raw occupancy DoorLoop computed
+  doorloop_synced_at: string;
+
+  // Manual admin override of `status`. When status_override is non-empty the
+  // n8n sync leaves `status` alone, so the override survives the hourly poll.
+  status_override: PropertyStatus | "";
+  status_override_by: string;
+  status_override_at: string;
+
   // Google Sheets row metadata (not written back)
   _rowIndex?: number;           // 1-based row index in the sheet
 }

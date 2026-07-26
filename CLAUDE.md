@@ -1,4 +1,5 @@
 @AGENTS.md
+@docs/n8n-workflows.md
 
 ## Account identity
 - GitHub owner: rentingfreedom (repo transferred; push access via CompoundConsultingAI collaborator account)

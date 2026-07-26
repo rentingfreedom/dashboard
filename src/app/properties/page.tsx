@@ -13,7 +13,7 @@ import type { Property, Lockbox } from "@/lib/types";
 import { useRole } from "@/lib/auth/use-role";
 
 export default function PropertiesPage() {
-  const { canWrite } = useRole();
+  const { canWrite, isAdmin } = useRole();
   const [properties, setProperties] = useState<Property[]>([]);
   const [lockboxes, setLockboxes] = useState<Lockbox[]>([]);
   const [loading, setLoading] = useState(true);
@@ -106,6 +106,7 @@ export default function PropertiesPage() {
               onEdit={(property) => setEditProperty(property)}
               workflowBusy={workflowBusy}
               canWrite={canWrite}
+              isAdmin={isAdmin}
             />
           </>
         )}

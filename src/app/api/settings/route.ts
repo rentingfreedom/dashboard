@@ -47,6 +47,15 @@ const AUTOMATIONS: Array<{
     workflowId: "UbO0l29GtILMm1sP",
     source: "Follow Up Boss",
   },
+  {
+    key: "doorloop_occupancy_sync",
+    label: "DoorLoop occupancy sync",
+    description:
+      "Hourly: derives vacant/occupied from DoorLoop active leases and writes status straight to the Properties sheet. Rows with a manual admin override are left alone.",
+    webhookPath: "webhook/doorloop-occupancy-sync",
+    workflowId: "4bMsEAi18j4CPK8k",
+    source: "DoorLoop",
+  },
 ];
 
 export async function GET() {

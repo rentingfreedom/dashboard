@@ -27,6 +27,13 @@ const SAFE_COLUMNS = new Set([
   "active",
   "provisioning_status",
   "notes",
+  // DoorLoop override trio. `status` stays writable because setting an override
+  // writes the effective value through to it; the DoorLoop-owned columns
+  // (doorloop_property_id / doorloop_status / doorloop_synced_at) are NOT here
+  // and are never written by the dashboard.
+  "status_override",
+  "status_override_by",
+  "status_override_at",
 ]);
 
 /** Mirror of the sheet spill formula — used locally for audit/webhook, never written */
@@ -64,6 +71,12 @@ function parseProperty(raw: Record<string, string>): Property {
     calendar_share_message: raw.calendar_share_message ?? "",
     calendar_subscribe_status: raw.calendar_subscribe_status ?? "",
     calendar_subscribe_message: raw.calendar_subscribe_message ?? "",
+    doorloop_property_id: raw.doorloop_property_id ?? "",
+    doorloop_status: raw.doorloop_status ?? "",
+    doorloop_synced_at: raw.doorloop_synced_at ?? "",
+    status_override: (raw.status_override as PropertyStatus) ?? "",
+    status_override_by: raw.status_override_by ?? "",
+    status_override_at: raw.status_override_at ?? "",
     _rowIndex: raw._rowIndex ? parseInt(raw._rowIndex) : undefined,
   };
 }
@@ -193,13 +206,118 @@ export async function updateProperty(
   return parseProperty({ ...existing, ...safeUpdates });
 }
 
+/**
+ * Set a property's status.
+ *
+ * DoorLoop is the source of truth for `status` on any row that matched a DoorLoop
+ * unit (i.e. has a doorloop_property_id). For those rows this records an explicit,
+ * attributed OVERRIDE: it writes the effective value to `status` and stamps
+ * `status_override`, which is the flag the hourly n8n sync checks before writing
+ * — so the override survives the next poll instead of being silently reverted.
+ *
+ * Rows with no DoorLoop counterpart aren't synced by anything, so they get a
+ * plain status write with no override bookkeeping.
+ */
 export async function setPropertyStatus(
   propertyKey: string,
   status: PropertyStatus,
   actor: string,
   expected?: Partial<Property>
 ): Promise<Property> {
-  return updateProperty(propertyKey, { status }, actor, expected);
+  const { headers, rawObjects } = await readAll();
+
+  const rawIdx = rawObjects.findIndex((o) => o.property_key === propertyKey);
+  if (rawIdx === -1) throw new Error(`Property "${propertyKey}" not found.`);
+
+  const existing = rawObjects[rawIdx];
+  const before = parseProperty(existing);
+  checkConflicts(before, expected);
+  const rowIndex = parseInt(existing._rowIndex!);
+
+  const isSynced = before.doorloop_property_id.trim() !== "";
+  const now = new Date().toISOString();
+
+  const updates: Record<string, string> = isSynced
+    ? {
+        status,
+        status_override: status,
+        status_override_by: actor,
+        status_override_at: now,
+      }
+    : { status };
+
+  await updateSpecificColumns(TAB, rowIndex, updates, headers);
+
+  await writeAuditLog({
+    timestamp: now,
+    actor,
+    action: isSynced ? "property.status_overridden" : "property.updated",
+    entity_type: "property",
+    entity_id: propertyKey,
+    property_key: propertyKey,
+    before_json: JSON.stringify(before),
+    after_json: JSON.stringify(updates),
+    source: "dashboard",
+    notes: isSynced
+      ? `Manual override of DoorLoop-synced status. DoorLoop reported "${before.doorloop_status || "(not yet synced)"}".`
+      : "",
+  });
+
+  return parseProperty({ ...existing, ...updates });
+}
+
+/**
+ * Drop a manual override and hand `status` back to the DoorLoop sync.
+ *
+ * Also writes the last-known DoorLoop value straight into `status` so the row is
+ * correct immediately rather than staying wrong until the next hourly poll.
+ */
+export async function clearStatusOverride(
+  propertyKey: string,
+  actor: string,
+  expected?: Partial<Property>
+): Promise<Property> {
+  const { headers, rawObjects } = await readAll();
+
+  const rawIdx = rawObjects.findIndex((o) => o.property_key === propertyKey);
+  if (rawIdx === -1) throw new Error(`Property "${propertyKey}" not found.`);
+
+  const existing = rawObjects[rawIdx];
+  const before = parseProperty(existing);
+  checkConflicts(before, expected);
+
+  if (before.status_override.trim() === "") {
+    throw new Error(`Property "${propertyKey}" has no manual override to clear.`);
+  }
+
+  const rowIndex = parseInt(existing._rowIndex!);
+  const updates: Record<string, string> = {
+    status_override: "",
+    status_override_by: "",
+    status_override_at: "",
+  };
+  // Only reassert status if DoorLoop has actually reported one; otherwise leave
+  // the current value alone and let the next sync fill it in.
+  if (before.doorloop_status.trim() !== "") {
+    updates.status = before.doorloop_status;
+  }
+
+  await updateSpecificColumns(TAB, rowIndex, updates, headers);
+
+  await writeAuditLog({
+    timestamp: new Date().toISOString(),
+    actor,
+    action: "property.status_override_cleared",
+    entity_type: "property",
+    entity_id: propertyKey,
+    property_key: propertyKey,
+    before_json: JSON.stringify(before),
+    after_json: JSON.stringify(updates),
+    source: "dashboard",
+    notes: "Status handed back to the DoorLoop sync.",
+  });
+
+  return parseProperty({ ...existing, ...updates });
 }
 
 export async function deleteProperty(

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { MoreHorizontal, UserCheck, UserX, Lock, Unlock, PowerOff, Pencil, Trash2 } from "lucide-react";
+import { MoreHorizontal, UserCheck, UserX, Lock, Unlock, PowerOff, Pencil, Trash2, RotateCcw } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,13 +22,17 @@ interface PropertyActionsProps {
   onRefresh: () => void;
   onEdit: (property: Property) => void;
   workflowBusy: boolean;
+  isAdmin: boolean;
 }
 
-export function PropertyActions({ property, availableLockboxes, onRefresh, onEdit, workflowBusy }: PropertyActionsProps) {
+export function PropertyActions({ property, availableLockboxes, onRefresh, onEdit, workflowBusy, isAdmin }: PropertyActionsProps) {
   const [deactivateOpen, setDeactivateOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  const isSynced = property.doorloop_property_id.trim() !== "";
+  const isOverridden = property.status_override.trim() !== "";
 
   async function handleStatusChange(status: "vacant" | "occupied") {
     setLoading(true);
@@ -39,7 +43,25 @@ export function PropertyActions({ property, availableLockboxes, onRefresh, onEdi
         body: JSON.stringify({ status, expected: { status: property.status } }),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
-      toast.success(`Marked as ${status}`);
+      toast.success(isSynced ? `Overrode DoorLoop — marked ${status}` : `Marked as ${status}`);
+      onRefresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleClearOverride() {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/properties/${property.property_key}/status`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expected: { status_override: property.status_override } }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
+      toast.success("Override cleared — status follows DoorLoop again");
       onRefresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Something went wrong");
@@ -78,18 +100,30 @@ export function PropertyActions({ property, availableLockboxes, onRefresh, onEdi
             <Pencil className="h-4 w-4 mr-2 text-gray-400" />
             Edit property
           </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          {property.status !== "vacant" && (
-            <DropdownMenuItem onClick={() => handleStatusChange("vacant")}>
-              <UserX className="h-4 w-4 mr-2 text-amber-500" />
-              Mark vacant
-            </DropdownMenuItem>
-          )}
-          {property.status !== "occupied" && (
-            <DropdownMenuItem onClick={() => handleStatusChange("occupied")}>
-              <UserCheck className="h-4 w-4 mr-2 text-green-500" />
-              Mark occupied
-            </DropdownMenuItem>
+          {/* Status is DoorLoop-owned on synced rows, so changing it is an
+              admin-only override, labelled as such rather than a plain toggle. */}
+          {isAdmin && (
+            <>
+              <DropdownMenuSeparator />
+              {property.status !== "vacant" && (
+                <DropdownMenuItem onClick={() => handleStatusChange("vacant")}>
+                  <UserX className="h-4 w-4 mr-2 text-amber-500" />
+                  {isSynced ? "Override → vacant" : "Mark vacant"}
+                </DropdownMenuItem>
+              )}
+              {property.status !== "occupied" && (
+                <DropdownMenuItem onClick={() => handleStatusChange("occupied")}>
+                  <UserCheck className="h-4 w-4 mr-2 text-green-500" />
+                  {isSynced ? "Override → occupied" : "Mark occupied"}
+                </DropdownMenuItem>
+              )}
+              {isOverridden && (
+                <DropdownMenuItem onClick={handleClearOverride}>
+                  <RotateCcw className="h-4 w-4 mr-2 text-gray-400" />
+                  Clear override
+                </DropdownMenuItem>
+              )}
+            </>
           )}
           <DropdownMenuSeparator />
           {!property.populife_lock_id ? (

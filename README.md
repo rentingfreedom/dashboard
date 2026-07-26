@@ -70,6 +70,7 @@ This prints connection status, found tabs, and any missing columns.
 | `APP_ENV` | Optional | `development` or `production` |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Required | Clerk publishable key |
 | `CLERK_SECRET_KEY` | Required | Clerk secret key |
+| `DOORLOOP_API_KEY` | Scripts only | DoorLoop bearer token. Used by `scripts/doorloop-match.mjs`. The hourly sync itself runs in n8n and holds its own copy as an n8n Header Auth credential — the deployed app never reads this. |
 
 **Private key formatting:** Copy the `private_key` value from the downloaded JSON file exactly. It should start with `-----BEGIN PRIVATE KEY-----` and contain literal `\n` characters. Wrap the entire value in double quotes in `.env.local`.
 
@@ -94,9 +95,23 @@ Open the spreadsheet in Google Sheets, click **Share**, add the service account 
 
 The dashboard uses targeted cell updates (`batchUpdate`) and only ever writes to these columns:
 
-`street_address`, `owner_label`, `status`, `populife_lock_id`, `active`, `provisioning_status`, `notes`
+`street_address`, `owner_label`, `status`, `populife_lock_id`, `active`, `provisioning_status`, `notes`, `status_override`, `status_override_by`, `status_override_at`
 
 All other columns — including spill-formula columns, n8n-owned fields, and computed values — are never touched by the dashboard.
+
+### DoorLoop-owned columns
+
+DoorLoop is the source of truth for `status`. The hourly **DoorLoop Occupancy Sync**
+n8n workflow writes `status`, `doorloop_status` and `doorloop_synced_at` directly to
+the sheet, bypassing this app entirely — the same pattern n8n already uses for
+`cal_link` / `provisioning_status`. The dashboard never writes those three.
+
+An admin can still override a synced value: setting the status from the dashboard on
+a DoorLoop-matched row stamps `status_override` (plus `_by` / `_at`), and the sync
+honours that flag instead of overwriting. `doorloop_status` still records what
+DoorLoop reported, so the UI shows both. Clearing the override hands `status` back
+to the sync. Rows with an empty `doorloop_property_id` aren't synced at all and keep
+a plain manual status.
 
 ---
 
