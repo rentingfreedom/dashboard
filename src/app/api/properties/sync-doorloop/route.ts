@@ -23,9 +23,17 @@ export async function POST() {
 
   const base = process.env.N8N_BASE_URL ?? "https://automation.rentingfreedom.com";
   try {
-    await fetch(`${base.replace(/\/$/, "")}/webhook/doorloop-occupancy-sync`, {
+    const res = await fetch(`${base.replace(/\/$/, "")}/webhook/doorloop-occupancy-sync`, {
       method: "POST",
     });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.error("[POST /api/properties/sync-doorloop] n8n responded", res.status, body);
+      return NextResponse.json(
+        { error: `Sync workflow responded with an error (${res.status})` },
+        { status: 502 }
+      );
+    }
   } catch (err) {
     console.error("[POST /api/properties/sync-doorloop]", err);
     return NextResponse.json({ error: "Failed to reach the sync workflow" }, { status: 502 });
