@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Plus, RefreshCw } from "lucide-react";
+import { Plus, RefreshCw, Satellite } from "lucide-react";
+import { formatDistanceToNow } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { StatCards } from "@/components/properties/stat-cards";
 import { PropertiesTable } from "@/components/properties/properties-table";
@@ -21,10 +22,17 @@ export default function PropertiesPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [editProperty, setEditProperty] = useState<Property | null>(null);
+  const [syncing, setSyncing] = useState(false);
 
   const workflowBusy = properties.some(
     (p) => p.provisioning_status === "pending_create" || p.provisioning_status === "pending_delete"
   );
+
+  const newestDoorLoopSync = properties.reduce<string | null>((latest, p) => {
+    if (!p.doorloop_property_id.trim() || !p.doorloop_synced_at) return latest;
+    if (!latest || new Date(p.doorloop_synced_at) > new Date(latest)) return p.doorloop_synced_at;
+    return latest;
+  }, null);
 
   const ownerLabels = Array.from(
     new Set(properties.map((p) => p.owner_label?.trim()).filter(Boolean) as string[])
@@ -54,6 +62,24 @@ export default function PropertiesPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  async function handleSyncNow() {
+    setSyncing(true);
+    try {
+      const res = await fetch("/api/properties/sync-doorloop", { method: "POST" });
+      if (!res.ok) {
+        const { error } = await res.json();
+        toast.error(error ?? "Failed to trigger sync");
+        return;
+      }
+      toast.success("Sync started — this takes a few seconds");
+      setTimeout(() => load(true), 4000);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to trigger sync");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -76,6 +102,21 @@ export default function PropertiesPage() {
               <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
               Refresh
             </Button>
+            {isAdmin && (
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleSyncNow}
+                  disabled={syncing}
+                  className="h-8"
+                >
+                  <Satellite className="h-3.5 w-3.5 mr-1.5" />
+                  {syncing ? "Starting…" : "Sync now"}
+                </Button>
+                <SyncFreshness syncedAt={newestDoorLoopSync} />
+              </div>
+            )}
             {canWrite && (
               <Button
                 size="sm"
@@ -147,6 +188,30 @@ function LoadingSkeleton() {
         ))}
       </div>
     </div>
+  );
+}
+
+function SyncFreshness({ syncedAt }: { syncedAt: string | null }) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  if (!syncedAt) return null;
+  const date = new Date(syncedAt);
+  const ageMs = now - date.getTime();
+  const color =
+    ageMs > 6 * 60 * 60 * 1000
+      ? "text-red-600 dark:text-red-400"
+      : ageMs > 2 * 60 * 60 * 1000
+      ? "text-amber-600 dark:text-amber-400"
+      : "text-gray-500 dark:text-gray-400";
+  return (
+    <span className={`text-xs ${color}`}>
+      Synced {formatDistanceToNow(date, { addSuffix: true })}
+    </span>
   );
 }
 

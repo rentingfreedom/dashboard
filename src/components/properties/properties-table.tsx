@@ -32,6 +32,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { ProvisioningBadge } from "./status-badge";
 import { PropertyActions } from "./property-actions";
+import { OverrideConfirmDialog } from "./override-confirm-dialog";
 import type { Property, Lockbox } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -73,13 +74,13 @@ function StatusCell({
   onRefresh: () => void;
 }) {
   const [saving, setSaving] = useState(false);
+  const [confirmTarget, setConfirmTarget] = useState<"vacant" | "occupied" | null>(null);
 
   const { property_key: propertyKey, status } = property;
   const isSynced = property.doorloop_property_id.trim() !== "";
   const isOverridden = property.status_override.trim() !== "";
 
-  async function handleChange(next: string | null) {
-    if (!next || next === status || saving) return;
+  async function commitChange(next: string) {
     setSaving(true);
     try {
       const res = await fetch(`/api/properties/${encodeURIComponent(propertyKey)}/status`, {
@@ -97,6 +98,22 @@ function StatusCell({
     } finally {
       setSaving(false);
     }
+  }
+
+  function handleChange(next: string | null) {
+    if (!next || next === status || saving) return;
+    if (isSynced) {
+      setConfirmTarget(next as "vacant" | "occupied");
+    } else {
+      commitChange(next);
+    }
+  }
+
+  function handleConfirm() {
+    if (!confirmTarget) return;
+    const next = confirmTarget;
+    setConfirmTarget(null);
+    commitChange(next);
   }
 
   async function handleClearOverride() {
@@ -184,6 +201,15 @@ function StatusCell({
           DoorLoop
         </span>
       )}
+
+      <OverrideConfirmDialog
+        open={confirmTarget !== null}
+        onOpenChange={(open) => { if (!open) setConfirmTarget(null); }}
+        property={property}
+        targetStatus={confirmTarget}
+        onConfirm={handleConfirm}
+        loading={saving}
+      />
     </div>
   );
 }

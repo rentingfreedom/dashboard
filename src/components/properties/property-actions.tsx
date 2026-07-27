@@ -15,6 +15,7 @@ import type { Property, Lockbox } from "@/lib/types";
 import { DeactivateDialog } from "./deactivate-dialog";
 import { DeleteDialog } from "./delete-dialog";
 import { AssignLockboxDialog } from "./assign-lockbox-dialog";
+import { OverrideConfirmDialog } from "./override-confirm-dialog";
 
 interface PropertyActionsProps {
   property: Property;
@@ -30,11 +31,12 @@ export function PropertyActions({ property, availableLockboxes, onRefresh, onEdi
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [confirmTarget, setConfirmTarget] = useState<"vacant" | "occupied" | null>(null);
 
   const isSynced = property.doorloop_property_id.trim() !== "";
   const isOverridden = property.status_override.trim() !== "";
 
-  async function handleStatusChange(status: "vacant" | "occupied") {
+  async function commitStatusChange(status: "vacant" | "occupied") {
     setLoading(true);
     try {
       const res = await fetch(`/api/properties/${property.property_key}/status`, {
@@ -50,6 +52,21 @@ export function PropertyActions({ property, availableLockboxes, onRefresh, onEdi
     } finally {
       setLoading(false);
     }
+  }
+
+  function handleStatusChange(status: "vacant" | "occupied") {
+    if (isSynced) {
+      setConfirmTarget(status);
+    } else {
+      commitStatusChange(status);
+    }
+  }
+
+  function handleConfirmOverride() {
+    if (!confirmTarget) return;
+    const status = confirmTarget;
+    setConfirmTarget(null);
+    commitStatusChange(status);
   }
 
   async function handleClearOverride() {
@@ -185,6 +202,14 @@ export function PropertyActions({ property, availableLockboxes, onRefresh, onEdi
         property={property}
         availableLockboxes={availableLockboxes}
         onSuccess={() => { setAssignOpen(false); onRefresh(); }}
+      />
+      <OverrideConfirmDialog
+        open={confirmTarget !== null}
+        onOpenChange={(open) => { if (!open) setConfirmTarget(null); }}
+        property={property}
+        targetStatus={confirmTarget}
+        onConfirm={handleConfirmOverride}
+        loading={loading}
       />
     </>
   );
