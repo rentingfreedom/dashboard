@@ -98,6 +98,7 @@ export default function PropertiesPage() {
               onClick={() => load(true)}
               disabled={refreshing}
               className="h-8"
+              title="Reload this page's data from the sheet — does not talk to DoorLoop"
             >
               <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
               Refresh
@@ -110,6 +111,7 @@ export default function PropertiesPage() {
                   onClick={handleSyncNow}
                   disabled={syncing}
                   className="h-8"
+                  title="Trigger the DoorLoop occupancy sync immediately instead of waiting for the hourly run"
                 >
                   <Satellite className="h-3.5 w-3.5 mr-1.5" />
                   {syncing ? "Starting…" : "Sync now"}
