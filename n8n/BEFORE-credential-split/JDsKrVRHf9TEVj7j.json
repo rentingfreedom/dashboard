@@ -1,0 +1,2243 @@
+{
+  "updatedAt": "2026-07-28T01:52:28.009Z",
+  "createdAt": "2026-07-27T21:54:55.479Z",
+  "id": "JDsKrVRHf9TEVj7j",
+  "name": "RentingFreedom Production - FUB Inquiry → Record + Send",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fub-inquiry-created",
+        "options": {}
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -260,
+        300
+      ],
+      "webhookId": "fub-inquiry-created",
+      "id": "9cbe96cb-aed7-47aa-9f56-ac0360555830"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.body.uri || ('https://api.followupboss.com/v1/events?id=' + $json.body.resourceIds[0]) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "FUB - Get Event",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -40,
+        120
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "id": "dd81140f-e344-4fa3-a06e-2c03ffabfd33"
+    },
+    {
+      "parameters": {
+        "url": "=https://api.followupboss.com/v1/people/{{ $json.events[0].personId }}?fields=allFields",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "FUB - Get Person",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        180,
+        120
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "id": "cac28147-d57c-4875-a64a-bf63352e9362"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Properties",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "name": "Read Properties",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -40,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000,
+      "id": "508a127f-ded3-497b-a27f-aa5074cc63c0"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Inquiries",
+          "mode": "name"
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "name": "Read Inquiries",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -40,
+        460
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000,
+      "id": "befb220c-c05b-4036-8e84-93445a961836"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Settings",
+          "mode": "name"
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "name": "Read Settings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -40,
+        620
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000,
+      "id": "cbf0975d-c617-44ea-ae0a-05daeeeafe0b"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Identity_Verifications",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "name": "Read Identity Verifications",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -40,
+        780
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000,
+      "id": "e87d3900-6196-40a7-baed-4e5ef538fecd"
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 5
+      },
+      "name": "Wait For All",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        420,
+        380
+      ],
+      "id": "de02c43d-acdf-441a-8197-46d232e87b07"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Resolve one FUB inquiry event into an Inquiries row.\n//\n// Address matching is copied verbatim from the two production workflows that\n// already match FUB property addresses to the Properties tab (FUB New Lead →\n// Cal Link, FUB Address → Cal Link). Reused rather than rewritten so all three\n// paths agree on what \"matches\" means — a divergence here would show up as a\n// lead getting a link from one path and an unmatched alert from another.\nfunction normalize(value) { return String(value ?? \"\").toLowerCase().replace(/[^a-z0-9]/g, \"\"); }\nfunction normalizeAddress(value) { return String(value ?? \"\").toLowerCase().replace(/\\b(apartment|apt|unit|suite|ste)\\b/g, \"\").replace(/\\b(street|st|road|rd|avenue|ave|drive|dr|court|ct|boulevard|blvd|lane|ln|circle|cir|place|pl|terrace|ter)\\b/g, \"\").replace(/[^a-z0-9]/g, \"\"); }\nfunction dedupe(values) { return [...new Set(values.map(v => String(v || \"\").trim()).filter(Boolean))]; }\n\nconst eventPayload = $items(\"FUB - Get Event\")[0]?.json || {};\nconst ev = eventPayload.events?.[0] ?? eventPayload;\n\nconst personPayload = $items(\"FUB - Get Person\")[0]?.json || {};\nconst person = personPayload.people?.[0] ?? personPayload;\n\nconst sheetRows    = $items(\"Read Properties\").map(i => i.json || {});\nconst inquiryRows  = $items(\"Read Inquiries\").map(i => i.json || {});\nconst settingsRows = $items(\"Read Settings\").map(i => i.json || {});\nconst identityRows = $items(\"Read Identity Verifications\").map(i => i.json || {});\n\nconst settings = {};\nfor (const row of settingsRows) {\n  if (row.key) settings[row.key] = row.value;\n}\n\nconst skip = (reason, extra) => [{ json: { skip: true, reason, event_id: String(ev.id ?? \"\"), person_id: String(ev.personId ?? \"\"), ...(extra || {}) } }];\n\n// FUB auto-converts a generic \"Inquiry\" to \"Property Inquiry\" once a property\n// section is present, so accept both.\nif (ev.type !== \"Property Inquiry\" && ev.type !== \"Inquiry\") {\n  return skip(\"not_an_inquiry\", { type: ev.type });\n}\n\n// FUB emits a second, property-less Property Inquiry event alongside the real\n// one (observed on persons 2586 and 2589). Recording it would append a blank row.\nconst prop = ev.property || {};\nif (!prop.street) {\n  return skip(\"no_property_on_event\");\n}\n\n// Events older than the cutoff are ignored, so switching this on never texts\n// the leads already sitting in the CRM.\nconst startAt = settings.inquiry_flow_start_at;\nif (startAt && ev.created && new Date(ev.created) < new Date(startAt)) {\n  return skip(\"before_flow_start\", { created: ev.created, start_at: startAt });\n}\n\n// Idempotency: FUB retries webhook deliveries, and a retry must not re-append\n// or re-send. event_id is the natural key.\nconst eventIdStr = String(ev.id ?? \"\");\nif (inquiryRows.some(r => String(r.event_id ?? \"\") === eventIdStr && eventIdStr !== \"\")) {\n  return skip(\"duplicate_event\", { event_id: eventIdStr });\n}\n\n// ── match the event's own address (never the person's summary address) ──\nconst addressCandidates = dedupe([\n  prop.street,\n  [prop.street, prop.city, prop.state, prop.code].filter(Boolean).join(\", \")\n]);\nconst normalizedCandidates = dedupe(addressCandidates.map(v => normalize(v)));\nconst normalizedAddressCandidates = dedupe(addressCandidates.map(v => normalizeAddress(v)));\n\nconst matches = [];\nfor (const row of sheetRows) {\n  const fields = [\n    { key: \"street_address\", value: row.street_address || \"\" },\n    { key: \"property_key\",   value: row.property_key   || \"\" },\n  ];\n  let score = 0;\n  for (const field of fields) {\n    const nf  = normalize(field.value);\n    const naf = normalizeAddress(field.value);\n    if (naf && normalizedAddressCandidates.includes(naf)) score += field.key === \"street_address\" ? 120 : 90;\n    else if (nf && normalizedCandidates.includes(nf)) score += 70;\n    else { for (const c of addressCandidates) { const nc = normalize(c); if (nc && nf && (nf.includes(nc) || nc.includes(nf))) { score += 20; break; } } }\n  }\n  if (score > 0) matches.push({ ...row, score });\n}\nmatches.sort((a, b) => b.score - a.score);\nconst best = matches[0] || null;\nconst matched = !!best && best.score >= 80;\n\nconst phoneRaw = person.phones?.[0]?.value || \"\";\nconst digits = phoneRaw.replace(/\\D/g, \"\");\nconst toNumber = digits ? (digits.length === 10 ? \"+1\" + digits : \"+\" + digits) : \"\";\nconst email = person.emails?.[0]?.value || \"\";\n\nconst isTestLead = (person.firstName || \"\") === \"Test\";\n\nlet match_status = \"matched\";\nif (!matched) match_status = \"unmatched\";\nelse if (!best.cal_link) match_status = \"no_cal_link\";\n\nconst calLinkRaw = matched ? (best.cal_link || \"\") : \"\";\n\n// Alert once per unmatched address, not once per inquiry — 522 Temple Rd alone\n// produced five inquiries in a week.\nconst alreadyAlerted = inquiryRows.some(r =>\n  normalizeAddress(r.property_address) === normalizeAddress(prop.street) &&\n  String(r.alert_sent ?? \"\").toUpperCase() === \"TRUE\"\n);\nconst needsAlert = match_status !== \"matched\" && !alreadyAlerted;\n\n// No lead gets a cal link without passing Stripe Identity first. A repeat\n// inquirer who already has a phone would otherwise skip the whole gate.\n// lead_id in Identity_Verifications holds test-reset artifacts rather than FUB\n// person ids, so match on person id OR phone.\n// Compare the last 10 digits: FUB stores \"8038047847\", the sheet stores\n// \"18038047847\", and Twilio uses \"+18038047847\".\nconst last10 = (v) => String(v ?? \"\").replace(/\\D/g, \"\").slice(-10);\nconst personLast10 = last10(phoneRaw);\nconst isVerified = identityRows.some(r => {\n  const sameLead = String(r.lead_id ?? \"\") !== \"\" && String(r.lead_id) === String(person.id ?? \"\");\n  const samePhone = personLast10 !== \"\" && last10(r.phone) === personLast10;\n  return (sameLead || samePhone) && String(r.status ?? \"\").trim().toLowerCase() === \"verified\";\n});\n\n// The single place the test gate is applied. Removing the gate before launch\n// means making this true for everyone, which switches BOTH the immediate send\n// and the identity hand-off on for real leads.\n\n// ── STAGE_GATE_MARKER: FUB stage gate ────────────────────────────────────────────\n// Inquiries from other stages are still RECORDED (so nothing is lost and the Properties data gap is still visible), but no link is sent and no identity hand-off happens.\n// Empty / missing allowed_stages == allow everything, so losing the Settings\n// row degrades to the pre-gate behaviour rather than muting the whole system.\nconst allowedStages = String(settings.allowed_stages ?? \"\")\n  .split(\",\")\n  .map((s) => s.trim().toLowerCase())\n  .filter(Boolean);\n// Sheets coerces on write and the stage names contain punctuation and mixed\n// case (\"Tenant Inquiry Lead (Do Not Contact)\"), so compare normalized.\nconst personStage = String(person.stage ?? \"\").trim().toLowerCase();\nconst stageAllowed = allowedStages.length === 0 || allowedStages.includes(personStage);\n\nconst testGateOpen = isTestLead;\n\nconst deliverable = match_status === \"matched\" && !!calLinkRaw && !!toNumber;\n// Already verified -> send this inquiry's link now.\nconst send_now = testGateOpen && stageAllowed && deliverable && isVerified;\n// Not verified yet -> hand off to the Identity Gate. It sends the verify SMS,\n// and on success the Result Handler replays the sweep, which picks this row up.\nconst needs_gate = testGateOpen && stageAllowed && deliverable && !isVerified;\nlet link_sent_value = \"false\";\nif (!stageAllowed) link_sent_value = \"skipped_stage_gate\";\nelse if (!testGateOpen) link_sent_value = \"skipped_test_gate\";\n\nconst baseCalLink = calLinkRaw ? (calLinkRaw.split(\"?\")[0]).replace(/^(?!https?:\\/\\/)/, \"https://\") : \"\";\nconst enrichedCalLink = baseCalLink\n  ? baseCalLink + \"?metadata%5Bfub_person_id%5D=\" + person.id + \"&metadata%5Bphone%5D=\" + encodeURIComponent(toNumber)\n  : \"\";\n\nconst propertyAddress = matched ? (best.street_address || prop.street) : prop.street;\n\nconst template = settings.sms_template || \"\";\nconst message = template\n  .replace(/\\{\\{greeting\\}\\}/g, \"Hello!\")\n  .replace(/\\{\\{first_name\\}\\}/g, person.firstName || person.name || \"\")\n  .replace(/\\{\\{property_address\\}\\}/g, propertyAddress)\n  .replace(/\\{\\{cal_link\\}\\}/g, enrichedCalLink)\n  .replace(/\\{\\{apply_link\\}\\}/g, settings.apply_link || \"\");\n\nreturn [{ json: {\n  skip: false,\n  send_now,\n  needs_gate,\n  is_verified: isVerified,\n  needs_alert: needsAlert,\n  // Inquiries row\n  event_id: eventIdStr,\n  person_id: String(ev.personId ?? person.id ?? \"\"),\n  person_name: person.name || \"\",\n  property_key: matched ? (best.property_key || \"\") : \"\",\n  cal_link: calLinkRaw,\n  inquired_at: ev.created || new Date().toISOString(),\n  link_sent: link_sent_value,\n  source: ev.source || \"\",\n  property_address: prop.street,\n  match_status,\n  phone: toNumber,\n  email,\n  alert_sent: needsAlert ? \"TRUE\" : \"\",\n  // send-time fields\n  enriched_cal_link: enrichedCalLink,\n  message,\n  from_number: settings.from_number || \"\",\n  sent_at: new Date().toISOString(),\n  alert_phone: settings.unmatched_inquiry_alert_phone || \"\",\n  alert_message: \"RF: inquiry for \\\"\" + prop.street + \"\\\" (\" + (prop.city || \"\") + \") has no matching row in the Properties tab - no cal link was sent. Lead: \" + (person.name || \"unknown\") + \".\",\n  is_test_lead: isTestLead,\n  stage: person.stage || \"\",\n  stage_allowed: stageAllowed,\n  match_score: best?.score ?? 0\n}}];\n"
+      },
+      "name": "Resolve Inquiry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        380
+      ],
+      "id": "41c59e04-c4d1-4651-be37-c5f0192684a0"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Should Record?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        860,
+        380
+      ],
+      "id": "0af9e1bd-c84a-446d-bd80-f852e7a93ea1"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Inquiries",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "person_id": "={{ $('Resolve Inquiry').first().json.person_id }}",
+            "property_key": "={{ $('Resolve Inquiry').first().json.property_key }}",
+            "cal_link": "={{ $('Resolve Inquiry').first().json.cal_link }}",
+            "inquired_at": "={{ $('Resolve Inquiry').first().json.inquired_at }}",
+            "link_sent": "={{ $('Resolve Inquiry').first().json.link_sent }}",
+            "link_sent_at": "",
+            "source": "={{ $('Resolve Inquiry').first().json.source }}",
+            "event_id": "={{ $('Resolve Inquiry').first().json.event_id }}",
+            "property_address": "={{ $('Resolve Inquiry').first().json.property_address }}",
+            "match_status": "={{ $('Resolve Inquiry').first().json.match_status }}",
+            "phone": "={{ $('Resolve Inquiry').first().json.phone }}",
+            "email": "={{ $('Resolve Inquiry').first().json.email }}",
+            "alert_sent": "={{ $('Resolve Inquiry').first().json.alert_sent }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_key",
+              "displayName": "property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cal_link",
+              "displayName": "cal_link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "inquired_at",
+              "displayName": "inquired_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "link_sent",
+              "displayName": "link_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "link_sent_at",
+              "displayName": "link_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_id",
+              "displayName": "event_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_address",
+              "displayName": "property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "match_status",
+              "displayName": "match_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alert_sent",
+              "displayName": "alert_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "name": "Append Inquiry Row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1080,
+        380
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000,
+      "id": "ac0f6a90-eeb3-4f8c-b9d1-44667c7bb8e0"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $('Resolve Inquiry').first().json.send_now }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Send Now?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        260
+      ],
+      "id": "2a55739e-287b-44ed-9cfa-fa51707e0426"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $('Resolve Inquiry').first().json.needs_alert }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Alert Needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        560
+      ],
+      "id": "ef024b0c-b2c6-49bb-a681-4d730b5a7704"
+    },
+    {
+      "parameters": {
+        "from": "={{ $('Resolve Inquiry').first().json.from_number }}",
+        "to": "={{ $('Resolve Inquiry').first().json.phone }}",
+        "message": "={{ $('Resolve Inquiry').first().json.message }}",
+        "options": {}
+      },
+      "name": "Send SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        1520,
+        180
+      ],
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      },
+      "id": "03d4a022-6a3f-49c9-90bc-0369d9546174"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $('Resolve Inquiry').first().json.needs_gate }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Gate Needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        410
+      ],
+      "id": "a2f08d03-4ad5-409e-a46d-3d1847f03c25"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://automation.rentingfreedom.com/webhook/phone-added-send-text",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ event: 'inquiryCreated', resourceIds: [Number($('Resolve Inquiry').first().json.person_id)], uri: 'https://api.followupboss.com/v1/people?id=' + $('Resolve Inquiry').first().json.person_id }) }}",
+        "options": {}
+      },
+      "name": "Trigger Identity Gate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1520,
+        410
+      ],
+      "id": "e39f0408-4147-47f5-b3b6-2b3840d41f50"
+    },
+    {
+      "parameters": {
+        "from": "={{ $('Resolve Inquiry').first().json.from_number }}",
+        "to": "={{ $('Resolve Inquiry').first().json.alert_phone }}",
+        "message": "={{ $('Resolve Inquiry').first().json.alert_message }}",
+        "options": {}
+      },
+      "name": "Send Unmatched Alert",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        1520,
+        560
+      ],
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      },
+      "id": "0527b837-d41f-4bb0-81c5-c76f3175570d"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Inquiries",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "event_id": "={{ $('Resolve Inquiry').first().json.event_id }}",
+            "link_sent": "true",
+            "link_sent_at": "={{ $('Resolve Inquiry').first().json.sent_at }}"
+          },
+          "matchingColumns": [
+            "event_id"
+          ],
+          "schema": [
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_key",
+              "displayName": "property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cal_link",
+              "displayName": "cal_link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "inquired_at",
+              "displayName": "inquired_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "link_sent",
+              "displayName": "link_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "link_sent_at",
+              "displayName": "link_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_id",
+              "displayName": "event_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_address",
+              "displayName": "property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "match_status",
+              "displayName": "match_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alert_sent",
+              "displayName": "alert_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "name": "Mark Link Sent",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1740,
+        100
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000,
+      "id": "0094f276-3194-4a7e-8b7d-28bb4900ed82"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Text Log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "person_id": "={{ $('Resolve Inquiry').first().json.person_id }}",
+            "name": "={{ $('Resolve Inquiry').first().json.person_name }}",
+            "phone_number": "={{ $('Resolve Inquiry').first().json.phone }}",
+            "cal_link": "={{ $('Resolve Inquiry').first().json.enriched_cal_link }}",
+            "message_sent": "={{ $('Resolve Inquiry').first().json.message }}",
+            "sent_at": "={{ $('Resolve Inquiry').first().json.sent_at }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone_number",
+              "displayName": "phone_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cal_link",
+              "displayName": "cal_link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message_sent",
+              "displayName": "message_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sent_at",
+              "displayName": "sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "name": "Log to Text Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1740,
+        280
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000,
+      "id": "f9120a86-4529-42a8-b49c-07a550a23a2e"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "FUB - Get Event",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Properties",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Inquiries",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Settings",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Identity Verifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Get Event": {
+      "main": [
+        [
+          {
+            "node": "FUB - Get Person",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Get Person": {
+      "main": [
+        [
+          {
+            "node": "Wait For All",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Properties": {
+      "main": [
+        [
+          {
+            "node": "Wait For All",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Read Inquiries": {
+      "main": [
+        [
+          {
+            "node": "Wait For All",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Read Settings": {
+      "main": [
+        [
+          {
+            "node": "Wait For All",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Read Identity Verifications": {
+      "main": [
+        [
+          {
+            "node": "Wait For All",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "Wait For All": {
+      "main": [
+        [
+          {
+            "node": "Resolve Inquiry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Inquiry": {
+      "main": [
+        [
+          {
+            "node": "Should Record?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Record?": {
+      "main": [
+        [
+          {
+            "node": "Append Inquiry Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append Inquiry Row": {
+      "main": [
+        [
+          {
+            "node": "Send Now?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Gate Needed?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Alert Needed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Now?": {
+      "main": [
+        [
+          {
+            "node": "Send SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gate Needed?": {
+      "main": [
+        [
+          {
+            "node": "Trigger Identity Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Needed?": {
+      "main": [
+        [
+          {
+            "node": "Send Unmatched Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send SMS": {
+      "main": [
+        [
+          {
+            "node": "Mark Link Sent",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log to Text Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "b0e5732c-c632-4fd4-b538-71a4a01317b8",
+  "activeVersionId": "b0e5732c-c632-4fd4-b538-71a4a01317b8",
+  "versionCounter": 5,
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-07-27T21:54:55.479Z",
+      "createdAt": "2026-07-27T21:54:55.479Z",
+      "role": "workflow:owner",
+      "workflowId": "JDsKrVRHf9TEVj7j",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-07-28T01:52:28.011Z",
+    "createdAt": "2026-07-28T01:52:28.011Z",
+    "versionId": "b0e5732c-c632-4fd4-b538-71a4a01317b8",
+    "workflowId": "JDsKrVRHf9TEVj7j",
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "fub-inquiry-created",
+          "options": {}
+        },
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          -260,
+          300
+        ],
+        "webhookId": "fub-inquiry-created",
+        "id": "9cbe96cb-aed7-47aa-9f56-ac0360555830"
+      },
+      {
+        "parameters": {
+          "url": "={{ $json.body.uri || ('https://api.followupboss.com/v1/events?id=' + $json.body.resourceIds[0]) }}",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "name": "FUB - Get Event",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          -40,
+          120
+        ],
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 3000,
+        "id": "dd81140f-e344-4fa3-a06e-2c03ffabfd33"
+      },
+      {
+        "parameters": {
+          "url": "=https://api.followupboss.com/v1/people/{{ $json.events[0].personId }}?fields=allFields",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "name": "FUB - Get Person",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          180,
+          120
+        ],
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 3000,
+        "id": "cac28147-d57c-4875-a64a-bf63352e9362"
+      },
+      {
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Properties",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "name": "Read Properties",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          -40,
+          300
+        ],
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000,
+        "id": "508a127f-ded3-497b-a27f-aa5074cc63c0"
+      },
+      {
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Inquiries",
+            "mode": "name"
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "name": "Read Inquiries",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          -40,
+          460
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000,
+        "id": "befb220c-c05b-4036-8e84-93445a961836"
+      },
+      {
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Settings",
+            "mode": "name"
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "name": "Read Settings",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          -40,
+          620
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000,
+        "id": "cbf0975d-c617-44ea-ae0a-05daeeeafe0b"
+      },
+      {
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Identity_Verifications",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "name": "Read Identity Verifications",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          -40,
+          780
+        ],
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000,
+        "id": "e87d3900-6196-40a7-baed-4e5ef538fecd"
+      },
+      {
+        "parameters": {
+          "mode": "append",
+          "numberInputs": 5
+        },
+        "name": "Wait For All",
+        "type": "n8n-nodes-base.merge",
+        "typeVersion": 3,
+        "position": [
+          420,
+          380
+        ],
+        "id": "de02c43d-acdf-441a-8197-46d232e87b07"
+      },
+      {
+        "parameters": {
+          "jsCode": "\n// Resolve one FUB inquiry event into an Inquiries row.\n//\n// Address matching is copied verbatim from the two production workflows that\n// already match FUB property addresses to the Properties tab (FUB New Lead →\n// Cal Link, FUB Address → Cal Link). Reused rather than rewritten so all three\n// paths agree on what \"matches\" means — a divergence here would show up as a\n// lead getting a link from one path and an unmatched alert from another.\nfunction normalize(value) { return String(value ?? \"\").toLowerCase().replace(/[^a-z0-9]/g, \"\"); }\nfunction normalizeAddress(value) { return String(value ?? \"\").toLowerCase().replace(/\\b(apartment|apt|unit|suite|ste)\\b/g, \"\").replace(/\\b(street|st|road|rd|avenue|ave|drive|dr|court|ct|boulevard|blvd|lane|ln|circle|cir|place|pl|terrace|ter)\\b/g, \"\").replace(/[^a-z0-9]/g, \"\"); }\nfunction dedupe(values) { return [...new Set(values.map(v => String(v || \"\").trim()).filter(Boolean))]; }\n\nconst eventPayload = $items(\"FUB - Get Event\")[0]?.json || {};\nconst ev = eventPayload.events?.[0] ?? eventPayload;\n\nconst personPayload = $items(\"FUB - Get Person\")[0]?.json || {};\nconst person = personPayload.people?.[0] ?? personPayload;\n\nconst sheetRows    = $items(\"Read Properties\").map(i => i.json || {});\nconst inquiryRows  = $items(\"Read Inquiries\").map(i => i.json || {});\nconst settingsRows = $items(\"Read Settings\").map(i => i.json || {});\nconst identityRows = $items(\"Read Identity Verifications\").map(i => i.json || {});\n\nconst settings = {};\nfor (const row of settingsRows) {\n  if (row.key) settings[row.key] = row.value;\n}\n\nconst skip = (reason, extra) => [{ json: { skip: true, reason, event_id: String(ev.id ?? \"\"), person_id: String(ev.personId ?? \"\"), ...(extra || {}) } }];\n\n// FUB auto-converts a generic \"Inquiry\" to \"Property Inquiry\" once a property\n// section is present, so accept both.\nif (ev.type !== \"Property Inquiry\" && ev.type !== \"Inquiry\") {\n  return skip(\"not_an_inquiry\", { type: ev.type });\n}\n\n// FUB emits a second, property-less Property Inquiry event alongside the real\n// one (observed on persons 2586 and 2589). Recording it would append a blank row.\nconst prop = ev.property || {};\nif (!prop.street) {\n  return skip(\"no_property_on_event\");\n}\n\n// Events older than the cutoff are ignored, so switching this on never texts\n// the leads already sitting in the CRM.\nconst startAt = settings.inquiry_flow_start_at;\nif (startAt && ev.created && new Date(ev.created) < new Date(startAt)) {\n  return skip(\"before_flow_start\", { created: ev.created, start_at: startAt });\n}\n\n// Idempotency: FUB retries webhook deliveries, and a retry must not re-append\n// or re-send. event_id is the natural key.\nconst eventIdStr = String(ev.id ?? \"\");\nif (inquiryRows.some(r => String(r.event_id ?? \"\") === eventIdStr && eventIdStr !== \"\")) {\n  return skip(\"duplicate_event\", { event_id: eventIdStr });\n}\n\n// ── match the event's own address (never the person's summary address) ──\nconst addressCandidates = dedupe([\n  prop.street,\n  [prop.street, prop.city, prop.state, prop.code].filter(Boolean).join(\", \")\n]);\nconst normalizedCandidates = dedupe(addressCandidates.map(v => normalize(v)));\nconst normalizedAddressCandidates = dedupe(addressCandidates.map(v => normalizeAddress(v)));\n\nconst matches = [];\nfor (const row of sheetRows) {\n  const fields = [\n    { key: \"street_address\", value: row.street_address || \"\" },\n    { key: \"property_key\",   value: row.property_key   || \"\" },\n  ];\n  let score = 0;\n  for (const field of fields) {\n    const nf  = normalize(field.value);\n    const naf = normalizeAddress(field.value);\n    if (naf && normalizedAddressCandidates.includes(naf)) score += field.key === \"street_address\" ? 120 : 90;\n    else if (nf && normalizedCandidates.includes(nf)) score += 70;\n    else { for (const c of addressCandidates) { const nc = normalize(c); if (nc && nf && (nf.includes(nc) || nc.includes(nf))) { score += 20; break; } } }\n  }\n  if (score > 0) matches.push({ ...row, score });\n}\nmatches.sort((a, b) => b.score - a.score);\nconst best = matches[0] || null;\nconst matched = !!best && best.score >= 80;\n\nconst phoneRaw = person.phones?.[0]?.value || \"\";\nconst digits = phoneRaw.replace(/\\D/g, \"\");\nconst toNumber = digits ? (digits.length === 10 ? \"+1\" + digits : \"+\" + digits) : \"\";\nconst email = person.emails?.[0]?.value || \"\";\n\nconst isTestLead = (person.firstName || \"\") === \"Test\";\n\nlet match_status = \"matched\";\nif (!matched) match_status = \"unmatched\";\nelse if (!best.cal_link) match_status = \"no_cal_link\";\n\nconst calLinkRaw = matched ? (best.cal_link || \"\") : \"\";\n\n// Alert once per unmatched address, not once per inquiry — 522 Temple Rd alone\n// produced five inquiries in a week.\nconst alreadyAlerted = inquiryRows.some(r =>\n  normalizeAddress(r.property_address) === normalizeAddress(prop.street) &&\n  String(r.alert_sent ?? \"\").toUpperCase() === \"TRUE\"\n);\nconst needsAlert = match_status !== \"matched\" && !alreadyAlerted;\n\n// No lead gets a cal link without passing Stripe Identity first. A repeat\n// inquirer who already has a phone would otherwise skip the whole gate.\n// lead_id in Identity_Verifications holds test-reset artifacts rather than FUB\n// person ids, so match on person id OR phone.\n// Compare the last 10 digits: FUB stores \"8038047847\", the sheet stores\n// \"18038047847\", and Twilio uses \"+18038047847\".\nconst last10 = (v) => String(v ?? \"\").replace(/\\D/g, \"\").slice(-10);\nconst personLast10 = last10(phoneRaw);\nconst isVerified = identityRows.some(r => {\n  const sameLead = String(r.lead_id ?? \"\") !== \"\" && String(r.lead_id) === String(person.id ?? \"\");\n  const samePhone = personLast10 !== \"\" && last10(r.phone) === personLast10;\n  return (sameLead || samePhone) && String(r.status ?? \"\").trim().toLowerCase() === \"verified\";\n});\n\n// The single place the test gate is applied. Removing the gate before launch\n// means making this true for everyone, which switches BOTH the immediate send\n// and the identity hand-off on for real leads.\n\n// ── STAGE_GATE_MARKER: FUB stage gate ────────────────────────────────────────────\n// Inquiries from other stages are still RECORDED (so nothing is lost and the Properties data gap is still visible), but no link is sent and no identity hand-off happens.\n// Empty / missing allowed_stages == allow everything, so losing the Settings\n// row degrades to the pre-gate behaviour rather than muting the whole system.\nconst allowedStages = String(settings.allowed_stages ?? \"\")\n  .split(\",\")\n  .map((s) => s.trim().toLowerCase())\n  .filter(Boolean);\n// Sheets coerces on write and the stage names contain punctuation and mixed\n// case (\"Tenant Inquiry Lead (Do Not Contact)\"), so compare normalized.\nconst personStage = String(person.stage ?? \"\").trim().toLowerCase();\nconst stageAllowed = allowedStages.length === 0 || allowedStages.includes(personStage);\n\nconst testGateOpen = isTestLead;\n\nconst deliverable = match_status === \"matched\" && !!calLinkRaw && !!toNumber;\n// Already verified -> send this inquiry's link now.\nconst send_now = testGateOpen && stageAllowed && deliverable && isVerified;\n// Not verified yet -> hand off to the Identity Gate. It sends the verify SMS,\n// and on success the Result Handler replays the sweep, which picks this row up.\nconst needs_gate = testGateOpen && stageAllowed && deliverable && !isVerified;\nlet link_sent_value = \"false\";\nif (!stageAllowed) link_sent_value = \"skipped_stage_gate\";\nelse if (!testGateOpen) link_sent_value = \"skipped_test_gate\";\n\nconst baseCalLink = calLinkRaw ? (calLinkRaw.split(\"?\")[0]).replace(/^(?!https?:\\/\\/)/, \"https://\") : \"\";\nconst enrichedCalLink = baseCalLink\n  ? baseCalLink + \"?metadata%5Bfub_person_id%5D=\" + person.id + \"&metadata%5Bphone%5D=\" + encodeURIComponent(toNumber)\n  : \"\";\n\nconst propertyAddress = matched ? (best.street_address || prop.street) : prop.street;\n\nconst template = settings.sms_template || \"\";\nconst message = template\n  .replace(/\\{\\{greeting\\}\\}/g, \"Hello!\")\n  .replace(/\\{\\{first_name\\}\\}/g, person.firstName || person.name || \"\")\n  .replace(/\\{\\{property_address\\}\\}/g, propertyAddress)\n  .replace(/\\{\\{cal_link\\}\\}/g, enrichedCalLink)\n  .replace(/\\{\\{apply_link\\}\\}/g, settings.apply_link || \"\");\n\nreturn [{ json: {\n  skip: false,\n  send_now,\n  needs_gate,\n  is_verified: isVerified,\n  needs_alert: needsAlert,\n  // Inquiries row\n  event_id: eventIdStr,\n  person_id: String(ev.personId ?? person.id ?? \"\"),\n  person_name: person.name || \"\",\n  property_key: matched ? (best.property_key || \"\") : \"\",\n  cal_link: calLinkRaw,\n  inquired_at: ev.created || new Date().toISOString(),\n  link_sent: link_sent_value,\n  source: ev.source || \"\",\n  property_address: prop.street,\n  match_status,\n  phone: toNumber,\n  email,\n  alert_sent: needsAlert ? \"TRUE\" : \"\",\n  // send-time fields\n  enriched_cal_link: enrichedCalLink,\n  message,\n  from_number: settings.from_number || \"\",\n  sent_at: new Date().toISOString(),\n  alert_phone: settings.unmatched_inquiry_alert_phone || \"\",\n  alert_message: \"RF: inquiry for \\\"\" + prop.street + \"\\\" (\" + (prop.city || \"\") + \") has no matching row in the Properties tab - no cal link was sent. Lead: \" + (person.name || \"unknown\") + \".\",\n  is_test_lead: isTestLead,\n  stage: person.stage || \"\",\n  stage_allowed: stageAllowed,\n  match_score: best?.score ?? 0\n}}];\n"
+        },
+        "name": "Resolve Inquiry",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          640,
+          380
+        ],
+        "id": "41c59e04-c4d1-4651-be37-c5f0192684a0"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.skip }}",
+                "rightValue": false,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "name": "Should Record?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          860,
+          380
+        ],
+        "id": "0af9e1bd-c84a-446d-bd80-f852e7a93ea1"
+      },
+      {
+        "parameters": {
+          "operation": "append",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Inquiries",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "person_id": "={{ $('Resolve Inquiry').first().json.person_id }}",
+              "property_key": "={{ $('Resolve Inquiry').first().json.property_key }}",
+              "cal_link": "={{ $('Resolve Inquiry').first().json.cal_link }}",
+              "inquired_at": "={{ $('Resolve Inquiry').first().json.inquired_at }}",
+              "link_sent": "={{ $('Resolve Inquiry').first().json.link_sent }}",
+              "link_sent_at": "",
+              "source": "={{ $('Resolve Inquiry').first().json.source }}",
+              "event_id": "={{ $('Resolve Inquiry').first().json.event_id }}",
+              "property_address": "={{ $('Resolve Inquiry').first().json.property_address }}",
+              "match_status": "={{ $('Resolve Inquiry').first().json.match_status }}",
+              "phone": "={{ $('Resolve Inquiry').first().json.phone }}",
+              "email": "={{ $('Resolve Inquiry').first().json.email }}",
+              "alert_sent": "={{ $('Resolve Inquiry').first().json.alert_sent }}"
+            },
+            "matchingColumns": [],
+            "schema": [
+              {
+                "id": "person_id",
+                "displayName": "person_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_key",
+                "displayName": "property_key",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "cal_link",
+                "displayName": "cal_link",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "inquired_at",
+                "displayName": "inquired_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "link_sent",
+                "displayName": "link_sent",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "link_sent_at",
+                "displayName": "link_sent_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "source",
+                "displayName": "source",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "event_id",
+                "displayName": "event_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_address",
+                "displayName": "property_address",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "match_status",
+                "displayName": "match_status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "phone",
+                "displayName": "phone",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "email",
+                "displayName": "email",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "alert_sent",
+                "displayName": "alert_sent",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ],
+            "attemptToConvertTypes": false,
+            "convertFieldsToString": true
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "name": "Append Inquiry Row",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          1080,
+          380
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000,
+        "id": "ac0f6a90-eeb3-4f8c-b9d1-44667c7bb8e0"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $('Resolve Inquiry').first().json.send_now }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "name": "Send Now?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          1300,
+          260
+        ],
+        "id": "2a55739e-287b-44ed-9cfa-fa51707e0426"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $('Resolve Inquiry').first().json.needs_alert }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "name": "Alert Needed?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          1300,
+          560
+        ],
+        "id": "ef024b0c-b2c6-49bb-a681-4d730b5a7704"
+      },
+      {
+        "parameters": {
+          "from": "={{ $('Resolve Inquiry').first().json.from_number }}",
+          "to": "={{ $('Resolve Inquiry').first().json.phone }}",
+          "message": "={{ $('Resolve Inquiry').first().json.message }}",
+          "options": {}
+        },
+        "name": "Send SMS",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          1520,
+          180
+        ],
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        },
+        "id": "03d4a022-6a3f-49c9-90bc-0369d9546174"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $('Resolve Inquiry').first().json.needs_gate }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "name": "Gate Needed?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          1300,
+          410
+        ],
+        "id": "a2f08d03-4ad5-409e-a46d-3d1847f03c25"
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://automation.rentingfreedom.com/webhook/phone-added-send-text",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ event: 'inquiryCreated', resourceIds: [Number($('Resolve Inquiry').first().json.person_id)], uri: 'https://api.followupboss.com/v1/people?id=' + $('Resolve Inquiry').first().json.person_id }) }}",
+          "options": {}
+        },
+        "name": "Trigger Identity Gate",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1520,
+          410
+        ],
+        "id": "e39f0408-4147-47f5-b3b6-2b3840d41f50"
+      },
+      {
+        "parameters": {
+          "from": "={{ $('Resolve Inquiry').first().json.from_number }}",
+          "to": "={{ $('Resolve Inquiry').first().json.alert_phone }}",
+          "message": "={{ $('Resolve Inquiry').first().json.alert_message }}",
+          "options": {}
+        },
+        "name": "Send Unmatched Alert",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          1520,
+          560
+        ],
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        },
+        "id": "0527b837-d41f-4bb0-81c5-c76f3175570d"
+      },
+      {
+        "parameters": {
+          "operation": "update",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Inquiries",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "event_id": "={{ $('Resolve Inquiry').first().json.event_id }}",
+              "link_sent": "true",
+              "link_sent_at": "={{ $('Resolve Inquiry').first().json.sent_at }}"
+            },
+            "matchingColumns": [
+              "event_id"
+            ],
+            "schema": [
+              {
+                "id": "person_id",
+                "displayName": "person_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_key",
+                "displayName": "property_key",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "cal_link",
+                "displayName": "cal_link",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "inquired_at",
+                "displayName": "inquired_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "link_sent",
+                "displayName": "link_sent",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "link_sent_at",
+                "displayName": "link_sent_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "source",
+                "displayName": "source",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "event_id",
+                "displayName": "event_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_address",
+                "displayName": "property_address",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "match_status",
+                "displayName": "match_status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "phone",
+                "displayName": "phone",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "email",
+                "displayName": "email",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "alert_sent",
+                "displayName": "alert_sent",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ],
+            "attemptToConvertTypes": false,
+            "convertFieldsToString": true
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "name": "Mark Link Sent",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          1740,
+          100
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000,
+        "id": "0094f276-3194-4a7e-8b7d-28bb4900ed82"
+      },
+      {
+        "parameters": {
+          "operation": "append",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Text Log",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "person_id": "={{ $('Resolve Inquiry').first().json.person_id }}",
+              "name": "={{ $('Resolve Inquiry').first().json.person_name }}",
+              "phone_number": "={{ $('Resolve Inquiry').first().json.phone }}",
+              "cal_link": "={{ $('Resolve Inquiry').first().json.enriched_cal_link }}",
+              "message_sent": "={{ $('Resolve Inquiry').first().json.message }}",
+              "sent_at": "={{ $('Resolve Inquiry').first().json.sent_at }}"
+            },
+            "matchingColumns": [],
+            "schema": [
+              {
+                "id": "person_id",
+                "displayName": "person_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "name",
+                "displayName": "name",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "phone_number",
+                "displayName": "phone_number",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "cal_link",
+                "displayName": "cal_link",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "message_sent",
+                "displayName": "message_sent",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "sent_at",
+                "displayName": "sent_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ],
+            "attemptToConvertTypes": false,
+            "convertFieldsToString": true
+          },
+          "options": {}
+        },
+        "name": "Log to Text Log",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          1740,
+          280
+        ],
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000,
+        "id": "f9120a86-4529-42a8-b49c-07a550a23a2e"
+      }
+    ],
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "node": "FUB - Get Event",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Read Properties",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Read Inquiries",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Read Settings",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Read Identity Verifications",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Get Event": {
+        "main": [
+          [
+            {
+              "node": "FUB - Get Person",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Get Person": {
+        "main": [
+          [
+            {
+              "node": "Wait For All",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Properties": {
+        "main": [
+          [
+            {
+              "node": "Wait For All",
+              "type": "main",
+              "index": 1
+            }
+          ]
+        ]
+      },
+      "Read Inquiries": {
+        "main": [
+          [
+            {
+              "node": "Wait For All",
+              "type": "main",
+              "index": 2
+            }
+          ]
+        ]
+      },
+      "Read Settings": {
+        "main": [
+          [
+            {
+              "node": "Wait For All",
+              "type": "main",
+              "index": 3
+            }
+          ]
+        ]
+      },
+      "Read Identity Verifications": {
+        "main": [
+          [
+            {
+              "node": "Wait For All",
+              "type": "main",
+              "index": 4
+            }
+          ]
+        ]
+      },
+      "Wait For All": {
+        "main": [
+          [
+            {
+              "node": "Resolve Inquiry",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Resolve Inquiry": {
+        "main": [
+          [
+            {
+              "node": "Should Record?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Should Record?": {
+        "main": [
+          [
+            {
+              "node": "Append Inquiry Row",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Append Inquiry Row": {
+        "main": [
+          [
+            {
+              "node": "Send Now?",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Gate Needed?",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Alert Needed?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Send Now?": {
+        "main": [
+          [
+            {
+              "node": "Send SMS",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Gate Needed?": {
+        "main": [
+          [
+            {
+              "node": "Trigger Identity Gate",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Alert Needed?": {
+        "main": [
+          [
+            {
+              "node": "Send Unmatched Alert",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Send SMS": {
+        "main": [
+          [
+            {
+              "node": "Mark Link Sent",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Log to Text Log",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Justin Artis",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-07-28T01:52:28.039Z",
+        "id": 205,
+        "workflowId": "JDsKrVRHf9TEVj7j",
+        "versionId": "b0e5732c-c632-4fd4-b538-71a4a01317b8",
+        "event": "deactivated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      },
+      {
+        "createdAt": "2026-07-28T01:52:28.049Z",
+        "id": 206,
+        "workflowId": "JDsKrVRHf9TEVj7j",
+        "versionId": "b0e5732c-c632-4fd4-b538-71a4a01317b8",
+        "event": "activated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    ]
+  }
+}

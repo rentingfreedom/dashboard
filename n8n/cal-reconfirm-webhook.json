@@ -1,0 +1,333 @@
+{
+  "name": "RentingFreedom Production - Cal.com Reminder System - Reconfirm Webhook",
+  "nodes": [
+    {
+      "name": "Reconfirm Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "reconfirm",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "name": "Read Cal Bookings (Reconfirm)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Cal Bookings",
+          "mode": "name"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Find Row by Token",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nfunction fmtDate(iso) {\n  try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'long', day: 'numeric', year: 'numeric' }).format(new Date(iso)); }\n  catch (e) { return iso; }\n}\nfunction fmtTime(iso) {\n  try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date(iso)); }\n  catch (e) { return iso; }\n}\n\nconst token = String(($('Reconfirm Webhook').first().json.query || {}).token || '');\nconst rows = $input.all().map(i => i.json);\nconst match = rows.find(r => r.reconfirm_token && String(r.reconfirm_token) === token && token !== '');\n\nif (!match) return [{ json: { found: false } }];\nreturn [{ json: { found: true, booking_uid: match.booking_uid, invitee_first_name: match.invitee_first_name, start_time: match.start_time } }];\n"
+      }
+    },
+    {
+      "name": "Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.found }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Mark Confirmed",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        880,
+        220
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000,
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Cal Bookings",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "booking_uid"
+          ],
+          "value": {
+            "booking_uid": "={{ $('Find Row by Token').first().json.booking_uid }}",
+            "confirmed": true,
+            "confirmed_at": "={{ new Date().toISOString() }}",
+            "updated_at": "={{ new Date().toISOString() }}"
+          },
+          "schema": [
+            {
+              "id": "booking_uid",
+              "displayName": "booking_uid",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "confirmed",
+              "displayName": "confirmed",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "confirmed_at",
+              "displayName": "confirmed_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Build Confirmed HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        220
+      ],
+      "parameters": {
+        "jsCode": "\nfunction fmtDate(iso) {\n  try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'long', day: 'numeric', year: 'numeric' }).format(new Date(iso)); }\n  catch (e) { return iso; }\n}\nfunction fmtTime(iso) {\n  try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date(iso)); }\n  catch (e) { return iso; }\n}\n\nconst b = $('Find Row by Token').first().json;\nconst dateStr = fmtDate(b.start_time);\nconst timeStr = fmtTime(b.start_time);\nconst html = \"<!doctype html><html><head><meta charset=\\\"utf-8\\\"><title>You're confirmed!</title><style>body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#f7f7f5;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:24px}.card{background:#fff;border-radius:12px;padding:32px 40px;max-width:420px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.1)}h1{font-size:1.3rem;margin:0 0 12px}p{color:#444;line-height:1.5}</style></head><body><div class=\\\"card\\\"><h1>You're confirmed!</h1><p>Thanks, {{FIRST}}. See you at {{TIME}} on {{DATE}}!</p></div></body></html>\"\n  .replace('{{FIRST}}', b.invitee_first_name || 'there')\n  .replace('{{TIME}}', timeStr)\n  .replace('{{DATE}}', dateStr);\nreturn [{ json: { html } }];\n"
+      }
+    },
+    {
+      "name": "Respond Confirmed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1320,
+        220
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "Build Not-Found HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        400
+      ],
+      "parameters": {
+        "jsCode": "\nconst html = \"<!doctype html><html><head><meta charset=\\\"utf-8\\\"><title>Link expired</title><style>body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#f7f7f5;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:24px}.card{background:#fff;border-radius:12px;padding:32px 40px;max-width:420px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.1)}h1{font-size:1.3rem;margin:0 0 12px}p{color:#444;line-height:1.5}</style></head><body><div class=\\\"card\\\"><h1>This link isn't valid</h1><p>It may have expired or already been used. If you still need to confirm your appointment, please reply to your confirmation email or call us.</p></div></body></html>\";\nreturn [{ json: { html } }];\n"
+      }
+    },
+    {
+      "name": "Respond Not Found",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1100,
+        400
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 404,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Reconfirm Webhook": {
+      "main": [
+        [
+          {
+            "node": "Read Cal Bookings (Reconfirm)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Cal Bookings (Reconfirm)": {
+      "main": [
+        [
+          {
+            "node": "Find Row by Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Row by Token": {
+      "main": [
+        [
+          {
+            "node": "Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Found?": {
+      "main": [
+        [
+          {
+            "node": "Mark Confirmed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Not-Found HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Confirmed": {
+      "main": [
+        [
+          {
+            "node": "Build Confirmed HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Confirmed HTML": {
+      "main": [
+        [
+          {
+            "node": "Respond Confirmed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Not-Found HTML": {
+      "main": [
+        [
+          {
+            "node": "Respond Not Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

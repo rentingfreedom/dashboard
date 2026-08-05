@@ -1,0 +1,606 @@
+{
+  "name": "RentingFreedom Production - FUB Phone Added → Send Text",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "send-cal-link-after-verification",
+        "options": {}
+      },
+      "id": "3e79be39-c975-424a-94f3-c63fffe0fa1f",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        208
+      ],
+      "webhookId": "phone-added-send-text"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.body.uri }}&fields=allFields",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "784c371d-e4a4-4b5d-89ef-568aa2408478",
+      "name": "FUB - Get Person",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Text Log",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "baceef5c-947e-4ce5-8971-2c503651b36d",
+      "name": "Read Text Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        0,
+        208
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Settings",
+          "mode": "name"
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "id": "8d6fbbcc-53f8-4dda-b25f-22ff192f8649",
+      "name": "Read Settings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        0,
+        416
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "parameters": {},
+      "id": "0beb949d-08dd-4810-ba8c-e4639e8130b1",
+      "name": "Wait For All",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        240,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $items(\"FUB - Get Person\")[0].json.people?.[0]?.firstName ?? \"\" }}",
+              "rightValue": "Test",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "816dba75-7e4e-44d7-9075-56ba8ffadc41",
+      "name": "Test Mode - Testerson Only",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        464,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst person = $items(\"FUB - Get Person\")[0]?.json?.people?.[0] || {};\nconst textLogRows = $items(\"Read Text Log\").map(i => i.json || {});\nconst settingsRows = $items(\"Read Settings\").map(i => i.json || {});\n\nconst settings = {};\nfor (const row of settingsRows) {\n  if (row.key && row.value) settings[row.key] = row.value;\n}\n\nconst isTestMode = (person.firstName || \"\") === \"Test\";\nconst phone = person.phones?.[0]?.value;\nconst calLink = person.customCalLink;\n\nif (!phone) {\n  return [{ json: { skipped: true, reason: \"no_phone\", person_id: person.id, person_name: person.name } }];\n}\nif (!calLink) {\n  return [{ json: { skipped: true, reason: \"no_cal_link\", person_id: person.id, person_name: person.name } }];\n}\n\n// Only send to leads created within the last 4 days — except Test-mode\n// leads, which get reused indefinitely for end-to-end testing.\nconst created = person.created ? new Date(person.created) : null;\nconst fourDaysAgo = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000);\nif (!isTestMode && (!created || created < fourDaysAgo)) {\n  return [{ json: { skipped: true, reason: \"lead_too_old\", person_id: person.id, person_name: person.name, created: person.created } }];\n}\n\n// Same Test-mode exception as the age check above — a reused test lead\n// will always have a prior \"already sent\" row otherwise.\nconst alreadySent = textLogRows.some(r => String(r.person_id) === String(person.id) && r.sent_at);\nif (!isTestMode && alreadySent) {\n  return [{ json: { skipped: true, reason: \"already_sent\", person_id: person.id, person_name: person.name } }];\n}\n\n// Normalize phone to E.164 — must be before enrichedCalLink\nconst digits = phone.replace(/\\D/g, \"\");\nconst toNumber = digits.length === 10 ? `+1${digits}` : `+${digits}`;\n\n// Build enriched cal link with FUB person ID and phone in metadata\nconst baseCalLink = (calLink.split('?')[0]).replace(/^(?!https?:\\/\\/)/, 'https://');\nconst enrichedCalLink = baseCalLink + '?metadata%5Bfub_person_id%5D=' + person.id + '&metadata%5Bphone%5D=' + encodeURIComponent(toNumber);\n\nconst greeting = \"Hello!\";\n\nconst addr = person.addresses?.[0];\nconst propertyAddress = addr?.street\n  ? [addr.street, addr.city, addr.state].filter(Boolean).join(\", \")\n  : \"the property\";\n\nconst template = settings.sms_template || \"\";\nconst applyLink = settings.apply_link || \"\";\nconst fromNumber = settings.from_number || \"\";\n\nconst message = template\n  .replace(/\\{\\{greeting\\}\\}/g, greeting)\n  .replace(/\\{\\{first_name\\}\\}/g, person.firstName || person.name || \"\")\n  .replace(/\\{\\{property_address\\}\\}/g, propertyAddress)\n  .replace(/\\{\\{cal_link\\}\\}/g, enrichedCalLink)\n  .replace(/\\{\\{apply_link\\}\\}/g, applyLink);\n\nreturn [{ json: {\n  skipped: false,\n  person_id: String(person.id),\n  person_name: person.name,\n  phone: toNumber,\n  from_number: fromNumber,\n  cal_link: calLink,\n  message: message,\n  sent_at: new Date().toISOString(),\n  enrichedCalLink: enrichedCalLink,\n  fub_person_id: String(person.id)\n}}];\n"
+      },
+      "id": "04f45ce9-d923-49b5-9bea-f08a891b39c3",
+      "name": "Check & Build Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.skipped }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ff2f4326-79e7-426b-837a-dc6b78fdec0a",
+      "name": "Should Send?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        896,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "from": "={{ $('Check & Build Message').first().json.from_number }}",
+        "to": "={{ $('Check & Build Message').first().json.phone }}",
+        "message": "={{ $('Check & Build Message').first().json.message }}",
+        "options": {}
+      },
+      "id": "991196d9-d6d9-4c3b-bd4f-530da8e40af0",
+      "name": "Send SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        112
+      ],
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Text Log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "person_id": "={{ $('Check & Build Message').first().json.person_id }}",
+            "name": "={{ $('Check & Build Message').first().json.person_name }}",
+            "phone_number": "={{ $('Check & Build Message').first().json.phone }}",
+            "cal_link": "={{ $('Check & Build Message').first().json.cal_link }}",
+            "message_sent": "={{ $('Check & Build Message').first().json.message }}",
+            "sent_at": "={{ $('Check & Build Message').first().json.sent_at }}"
+          },
+          "schema": [
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone_number",
+              "displayName": "phone_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cal_link",
+              "displayName": "cal_link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message_sent",
+              "displayName": "message_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sent_at",
+              "displayName": "sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "id": "afd29fcf-12b1-412f-9644-801c4a60d6c4",
+      "name": "Log to Text Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1344,
+        112
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "id": "fub-note-1",
+      "name": "FUB - Log Note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1344,
+        312
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Check & Build Message').first().json.person_id), body: 'Automated SMS sent:\\n\\n' + $('Check & Build Message').first().json.message }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "name": "FUB - Update Cal Link",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        200
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ 'https://api.followupboss.com/v1/people/' + $json.fub_person_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ customCalLink: $json.enrichedCalLink }) }}",
+        "options": {}
+      },
+      "id": "81a77db4-ce84-4b45-b31e-2e259d239024"
+    },
+    {
+      "name": "FUB - Add Tag",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        200
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ 'https://api.followupboss.com/v1/people/' + $('Check & Build Message').first().json.fub_person_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"tags\": \"cal-link-ready\" }",
+        "options": {}
+      },
+      "id": "24e40b9e-886f-4d76-9af4-6e389e0dfa1c"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "FUB - Get Person",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Text Log",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Get Person": {
+      "main": [
+        [
+          {
+            "node": "Wait For All",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Text Log": {
+      "main": [
+        [
+          {
+            "node": "Wait For All",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Wait For All": {
+      "main": [
+        [
+          {
+            "node": "Test Mode - Testerson Only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test Mode - Testerson Only": {
+      "main": [
+        [
+          {
+            "node": "Check & Build Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check & Build Message": {
+      "main": [
+        [
+          {
+            "node": "Should Send?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Send?": {
+      "main": [
+        [
+          {
+            "node": "FUB - Update Cal Link",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send SMS": {
+      "main": [
+        [
+          {
+            "node": "Log to Text Log",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "FUB - Log Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Settings": {
+      "main": [
+        [
+          {
+            "node": "Wait For All",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "FUB - Update Cal Link": {
+      "main": [
+        [
+          {
+            "node": "FUB - Add Tag",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Add Tag": {
+      "main": [
+        [
+          {
+            "node": "Send SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  }
+}

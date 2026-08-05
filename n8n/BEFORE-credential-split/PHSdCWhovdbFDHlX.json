@@ -1,0 +1,1029 @@
+{
+  "updatedAt": "2026-07-26T20:33:54.957Z",
+  "createdAt": "2026-07-24T12:38:28.577Z",
+  "id": "PHSdCWhovdbFDHlX",
+  "name": "RentingFreedom Production - Identity Verification Result Handler",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "res-webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "identity-verification-result",
+        "options": {}
+      },
+      "webhookId": "identity-verification-result"
+    },
+    {
+      "id": "res-read-log",
+      "name": "Read Identity Verifications",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        0,
+        300
+      ],
+      "alwaysOutputData": true,
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Identity_Verifications",
+          "mode": "name"
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "id": "res-read-settings",
+      "name": "Read Settings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        300
+      ],
+      "alwaysOutputData": true,
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Settings",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "id": "res-find-row",
+      "name": "Find Verification Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = $(\"Webhook\").first().json.body || {};\nconst rows = $items(\"Read Identity Verifications\").map(i => i.json || {});\nconst settingsRows = $items(\"Read Settings\").map(i => i.json || {});\n\nconst settings = {};\nfor (const row of settingsRows) {\n  if (row.key && row.value !== undefined) settings[row.key] = row.value;\n}\n\nconst match = rows.find(r => String(r.session_id) === String(body.session_id));\n\nif (!match) {\n  return [{ json: { found: false, session_id: body.session_id || \"\" } }];\n}\n\n// Google Sheets returns numbers as numbers — phone can come back with the\n// leading \"+\" stripped. Repair it defensively rather than trust the type.\nlet phone = String(match.phone || \"\");\nif (phone && !phone.startsWith(\"+\")) phone = \"+\" + phone;\n\nreturn [{ json: {\n  found: true,\n  row_number: match.row_number,\n  session_id: String(body.session_id || \"\"),\n  lead_id: match.lead_id || \"\",\n  lead_name: match.lead_name || \"\",\n  phone,\n  sent_at: match.sent_at || \"\",\n  original_webhook_body: match.original_webhook_body || \"\",\n  status: body.status || \"\",\n  error_code: body.error_code || \"\",\n  error_reason: body.error_reason || \"\",\n  // Idempotency guard: this is the row's OWN stored status from the sheet\n  // (set by a prior successful run of this workflow), not the incoming\n  // webhook's status. If a redelivered/duplicate webhook comes in for a\n  // session that's already been fully processed, short-circuit before\n  // re-sending any SMS.\n  already_resolved: match.status === \"verified\" || match.status === \"failed\",\n  from_number: settings.from_number || \"\",\n  failed_template: settings.identity_failed_sms_template ||\n    \"Hi {{first_name}}, we weren\\'t able to verify your ID automatically. Someone from our team will follow up with you shortly.\",\n} }];"
+      }
+    },
+    {
+      "id": "res-row-found",
+      "name": "Row Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        672,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.found }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "res-verified-if",
+      "name": "Verified?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        896,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $('Find Verification Row').first().json.status }}",
+              "rightValue": "verified",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "res-trigger-cal",
+      "name": "Trigger Cal Link SMS Workflow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        208
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://automation.rentingfreedom.com/webhook/send-cal-link-after-verification",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $('Find Verification Row').first().json.original_webhook_body }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "res-update-verified",
+      "name": "Update Verification Row - Verified",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1344,
+        208
+      ],
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ 'https://sheets.googleapis.com/v4/spreadsheets/1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw/values/Identity_Verifications!F' + $('Find Verification Row').first().json.row_number + ':J' + $('Find Verification Row').first().json.row_number + '?valueInputOption=USER_ENTERED' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ values: [[ 'verified', $('Find Verification Row').first().json.sent_at, new Date().toISOString(), '', '' ]] }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "id": "res-build-failed-sms",
+      "name": "Build Failed SMS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const guard = $(\"Find Verification Row\").first().json;\nconst firstName = (guard.lead_name || \"\").split(\" \")[0] || guard.lead_name || \"\";\n\nconst message = (guard.failed_template || \"\")\n  .replace(/\\{\\{first_name\\}\\}/g, firstName);\n\nreturn [{ json: {\n  message,\n  phone: guard.phone,\n  from_number: guard.from_number,\n} }];"
+      }
+    },
+    {
+      "id": "res-send-failed-sms",
+      "name": "Send Failed SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        1344,
+        400
+      ],
+      "parameters": {
+        "from": "={{ $json.from_number }}",
+        "to": "={{ $json.phone }}",
+        "message": "={{ $json.message }}",
+        "options": {}
+      },
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      }
+    },
+    {
+      "id": "res-update-failed",
+      "name": "Update Verification Row - Failed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1568,
+        400
+      ],
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ 'https://sheets.googleapis.com/v4/spreadsheets/1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw/values/Identity_Verifications!F' + $('Find Verification Row').first().json.row_number + ':J' + $('Find Verification Row').first().json.row_number + '?valueInputOption=USER_ENTERED' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ values: [[ $('Find Verification Row').first().json.status, $('Find Verification Row').first().json.sent_at, new Date().toISOString(), $('Find Verification Row').first().json.error_code, $('Find Verification Row').first().json.error_reason ]] }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "id": "result-fub-note",
+      "name": "FUB - Log Verification Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        672,
+        208
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Find Verification Row').first().json.lead_id), body: 'Automated ID verification result: ' + $('Find Verification Row').first().json.status + ($('Find Verification Row').first().json.error_reason ? ' (' + $('Find Verification Row').first().json.error_code + ': ' + $('Find Verification Row').first().json.error_reason + ')' : '') }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "id": "res-already-resolved",
+      "name": "Already Resolved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        672,
+        96
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.already_resolved }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Read Identity Verifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Identity Verifications": {
+      "main": [
+        [
+          {
+            "node": "Read Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Settings": {
+      "main": [
+        [
+          {
+            "node": "Find Verification Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Verification Row": {
+      "main": [
+        [
+          {
+            "node": "Row Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Row Found?": {
+      "main": [
+        [
+          {
+            "node": "Already Resolved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verified?": {
+      "main": [
+        [
+          {
+            "node": "Trigger Cal Link SMS Workflow",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Failed SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Cal Link SMS Workflow": {
+      "main": [
+        [
+          {
+            "node": "Update Verification Row - Verified",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Failed SMS": {
+      "main": [
+        [
+          {
+            "node": "Send Failed SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Failed SMS": {
+      "main": [
+        [
+          {
+            "node": "Update Verification Row - Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Log Verification Result": {
+      "main": [
+        [
+          {
+            "node": "Verified?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Already Resolved?": {
+      "main": [
+        [],
+        [
+          {
+            "node": "FUB - Log Verification Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "5b894e10-27c8-49de-8ca4-62c5721953cd",
+  "activeVersionId": "5b894e10-27c8-49de-8ca4-62c5721953cd",
+  "versionCounter": 11,
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-07-24T12:38:28.577Z",
+      "createdAt": "2026-07-24T12:38:28.577Z",
+      "role": "workflow:owner",
+      "workflowId": "PHSdCWhovdbFDHlX",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-07-26T20:33:54.958Z",
+    "createdAt": "2026-07-26T20:33:54.958Z",
+    "versionId": "5b894e10-27c8-49de-8ca4-62c5721953cd",
+    "workflowId": "PHSdCWhovdbFDHlX",
+    "nodes": [
+      {
+        "id": "res-webhook",
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          -224,
+          300
+        ],
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "identity-verification-result",
+          "options": {}
+        },
+        "webhookId": "identity-verification-result"
+      },
+      {
+        "id": "res-read-log",
+        "name": "Read Identity Verifications",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          0,
+          300
+        ],
+        "alwaysOutputData": true,
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Identity_Verifications",
+            "mode": "name"
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "id": "res-read-settings",
+        "name": "Read Settings",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          224,
+          300
+        ],
+        "alwaysOutputData": true,
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Settings",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "id": "res-find-row",
+        "name": "Find Verification Row",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          448,
+          300
+        ],
+        "parameters": {
+          "jsCode": "const body = $(\"Webhook\").first().json.body || {};\nconst rows = $items(\"Read Identity Verifications\").map(i => i.json || {});\nconst settingsRows = $items(\"Read Settings\").map(i => i.json || {});\n\nconst settings = {};\nfor (const row of settingsRows) {\n  if (row.key && row.value !== undefined) settings[row.key] = row.value;\n}\n\nconst match = rows.find(r => String(r.session_id) === String(body.session_id));\n\nif (!match) {\n  return [{ json: { found: false, session_id: body.session_id || \"\" } }];\n}\n\n// Google Sheets returns numbers as numbers — phone can come back with the\n// leading \"+\" stripped. Repair it defensively rather than trust the type.\nlet phone = String(match.phone || \"\");\nif (phone && !phone.startsWith(\"+\")) phone = \"+\" + phone;\n\nreturn [{ json: {\n  found: true,\n  row_number: match.row_number,\n  session_id: String(body.session_id || \"\"),\n  lead_id: match.lead_id || \"\",\n  lead_name: match.lead_name || \"\",\n  phone,\n  sent_at: match.sent_at || \"\",\n  original_webhook_body: match.original_webhook_body || \"\",\n  status: body.status || \"\",\n  error_code: body.error_code || \"\",\n  error_reason: body.error_reason || \"\",\n  // Idempotency guard: this is the row's OWN stored status from the sheet\n  // (set by a prior successful run of this workflow), not the incoming\n  // webhook's status. If a redelivered/duplicate webhook comes in for a\n  // session that's already been fully processed, short-circuit before\n  // re-sending any SMS.\n  already_resolved: match.status === \"verified\" || match.status === \"failed\",\n  from_number: settings.from_number || \"\",\n  failed_template: settings.identity_failed_sms_template ||\n    \"Hi {{first_name}}, we weren\\'t able to verify your ID automatically. Someone from our team will follow up with you shortly.\",\n} }];"
+        }
+      },
+      {
+        "id": "res-row-found",
+        "name": "Row Found?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          672,
+          300
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.found }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "res-verified-if",
+        "name": "Verified?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          896,
+          300
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $('Find Verification Row').first().json.status }}",
+                "rightValue": "verified",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "res-trigger-cal",
+        "name": "Trigger Cal Link SMS Workflow",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1120,
+          208
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://automation.rentingfreedom.com/webhook/send-cal-link-after-verification",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ $('Find Verification Row').first().json.original_webhook_body }}",
+          "options": {}
+        }
+      },
+      {
+        "id": "res-update-verified",
+        "name": "Update Verification Row - Verified",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1344,
+          208
+        ],
+        "parameters": {
+          "method": "PUT",
+          "url": "={{ 'https://sheets.googleapis.com/v4/spreadsheets/1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw/values/Identity_Verifications!F' + $('Find Verification Row').first().json.row_number + ':J' + $('Find Verification Row').first().json.row_number + '?valueInputOption=USER_ENTERED' }}",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "googleApi",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ values: [[ 'verified', $('Find Verification Row').first().json.sent_at, new Date().toISOString(), '', '' ]] }) }}",
+          "options": {}
+        },
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "id": "res-build-failed-sms",
+        "name": "Build Failed SMS",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1120,
+          400
+        ],
+        "parameters": {
+          "jsCode": "const guard = $(\"Find Verification Row\").first().json;\nconst firstName = (guard.lead_name || \"\").split(\" \")[0] || guard.lead_name || \"\";\n\nconst message = (guard.failed_template || \"\")\n  .replace(/\\{\\{first_name\\}\\}/g, firstName);\n\nreturn [{ json: {\n  message,\n  phone: guard.phone,\n  from_number: guard.from_number,\n} }];"
+        }
+      },
+      {
+        "id": "res-send-failed-sms",
+        "name": "Send Failed SMS",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          1344,
+          400
+        ],
+        "parameters": {
+          "from": "={{ $json.from_number }}",
+          "to": "={{ $json.phone }}",
+          "message": "={{ $json.message }}",
+          "options": {}
+        },
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        }
+      },
+      {
+        "id": "res-update-failed",
+        "name": "Update Verification Row - Failed",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1568,
+          400
+        ],
+        "parameters": {
+          "method": "PUT",
+          "url": "={{ 'https://sheets.googleapis.com/v4/spreadsheets/1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw/values/Identity_Verifications!F' + $('Find Verification Row').first().json.row_number + ':J' + $('Find Verification Row').first().json.row_number + '?valueInputOption=USER_ENTERED' }}",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "googleApi",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ values: [[ $('Find Verification Row').first().json.status, $('Find Verification Row').first().json.sent_at, new Date().toISOString(), $('Find Verification Row').first().json.error_code, $('Find Verification Row').first().json.error_reason ]] }) }}",
+          "options": {}
+        },
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "id": "result-fub-note",
+        "name": "FUB - Log Verification Result",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          672,
+          208
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.followupboss.com/v1/notes",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ personId: Number($('Find Verification Row').first().json.lead_id), body: 'Automated ID verification result: ' + $('Find Verification Row').first().json.status + ($('Find Verification Row').first().json.error_reason ? ' (' + $('Find Verification Row').first().json.error_code + ': ' + $('Find Verification Row').first().json.error_reason + ')' : '') }) }}",
+          "options": {}
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        }
+      },
+      {
+        "id": "res-already-resolved",
+        "name": "Already Resolved?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          672,
+          96
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.already_resolved }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      }
+    ],
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "node": "Read Identity Verifications",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Identity Verifications": {
+        "main": [
+          [
+            {
+              "node": "Read Settings",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Settings": {
+        "main": [
+          [
+            {
+              "node": "Find Verification Row",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Find Verification Row": {
+        "main": [
+          [
+            {
+              "node": "Row Found?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Row Found?": {
+        "main": [
+          [
+            {
+              "node": "Already Resolved?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Verified?": {
+        "main": [
+          [
+            {
+              "node": "Trigger Cal Link SMS Workflow",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Build Failed SMS",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Trigger Cal Link SMS Workflow": {
+        "main": [
+          [
+            {
+              "node": "Update Verification Row - Verified",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Failed SMS": {
+        "main": [
+          [
+            {
+              "node": "Send Failed SMS",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Send Failed SMS": {
+        "main": [
+          [
+            {
+              "node": "Update Verification Row - Failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Log Verification Result": {
+        "main": [
+          [
+            {
+              "node": "Verified?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Already Resolved?": {
+        "main": [
+          [],
+          [
+            {
+              "node": "FUB - Log Verification Result",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Justin Artis",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-07-26T20:33:54.982Z",
+        "id": 186,
+        "workflowId": "PHSdCWhovdbFDHlX",
+        "versionId": "5b894e10-27c8-49de-8ca4-62c5721953cd",
+        "event": "deactivated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      },
+      {
+        "createdAt": "2026-07-26T20:33:54.990Z",
+        "id": 187,
+        "workflowId": "PHSdCWhovdbFDHlX",
+        "versionId": "5b894e10-27c8-49de-8ca4-62c5721953cd",
+        "event": "activated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    ]
+  }
+}

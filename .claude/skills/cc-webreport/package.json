@@ -1,0 +1,11 @@
+{
+  "name": "cc-webreport",
+  "version": "1.0.0",
+  "description": "Compound Consulting branded webpage report generator",
+  "private": true,
+  "main": "report.js",
+  "scripts": {
+    "example": "node example.js"
+  },
+  "dependencies": {}
+}

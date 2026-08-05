@@ -1,0 +1,13 @@
+{
+  "name": "cc-report",
+  "version": "1.0.0",
+  "description": "Compound Consulting branded Word document generator",
+  "private": true,
+  "main": "report.js",
+  "scripts": {
+    "example": "node example.js"
+  },
+  "dependencies": {
+    "docx": "^9.7.1"
+  }
+}

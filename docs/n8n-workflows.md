@@ -150,6 +150,70 @@ merge (which changes `person_id`) can be detected after the fact.
 Create or repair the tab with `node scripts/inquiries-setup.mjs --apply`
 (idempotent; also adds the Settings keys).
 
+### Append-race fix — verify-and-retry (2026-08-05)
+
+Confirmed live: two Property Inquiry events for the same person (Test Test11,
+person 2634), ~800ms apart, for two different properties. Both executions
+independently ran `Resolve Inquiry` correctly, but only one row ended up in
+the Inquiries tab — n8n's Google Sheets node `append` mode is documented as
+safe under concurrent writes but wasn't robust enough at this sub-second
+collision window. Unlike the same known-and-accepted race on `Cal Bookings` /
+`Rental Applications` (see "Known limitation" under "Cal Bookings tab"), a
+lost row here means the lead never gets that property's cal.com link at all,
+silently — worth fixing where those weren't.
+
+**Verify-and-retry, not locking.** Between `Append Inquiry Row` and the three
+downstream IFs (`Send Now?` / `Gate Needed?` / `Alert Needed?`) sits a bounded
+retry chain, unrolled as three explicit attempts (`Re-read Inquiries (Verify
+N)` → `Confirm Row Recorded (N)` → `Row Recorded? (N)`, for N = 1, 2, 3)
+rather than a canvas loop-back — each attempt is its own named node in the
+execution log, and there's no loop-counter-via-expression to get wrong. The
+re-read is always fresh (a new Sheets read, never the stale `Read Inquiries`
+from earlier in the execution — same discipline as the sweep's `Re-read
+Inquiries`, which this is modeled on directly). `Confirm Row Recorded (N)`
+checks the fresh rows for this execution's `event_id` **and** that
+`property_key`/`cal_link` match what `Resolve Inquiry` computed.
+
+- **Verified on attempt 1 or 2** → `Row Recorded? (N)`'s true branch feeds
+  straight into `Send Now?` / `Gate Needed?` / `Alert Needed?`, same as today.
+- **Not yet verified, attempts remain** → `Jitter Wait (N)` (a Code node,
+  `await new Promise(...)` for a randomized 300–1500ms — long enough to miss
+  whatever collided the first time) → `Retry Append Inquiry Row (N+1)`, a
+  duplicate of `Append Inquiry Row` with the same column mapping, re-reads
+  `Resolve Inquiry`'s output (unchanged, so re-appending is safe) → back into
+  the verify chain.
+- **Still unverified after 3 total attempts** → `Row Recorded? (3)`'s false
+  branch goes to `Build Append-Failure Alert`, which `console.log`s a clear
+  failure message (same discipline as the DoorLoop sync's "fails loudly" and
+  the late-reminder guard's decision record — this is the one place in the
+  chain where "did it actually work" can't be read off the sheet, so the
+  execution log is authoritative) and sends one SMS via `Send Append-Failure
+  Alert`.
+- Only a verified append continues into `Send Now?`/`Gate Needed?`/`Alert
+  Needed?` — an exhausted-failure execution stops at the alert. The row was
+  never confirmed recorded, so the deliberate choice here is not to also fire
+  the send/gate side effects on top of an unconfirmed record.
+
+**No new Settings key.** The failure alert reuses `unmatched_inquiry_alert_phone`
+— `Resolve Inquiry` already threads `alert_phone` (from that Settings key) and
+`from_number` through its output for the existing unmatched-address alert, so
+`Build Append-Failure Alert` just reads the same two fields off `Resolve
+Inquiry`'s result. Same recipient, same convention, no new configuration
+surface.
+
+Add / remove (idempotent, marker `INQUIRY_APPEND_RETRY_MARKER`, backup in
+`n8n/BEFORE-inquiry-append-retry/`):
+
+```bash
+node scripts/n8n-add-inquiry-append-retry.mjs                  # dry run
+node scripts/n8n-add-inquiry-append-retry.mjs --apply
+node scripts/n8n-add-inquiry-append-retry.mjs --revert --apply
+```
+
+Verified live 2026-08-05: firing two inquiry events for the same test person
+less than ~1 second apart now produces two surviving Inquiries rows instead of
+one (previously reproduced the loss on the first try, no retry logic).
+
 ### Settings keys
 
 - `inquiry_flow_start_at` — inquiry events created before this are ignored, so
@@ -1026,6 +1090,7 @@ body = {
 12. **After a Twilio node, `$json` is Twilio's response** (`sid`/`status`/`to`), not your data. A downstream Sheets update keyed on `={{ $json.event_id }}` silently matched zero rows and reported success with `items=0`. Same root cause as the `$json` warning in the identity handoff — reference the source node explicitly.
 13. **Google Sheets nodes need an explicit `columns.schema`** when built via the API. Without it, append/update throws `Could not get parameter` at runtime even though the node looks correctly configured.
 14. **Sheets coerces on write.** `"true"` becomes boolean `TRUE`, `"1668"` becomes number `1668`, and a leading `+` on a phone is stripped. Compare with `String(x).trim().toLowerCase()` rather than `=== "true"`.
+15. **Google Sheets `append` mode is not a reliable dedup boundary under sub-second concurrency.** Two nearly-simultaneous `values:append` calls to the same tab can still race and one row silently never lands — confirmed live on the Inquiries tab (two inquiry events ~800ms apart, only one row survived) even though the node is documented as safe for concurrent writes. A row that never gets appended looks identical to "nothing happened" — no error, no clue in `runData` beyond the append node's own successful-looking output. If a lost row would be silently costly (a lead never getting their link, not just a delayed reminder), re-read the tab after appending and verify the row is actually there before trusting it — see "Append-race fix" under "FUB Inquiry Flow".
 
 ## Test cadence
 

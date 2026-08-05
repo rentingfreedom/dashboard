@@ -1,0 +1,1853 @@
+{
+  "updatedAt": "2026-07-28T01:52:27.772Z",
+  "createdAt": "2026-06-24T12:10:20.388Z",
+  "id": "UbO0l29GtILMm1sP",
+  "name": "RentingFreedom Production - FUB Phone Added → Send Text",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "send-cal-link-after-verification",
+        "options": {}
+      },
+      "id": "3e79be39-c975-424a-94f3-c63fffe0fa1f",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        208
+      ],
+      "webhookId": "phone-added-send-text"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.body.uri }}&fields=allFields",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "784c371d-e4a4-4b5d-89ef-568aa2408478",
+      "name": "FUB - Get Person",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Text Log",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "baceef5c-947e-4ce5-8971-2c503651b36d",
+      "name": "Read Text Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        0,
+        208
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Settings",
+          "mode": "name"
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "id": "8d6fbbcc-53f8-4dda-b25f-22ff192f8649",
+      "name": "Read Settings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        0,
+        416
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 4
+      },
+      "id": "0beb949d-08dd-4810-ba8c-e4639e8130b1",
+      "name": "Wait For All",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        240,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $items(\"FUB - Get Person\")[0].json.people?.[0]?.firstName ?? \"\" }}",
+              "rightValue": "Test",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "816dba75-7e4e-44d7-9075-56ba8ffadc41",
+      "name": "Test Mode - Testerson Only",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        464,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Catch-up sweep: one SMS per unsent Inquiries row for this person.\n//\n// Replaces the old behaviour of reading person.customCalLink, which only ever\n// held the MOST RECENT inquiry's link — so a lead who inquired about two\n// properties only ever got the second one's link.\nconst person = $items(\"FUB - Get Person\")[0]?.json?.people?.[0] || {};\nconst textLogRows  = $items(\"Read Text Log\").map(i => i.json || {});\nconst settingsRows = $items(\"Read Settings\").map(i => i.json || {});\nconst inquiryRows  = $items(\"Read Inquiries\").map(i => i.json || {});\n\nconst settings = {};\nfor (const row of settingsRows) {\n  if (row.key && row.value) settings[row.key] = row.value;\n}\n\nconst isTestMode = (person.firstName || \"\") === \"Test\";\nconst phone = person.phones?.[0]?.value;\n\nconst bail = (reason, extra) => [{ json: { skipped: true, reason, person_id: String(person.id ?? \"\"), person_name: person.name, ...(extra || {}) } }];\n\nif (!phone) return bail(\"no_phone\");\n\n// ── STAGE_GATE_MARKER: FUB stage gate ────────────────────────────────────────────\n// A lead who leaves the allowed stages stops being swept, even for rows already recorded as unsent.\n// Empty / missing allowed_stages == allow everything, so losing the Settings\n// row degrades to the pre-gate behaviour rather than muting the whole system.\nconst allowedStages = String(settings.allowed_stages ?? \"\")\n  .split(\",\")\n  .map((s) => s.trim().toLowerCase())\n  .filter(Boolean);\n// Sheets coerces on write and the stage names contain punctuation and mixed\n// case (\"Tenant Inquiry Lead (Do Not Contact)\"), so compare normalized.\nconst personStage = String(person.stage ?? \"\").trim().toLowerCase();\nconst stageAllowed = allowedStages.length === 0 || allowedStages.includes(personStage);\n\nif (!stageAllowed) return bail(\"stage_not_allowed\", { stage: person.stage || \"\" });\n\n\nconst digits = String(phone).replace(/\\D/g, \"\");\nconst toNumber = digits.length === 10 ? \"+1\" + digits : \"+\" + digits;\n\n// Rows this person is still owed. The lead-age guard that used to live here is\n// gone: Inquiries rows only exist for events after inquiry_flow_start_at, so an\n// old lead making a NEW inquiry is now served correctly instead of dropped.\nconst pending = inquiryRows.filter(r =>\n  String(r.person_id ?? \"\") === String(person.id ?? \"\") &&\n  String(r.link_sent ?? \"\").trim().toLowerCase() === \"false\" &&\n  String(r.match_status ?? \"\").trim() === \"matched\" &&\n  String(r.cal_link ?? \"\").trim() !== \"\"\n);\n\nif (!pending.length) return bail(\"no_pending_inquiries\");\n\nconst baseOf = (l) => String(l || \"\").split(\"?\")[0].replace(/^(?!https?:\\/\\/)/, \"https://\");\n\n// Dedup is now per person AND per property. The old per-person check would have\n// suppressed the second property's link outright.\nconst sentBases = new Set(\n  textLogRows\n    .filter(r => String(r.person_id ?? \"\") === String(person.id ?? \"\") && r.sent_at)\n    .map(r => baseOf(r.cal_link))\n);\n\nconst template  = settings.sms_template || \"\";\nconst applyLink = settings.apply_link || \"\";\nconst fromNumber = settings.from_number || \"\";\nconst nowIso = new Date().toISOString();\n\nconst out = [];\nfor (const row of pending) {\n  const base = baseOf(row.cal_link);\n  if (!isTestMode && sentBases.has(base)) continue;\n\n  const enrichedCalLink = base + \"?metadata%5Bfub_person_id%5D=\" + person.id + \"&metadata%5Bphone%5D=\" + encodeURIComponent(toNumber);\n  const propertyAddress = row.property_address || row.property_key || \"the property\";\n\n  const message = template\n    .replace(/\\{\\{greeting\\}\\}/g, \"Hello!\")\n    .replace(/\\{\\{first_name\\}\\}/g, person.firstName || person.name || \"\")\n    .replace(/\\{\\{property_address\\}\\}/g, propertyAddress)\n    .replace(/\\{\\{cal_link\\}\\}/g, enrichedCalLink)\n    .replace(/\\{\\{apply_link\\}\\}/g, applyLink);\n\n  out.push({ json: {\n    skipped: false,\n    event_id: String(row.event_id ?? \"\"),\n    person_id: String(person.id ?? \"\"),\n    fub_person_id: String(person.id ?? \"\"),\n    person_name: person.name,\n    phone: toNumber,\n    from_number: fromNumber,\n    cal_link: row.cal_link,\n    property_address: propertyAddress,\n    enrichedCalLink,\n    message,\n    sent_at: nowIso\n  }});\n}\n\nif (!out.length) return bail(\"all_already_sent\");\nreturn out;\n"
+      },
+      "id": "04f45ce9-d923-49b5-9bea-f08a891b39c3",
+      "name": "Check & Build Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.skipped }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ff2f4326-79e7-426b-837a-dc6b78fdec0a",
+      "name": "Should Send?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        896,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "from": "={{ $('Confirm Still Unsent').item.json.from_number }}",
+        "to": "={{ $('Confirm Still Unsent').item.json.phone }}",
+        "message": "={{ $('Confirm Still Unsent').item.json.message }}",
+        "options": {}
+      },
+      "id": "991196d9-d6d9-4c3b-bd4f-530da8e40af0",
+      "name": "Send SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        112
+      ],
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Text Log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "person_id": "={{ $('Confirm Still Unsent').item.json.person_id }}",
+            "name": "={{ $('Confirm Still Unsent').item.json.person_name }}",
+            "phone_number": "={{ $('Confirm Still Unsent').item.json.phone }}",
+            "cal_link": "={{ $('Confirm Still Unsent').item.json.enrichedCalLink }}",
+            "message_sent": "={{ $('Confirm Still Unsent').item.json.message }}",
+            "sent_at": "={{ $('Confirm Still Unsent').item.json.sent_at }}"
+          },
+          "schema": [
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone_number",
+              "displayName": "phone_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cal_link",
+              "displayName": "cal_link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message_sent",
+              "displayName": "message_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sent_at",
+              "displayName": "sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "id": "afd29fcf-12b1-412f-9644-801c4a60d6c4",
+      "name": "Log to Text Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1344,
+        112
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "id": "fub-note-1",
+      "name": "FUB - Log Note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1344,
+        312
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Confirm Still Unsent').item.json.person_id), body: 'Automated SMS sent:\\n\\n' + $('Confirm Still Unsent').item.json.message }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "name": "FUB - Update Cal Link",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        200
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ 'https://api.followupboss.com/v1/people/' + $('Check & Build Message').first().json.fub_person_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ customCalLink: $('Check & Build Message').first().json.enrichedCalLink }) }}",
+        "options": {}
+      },
+      "id": "81a77db4-ce84-4b45-b31e-2e259d239024",
+      "executeOnce": true
+    },
+    {
+      "name": "FUB - Add Tag",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        200
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ 'https://api.followupboss.com/v1/people/' + $('Check & Build Message').first().json.fub_person_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"tags\": \"cal-link-ready\" }",
+        "options": {}
+      },
+      "id": "24e40b9e-886f-4d76-9af4-6e389e0dfa1c",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Inquiries",
+          "mode": "name"
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "name": "Read Inquiries",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        0,
+        560
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000,
+      "id": "8f6af2ba-37a5-4111-a023-6803c4f4ce7d"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Inquiries",
+          "mode": "name"
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "name": "Re-read Inquiries",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        900,
+        320
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000,
+      "id": "865f7a14-f0a5-4ada-9b6c-2a85a02e5ecc"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst candidates = $items(\"Check & Build Message\").filter(i => i.json && i.json.skipped === false);\nconst fresh = $items(\"Re-read Inquiries\").map(i => i.json || {});\n\nconst stillUnsent = new Map();\nfor (const r of fresh) {\n  stillUnsent.set(String(r.event_id ?? \"\"), String(r.link_sent ?? \"\").trim().toLowerCase() === \"false\");\n}\n\nconst keep = [];\nfor (const item of candidates) {\n  const id = String(item.json.event_id ?? \"\");\n  // Unknown id => row not found in the re-read; fail closed rather than double-send.\n  if (stillUnsent.get(id) === true) keep.push(item);\n}\nreturn keep;\n"
+      },
+      "name": "Confirm Still Unsent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        320
+      ],
+      "id": "524e7efd-7b32-486a-9bef-f19689e7de0b"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Inquiries",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "event_id": "={{ $('Confirm Still Unsent').item.json.event_id }}",
+            "link_sent": "true",
+            "link_sent_at": "={{ $('Confirm Still Unsent').item.json.sent_at }}"
+          },
+          "matchingColumns": [
+            "event_id"
+          ],
+          "schema": [
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_key",
+              "displayName": "property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cal_link",
+              "displayName": "cal_link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "inquired_at",
+              "displayName": "inquired_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "link_sent",
+              "displayName": "link_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "link_sent_at",
+              "displayName": "link_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_id",
+              "displayName": "event_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_address",
+              "displayName": "property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "match_status",
+              "displayName": "match_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alert_sent",
+              "displayName": "alert_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "name": "Mark Inquiry Sent",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1560,
+        420
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000,
+      "id": "9c1af44c-9b97-419a-b6e9-7b6ce22b9e87"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "FUB - Get Person",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Text Log",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Settings",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Inquiries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Get Person": {
+      "main": [
+        [
+          {
+            "node": "Wait For All",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Text Log": {
+      "main": [
+        [
+          {
+            "node": "Wait For All",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Wait For All": {
+      "main": [
+        [
+          {
+            "node": "Test Mode - Testerson Only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test Mode - Testerson Only": {
+      "main": [
+        [
+          {
+            "node": "Check & Build Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check & Build Message": {
+      "main": [
+        [
+          {
+            "node": "Should Send?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Send?": {
+      "main": [
+        [
+          {
+            "node": "Re-read Inquiries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send SMS": {
+      "main": [
+        [
+          {
+            "node": "Log to Text Log",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "FUB - Log Note",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Mark Inquiry Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Settings": {
+      "main": [
+        [
+          {
+            "node": "Wait For All",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "FUB - Update Cal Link": {
+      "main": [
+        [
+          {
+            "node": "FUB - Add Tag",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Add Tag": {
+      "main": [
+        []
+      ]
+    },
+    "Read Inquiries": {
+      "main": [
+        [
+          {
+            "node": "Wait For All",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Re-read Inquiries": {
+      "main": [
+        [
+          {
+            "node": "Confirm Still Unsent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm Still Unsent": {
+      "main": [
+        [
+          {
+            "node": "Send SMS",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "FUB - Update Cal Link",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": {},
+  "versionId": "90d66414-9d09-472f-9eda-f14de139081f",
+  "activeVersionId": "90d66414-9d09-472f-9eda-f14de139081f",
+  "versionCounter": 26,
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-06-24T12:10:20.388Z",
+      "createdAt": "2026-06-24T12:10:20.388Z",
+      "role": "workflow:owner",
+      "workflowId": "UbO0l29GtILMm1sP",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-07-28T01:52:27.777Z",
+    "createdAt": "2026-07-28T01:52:27.777Z",
+    "versionId": "90d66414-9d09-472f-9eda-f14de139081f",
+    "workflowId": "UbO0l29GtILMm1sP",
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "send-cal-link-after-verification",
+          "options": {}
+        },
+        "id": "3e79be39-c975-424a-94f3-c63fffe0fa1f",
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          -224,
+          208
+        ],
+        "webhookId": "phone-added-send-text"
+      },
+      {
+        "parameters": {
+          "url": "={{ $json.body.uri }}&fields=allFields",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "784c371d-e4a4-4b5d-89ef-568aa2408478",
+        "name": "FUB - Get Person",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          0,
+          0
+        ],
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Text Log",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "id": "baceef5c-947e-4ce5-8971-2c503651b36d",
+        "name": "Read Text Log",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          0,
+          208
+        ],
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Settings",
+            "mode": "name"
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "id": "8d6fbbcc-53f8-4dda-b25f-22ff192f8649",
+        "name": "Read Settings",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          0,
+          416
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "parameters": {
+          "mode": "append",
+          "numberInputs": 4
+        },
+        "id": "0beb949d-08dd-4810-ba8c-e4639e8130b1",
+        "name": "Wait For All",
+        "type": "n8n-nodes-base.merge",
+        "typeVersion": 3,
+        "position": [
+          240,
+          208
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $items(\"FUB - Get Person\")[0].json.people?.[0]?.firstName ?? \"\" }}",
+                "rightValue": "Test",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "816dba75-7e4e-44d7-9075-56ba8ffadc41",
+        "name": "Test Mode - Testerson Only",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          464,
+          208
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "\n// Catch-up sweep: one SMS per unsent Inquiries row for this person.\n//\n// Replaces the old behaviour of reading person.customCalLink, which only ever\n// held the MOST RECENT inquiry's link — so a lead who inquired about two\n// properties only ever got the second one's link.\nconst person = $items(\"FUB - Get Person\")[0]?.json?.people?.[0] || {};\nconst textLogRows  = $items(\"Read Text Log\").map(i => i.json || {});\nconst settingsRows = $items(\"Read Settings\").map(i => i.json || {});\nconst inquiryRows  = $items(\"Read Inquiries\").map(i => i.json || {});\n\nconst settings = {};\nfor (const row of settingsRows) {\n  if (row.key && row.value) settings[row.key] = row.value;\n}\n\nconst isTestMode = (person.firstName || \"\") === \"Test\";\nconst phone = person.phones?.[0]?.value;\n\nconst bail = (reason, extra) => [{ json: { skipped: true, reason, person_id: String(person.id ?? \"\"), person_name: person.name, ...(extra || {}) } }];\n\nif (!phone) return bail(\"no_phone\");\n\n// ── STAGE_GATE_MARKER: FUB stage gate ────────────────────────────────────────────\n// A lead who leaves the allowed stages stops being swept, even for rows already recorded as unsent.\n// Empty / missing allowed_stages == allow everything, so losing the Settings\n// row degrades to the pre-gate behaviour rather than muting the whole system.\nconst allowedStages = String(settings.allowed_stages ?? \"\")\n  .split(\",\")\n  .map((s) => s.trim().toLowerCase())\n  .filter(Boolean);\n// Sheets coerces on write and the stage names contain punctuation and mixed\n// case (\"Tenant Inquiry Lead (Do Not Contact)\"), so compare normalized.\nconst personStage = String(person.stage ?? \"\").trim().toLowerCase();\nconst stageAllowed = allowedStages.length === 0 || allowedStages.includes(personStage);\n\nif (!stageAllowed) return bail(\"stage_not_allowed\", { stage: person.stage || \"\" });\n\n\nconst digits = String(phone).replace(/\\D/g, \"\");\nconst toNumber = digits.length === 10 ? \"+1\" + digits : \"+\" + digits;\n\n// Rows this person is still owed. The lead-age guard that used to live here is\n// gone: Inquiries rows only exist for events after inquiry_flow_start_at, so an\n// old lead making a NEW inquiry is now served correctly instead of dropped.\nconst pending = inquiryRows.filter(r =>\n  String(r.person_id ?? \"\") === String(person.id ?? \"\") &&\n  String(r.link_sent ?? \"\").trim().toLowerCase() === \"false\" &&\n  String(r.match_status ?? \"\").trim() === \"matched\" &&\n  String(r.cal_link ?? \"\").trim() !== \"\"\n);\n\nif (!pending.length) return bail(\"no_pending_inquiries\");\n\nconst baseOf = (l) => String(l || \"\").split(\"?\")[0].replace(/^(?!https?:\\/\\/)/, \"https://\");\n\n// Dedup is now per person AND per property. The old per-person check would have\n// suppressed the second property's link outright.\nconst sentBases = new Set(\n  textLogRows\n    .filter(r => String(r.person_id ?? \"\") === String(person.id ?? \"\") && r.sent_at)\n    .map(r => baseOf(r.cal_link))\n);\n\nconst template  = settings.sms_template || \"\";\nconst applyLink = settings.apply_link || \"\";\nconst fromNumber = settings.from_number || \"\";\nconst nowIso = new Date().toISOString();\n\nconst out = [];\nfor (const row of pending) {\n  const base = baseOf(row.cal_link);\n  if (!isTestMode && sentBases.has(base)) continue;\n\n  const enrichedCalLink = base + \"?metadata%5Bfub_person_id%5D=\" + person.id + \"&metadata%5Bphone%5D=\" + encodeURIComponent(toNumber);\n  const propertyAddress = row.property_address || row.property_key || \"the property\";\n\n  const message = template\n    .replace(/\\{\\{greeting\\}\\}/g, \"Hello!\")\n    .replace(/\\{\\{first_name\\}\\}/g, person.firstName || person.name || \"\")\n    .replace(/\\{\\{property_address\\}\\}/g, propertyAddress)\n    .replace(/\\{\\{cal_link\\}\\}/g, enrichedCalLink)\n    .replace(/\\{\\{apply_link\\}\\}/g, applyLink);\n\n  out.push({ json: {\n    skipped: false,\n    event_id: String(row.event_id ?? \"\"),\n    person_id: String(person.id ?? \"\"),\n    fub_person_id: String(person.id ?? \"\"),\n    person_name: person.name,\n    phone: toNumber,\n    from_number: fromNumber,\n    cal_link: row.cal_link,\n    property_address: propertyAddress,\n    enrichedCalLink,\n    message,\n    sent_at: nowIso\n  }});\n}\n\nif (!out.length) return bail(\"all_already_sent\");\nreturn out;\n"
+        },
+        "id": "04f45ce9-d923-49b5-9bea-f08a891b39c3",
+        "name": "Check & Build Message",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          688,
+          208
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.skipped }}",
+                "rightValue": false,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "ff2f4326-79e7-426b-837a-dc6b78fdec0a",
+        "name": "Should Send?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          896,
+          208
+        ]
+      },
+      {
+        "parameters": {
+          "from": "={{ $('Confirm Still Unsent').item.json.from_number }}",
+          "to": "={{ $('Confirm Still Unsent').item.json.phone }}",
+          "message": "={{ $('Confirm Still Unsent').item.json.message }}",
+          "options": {}
+        },
+        "id": "991196d9-d6d9-4c3b-bd4f-530da8e40af0",
+        "name": "Send SMS",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          1120,
+          112
+        ],
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "operation": "append",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Text Log",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "person_id": "={{ $('Confirm Still Unsent').item.json.person_id }}",
+              "name": "={{ $('Confirm Still Unsent').item.json.person_name }}",
+              "phone_number": "={{ $('Confirm Still Unsent').item.json.phone }}",
+              "cal_link": "={{ $('Confirm Still Unsent').item.json.enrichedCalLink }}",
+              "message_sent": "={{ $('Confirm Still Unsent').item.json.message }}",
+              "sent_at": "={{ $('Confirm Still Unsent').item.json.sent_at }}"
+            },
+            "schema": [
+              {
+                "id": "person_id",
+                "displayName": "person_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "name",
+                "displayName": "name",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "phone_number",
+                "displayName": "phone_number",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "cal_link",
+                "displayName": "cal_link",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "message_sent",
+                "displayName": "message_sent",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "sent_at",
+                "displayName": "sent_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ]
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "id": "afd29fcf-12b1-412f-9644-801c4a60d6c4",
+        "name": "Log to Text Log",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          1344,
+          112
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "id": "fub-note-1",
+        "name": "FUB - Log Note",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          1344,
+          312
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.followupboss.com/v1/notes",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ personId: Number($('Confirm Still Unsent').item.json.person_id), body: 'Automated SMS sent:\\n\\n' + $('Confirm Still Unsent').item.json.message }) }}",
+          "options": {}
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        }
+      },
+      {
+        "name": "FUB - Update Cal Link",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1200,
+          200
+        ],
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        },
+        "onError": "continueRegularOutput",
+        "parameters": {
+          "method": "PUT",
+          "url": "={{ 'https://api.followupboss.com/v1/people/' + $('Check & Build Message').first().json.fub_person_id }}",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ customCalLink: $('Check & Build Message').first().json.enrichedCalLink }) }}",
+          "options": {}
+        },
+        "id": "81a77db4-ce84-4b45-b31e-2e259d239024",
+        "executeOnce": true
+      },
+      {
+        "name": "FUB - Add Tag",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1400,
+          200
+        ],
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        },
+        "onError": "continueRegularOutput",
+        "parameters": {
+          "method": "PUT",
+          "url": "={{ 'https://api.followupboss.com/v1/people/' + $('Check & Build Message').first().json.fub_person_id }}",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={ \"tags\": \"cal-link-ready\" }",
+          "options": {}
+        },
+        "id": "24e40b9e-886f-4d76-9af4-6e389e0dfa1c",
+        "executeOnce": true
+      },
+      {
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Inquiries",
+            "mode": "name"
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "name": "Read Inquiries",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          0,
+          560
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000,
+        "id": "8f6af2ba-37a5-4111-a023-6803c4f4ce7d"
+      },
+      {
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Inquiries",
+            "mode": "name"
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "name": "Re-read Inquiries",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          900,
+          320
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000,
+        "id": "865f7a14-f0a5-4ada-9b6c-2a85a02e5ecc"
+      },
+      {
+        "parameters": {
+          "jsCode": "\nconst candidates = $items(\"Check & Build Message\").filter(i => i.json && i.json.skipped === false);\nconst fresh = $items(\"Re-read Inquiries\").map(i => i.json || {});\n\nconst stillUnsent = new Map();\nfor (const r of fresh) {\n  stillUnsent.set(String(r.event_id ?? \"\"), String(r.link_sent ?? \"\").trim().toLowerCase() === \"false\");\n}\n\nconst keep = [];\nfor (const item of candidates) {\n  const id = String(item.json.event_id ?? \"\");\n  // Unknown id => row not found in the re-read; fail closed rather than double-send.\n  if (stillUnsent.get(id) === true) keep.push(item);\n}\nreturn keep;\n"
+        },
+        "name": "Confirm Still Unsent",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1120,
+          320
+        ],
+        "id": "524e7efd-7b32-486a-9bef-f19689e7de0b"
+      },
+      {
+        "parameters": {
+          "operation": "update",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Inquiries",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "event_id": "={{ $('Confirm Still Unsent').item.json.event_id }}",
+              "link_sent": "true",
+              "link_sent_at": "={{ $('Confirm Still Unsent').item.json.sent_at }}"
+            },
+            "matchingColumns": [
+              "event_id"
+            ],
+            "schema": [
+              {
+                "id": "person_id",
+                "displayName": "person_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_key",
+                "displayName": "property_key",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "cal_link",
+                "displayName": "cal_link",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "inquired_at",
+                "displayName": "inquired_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "link_sent",
+                "displayName": "link_sent",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "link_sent_at",
+                "displayName": "link_sent_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "source",
+                "displayName": "source",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "event_id",
+                "displayName": "event_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_address",
+                "displayName": "property_address",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "match_status",
+                "displayName": "match_status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "phone",
+                "displayName": "phone",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "email",
+                "displayName": "email",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "alert_sent",
+                "displayName": "alert_sent",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ],
+            "attemptToConvertTypes": false,
+            "convertFieldsToString": true
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "name": "Mark Inquiry Sent",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          1560,
+          420
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000,
+        "id": "9c1af44c-9b97-419a-b6e9-7b6ce22b9e87"
+      }
+    ],
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "node": "FUB - Get Person",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Read Text Log",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Read Settings",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Read Inquiries",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Get Person": {
+        "main": [
+          [
+            {
+              "node": "Wait For All",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Text Log": {
+        "main": [
+          [
+            {
+              "node": "Wait For All",
+              "type": "main",
+              "index": 1
+            }
+          ]
+        ]
+      },
+      "Wait For All": {
+        "main": [
+          [
+            {
+              "node": "Test Mode - Testerson Only",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Test Mode - Testerson Only": {
+        "main": [
+          [
+            {
+              "node": "Check & Build Message",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check & Build Message": {
+        "main": [
+          [
+            {
+              "node": "Should Send?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Should Send?": {
+        "main": [
+          [
+            {
+              "node": "Re-read Inquiries",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Send SMS": {
+        "main": [
+          [
+            {
+              "node": "Log to Text Log",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "FUB - Log Note",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Mark Inquiry Sent",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Settings": {
+        "main": [
+          [
+            {
+              "node": "Wait For All",
+              "type": "main",
+              "index": 2
+            }
+          ]
+        ]
+      },
+      "FUB - Update Cal Link": {
+        "main": [
+          [
+            {
+              "node": "FUB - Add Tag",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Add Tag": {
+        "main": [
+          []
+        ]
+      },
+      "Read Inquiries": {
+        "main": [
+          [
+            {
+              "node": "Wait For All",
+              "type": "main",
+              "index": 3
+            }
+          ]
+        ]
+      },
+      "Re-read Inquiries": {
+        "main": [
+          [
+            {
+              "node": "Confirm Still Unsent",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Confirm Still Unsent": {
+        "main": [
+          [
+            {
+              "node": "Send SMS",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "FUB - Update Cal Link",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Justin Artis",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-07-28T01:52:27.803Z",
+        "id": 203,
+        "workflowId": "UbO0l29GtILMm1sP",
+        "versionId": "90d66414-9d09-472f-9eda-f14de139081f",
+        "event": "deactivated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      },
+      {
+        "createdAt": "2026-07-28T01:52:27.813Z",
+        "id": 204,
+        "workflowId": "UbO0l29GtILMm1sP",
+        "versionId": "90d66414-9d09-472f-9eda-f14de139081f",
+        "event": "activated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    ]
+  }
+}
