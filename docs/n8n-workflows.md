@@ -35,11 +35,13 @@ status of everything below that can be checked programmatically.
 
 ### Blocking — the system does not serve real leads until these are done
 
-1. **Lift every test gate.** They are independent and in different forms;
-   lifting some but not all leaves the chain half-dead in a way that looks like
-   a bug rather than a config state. See "Test gate" for the full table and for
-   why the sweep's IF node is the easy one to miss. Four of them (Booking
-   Handler + Access Code Dispatch) come off in one command —
+1. **Lift every test gate — all 16, across 12 workflows.** They are
+   independent and in different forms; lifting some but not all leaves the
+   chain half-dead in a way that looks like a bug rather than a config state.
+   See "Test gate" for the full table, for why the sweep's IF node is the easy
+   one to miss, and for the two Cal.com ordering notes (lift Immediate Sends
+   before the Cron; `isTestBooking()` is a six-place edit). Four of them
+   (Booking Handler + Access Code Dispatch) come off in one command —
    `node scripts/n8n-add-access-test-gate.mjs --revert --apply`. Run
    `node scripts/launch-audit.mjs` afterwards and confirm `hardGates=0`
    everywhere.
@@ -50,7 +52,9 @@ status of everything below that can be checked programmatically.
    disables your own test path. See "Testing vs launch value".
 3. **Reassign the alert-phone placeholders** — `unmatched_inquiry_alert_phone`,
    `rental_application_alert_phone`, and `cal_send_failure_alert_phone` are
-   all still `+18038047847`, Andrew's personal number.
+   all still `+18038047847`, Andrew's personal number. `launch-audit.mjs`
+   checks all three as of 2026-08-07 (it previously checked only the first,
+   so two could have stayed pointed at a personal number after launch).
 4. **Add Properties rows for the live Zillow addresses that do not match** —
    `522 Temple Rd`, `296 Blue Haw Dr`, `5464 Crown Ave`. Those leads get
    nothing until the rows exist. (`2019 Codorus Ln #1` is deliberately
@@ -321,8 +325,29 @@ Verify with `node scripts/launch-audit.mjs`, which counts them:
 | `gR6FWXMcc08ps8LT` Booking Handler | `Build Showing Row` | computes `isTestLead` from **FUB** `firstName`, stamps `is_test` |
 | `gR6FWXMcc08ps8LT` Booking Handler | `Immediate? (Created)` | **IF node** — `isTestLead` condition |
 | `gR6FWXMcc08ps8LT` Booking Handler | `Build Cancel SMS` | early `skipped: 'not_test_mode'` |
+| `5LwTZS4dw5qmInL2` Cal Reminder Immediate | `Parse Booking`, `Classify & Build Row`, `Build Confirmation Email`, `Build Nicole Immediate Email`, `Build Cancellation Email`, `Parse Reschedule` | `isTestBooking()` — **6 copies, all must change** |
+| `3hGnl6mPnu2AMbZ1` Cal Reminder Cron | `Find Due Notifications` | reads the `is_test` column |
+| `X1lih7X05rpnTPmb` Zillow Rental Application | `Parse & Resolve Application` | `testGateOpen = isTestLead` (+ workflow is INACTIVE) |
 
-The last four come off together with
+**The bottom three were added to this table on 2026-08-07 and were previously
+missing from both the table and `launch-audit.mjs`.** That mattered: two of
+them are *active*, so lifting the eight gates the audit did report and seeing
+`hardGates=0` would have read as "ready to launch" while the entire Cal.com
+confirmation / reminder / follow-up chain stayed silently dead for real
+bookings. Same "half-dead in a way that looks like a bug" failure this section
+warns about, arriving through the audit's blind spot rather than a missed gate.
+The audit now covers all 12 workflows and reports **16** hard gates.
+
+Two ordering notes for the Cal.com pair:
+
+- **Lift Immediate Sends before the Cron.** The Cron reads the `is_test`
+  column that Immediate Sends stamps at log time, so lifting the Cron first
+  changes nothing — new rows keep arriving `is_test=true`.
+- `isTestBooking()` is **duplicated in six nodes** rather than defined once,
+  so it is a six-place edit. This is the one gate in the system that does not
+  follow the single-place-of-truth convention used everywhere else.
+
+The Booking Handler / Access Dispatch four come off together with
 `node scripts/n8n-add-access-test-gate.mjs --revert --apply` — see "Booking /
 access code test gate".
 

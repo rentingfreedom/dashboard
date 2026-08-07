@@ -52,6 +52,30 @@ const WORKFLOWS = {
   "DoorLoop Occupancy Sync": "4bMsEAi18j4CPK8k",
   "LEGACY peopleCreated": "Ih8zMmNeUwKvITGf",
   "LEGACY peopleUpdated": "HwXpYAqwbG1zwGls",
+  // Added 2026-08-07. These three carry test gates too and were previously
+  // absent from this audit — so lifting the eight gates it DID report and
+  // seeing hardGates=0 would have read as "ready" while the whole Cal.com
+  // confirmation/reminder/follow-up chain stayed dead for real bookings.
+  // That is the same "half-dead in a way that looks like a bug" failure the
+  // Test gate section warns about, arriving via the audit's blind spot
+  // rather than via a missed gate.
+  "Cal Reminder Immediate": "5LwTZS4dw5qmInL2",
+  "Cal Reminder Cron": "3hGnl6mPnu2AMbZ1",
+  "Zillow Rental Application": "X1lih7X05rpnTPmb",
+};
+
+// Workflows whose gate is NOT a firstName === "Test" check and so needs its
+// own note in the output — otherwise the count is right but the reader has no
+// idea what to actually change.
+const GATE_NOTES = {
+  "Cal Reminder Immediate":
+    'isTestBooking() — person 2545 OR merritt.andrewt@gmail.com. DUPLICATED in 6 nodes; all 6 must change.',
+  "Cal Reminder Cron":
+    'reads the is_test column that Immediate Sends stamps at log time — lift Immediate first, or rows stay is_test=true.',
+  "Zillow Rental Application":
+    'testGateOpen = isTestLead in Parse & Resolve Application. Workflow is also INACTIVE — activating it is a separate step.',
+  "Access Code Dispatch":
+    'reads the is_test column stamped by the Booking Handler — comes off with n8n-add-access-test-gate.mjs --revert.',
 };
 
 // Cast a WIDE net for anything test-related, then classify. Under-reporting is
@@ -59,17 +83,31 @@ const WORKFLOWS = {
 // after launch. An earlier version of this regex required `firstName ===
 // "Test"` adjacently and so missed the Identity Gate, whose code reads
 // `(person.firstName || "") === "Test"`.
-const MENTIONS_TEST = /isTestMode|isTestLead|testGateOpen|isTestShowing|ACCESS_GATE_MARKER|firstName|Testerson|"rightValue"\s*:\s*"Test"/;
+// isTestBooking / 2545 / merritt.andrewt cover the Cal.com Reminder System,
+// whose gate keys off Cal.com booking metadata rather than a FUB firstName —
+// none of the FUB-shaped patterns above match it.
+// `\.is_test` (property ACCESS, e.g. `row.is_test`) is a gate. A bare quoted
+// "is_test" is a COLUMN NAME — it appears in every Sheets column mapping and
+// in the Cron's CB_COLS header list, neither of which is a gate and neither of
+// which goes away at launch. Matching the bare string made hardGates=0
+// unreachable, which is its own failure: an operator who can never hit zero
+// stops trusting the number.
+const MENTIONS_TEST = /isTestMode|isTestLead|testGateOpen|isTestShowing|ACCESS_GATE_MARKER|firstName|Testerson|isTestBooking|\.is_test\b|merritt\.andrewt|'2545'|"2545"|"rightValue"\s*:\s*"Test"/;
 // A hard gate drops non-Test leads outright. Everything else is flagged for
 // human review rather than assumed harmless.
 // ACCESS_GATE_MARKER covers the Booking Handler / Access Code Dispatch gate
 // added 2026-07-31 — its code nodes drop non-Test rows outright, and the
 // `Immediate? (Created)` IF carries an isTestLead condition with a boolean
 // rightValue, so neither matches the `"rightValue": "Test"` string form.
-const HARD_GATE = /not_test_mode|testGateOpen|isTestShowing|isTestLead|ACCESS_GATE_MARKER|"rightValue"\s*:\s*"Test"/;
+const HARD_GATE = /not_test_mode|testGateOpen|isTestShowing|isTestLead|ACCESS_GATE_MARKER|isTestBooking|\.is_test\b|"rightValue"\s*:\s*"Test"/;
 
 function classify(node) {
   const blob = JSON.stringify(node.parameters ?? {});
+  // A Google Sheets node never gates anything — it reads or writes the
+  // is_test COLUMN. The column is data and stays after launch. Excluding
+  // these keeps the count equal to the number of things a human must
+  // actually edit.
+  if (node.type.includes("googleSheets")) return null;
   if (!MENTIONS_TEST.test(blob)) return null;
   return HARD_GATE.test(blob) ? "HARD GATE" : "mention — review";
 }
@@ -98,6 +136,7 @@ for (const [label, id] of Object.entries(WORKFLOWS)) {
   for (const { node, kind } of flagged) {
     console.log(`        · [${kind}] ${node.name} [${node.type.replace("n8n-nodes-base.", "")}]`);
   }
+  if (GATE_NOTES[label] && hard.length) console.log(`        ↳ ${GATE_NOTES[label]}`);
 }
 
 // ─── Settings ────────────────────────────────────────────────────────────────
@@ -123,9 +162,24 @@ const hasTestStage = allowed.toLowerCase().includes("incoming rental leads");
 console.log(`  allowed_stages                ${hasTestStage ? "⚠ includes 'Incoming Rental Leads' (testing value)" : "✓ production value"}`);
 console.log(`      ${allowed}`);
 
-const alertPhone = settings.unmatched_inquiry_alert_phone ?? "";
-const isAndrews = alertPhone.replace(/\D/g, "").endsWith("8038047847");
-console.log(`  unmatched_inquiry_alert_phone ${isAndrews ? "⚠ still Andrew's personal number" : "✓ reassigned"}  (${alertPhone})`);
+// All THREE placeholder alert phones, not just the first. The checklist names
+// three; this used to check one, so two could silently stay pointed at a
+// personal number after launch.
+const ALERT_PHONE_KEYS = [
+  "unmatched_inquiry_alert_phone",
+  "rental_application_alert_phone",
+  "cal_send_failure_alert_phone",
+];
+const unreassigned = [];
+for (const k of ALERT_PHONE_KEYS) {
+  const v = settings[k] ?? "";
+  const stillAndrews = v.replace(/\D/g, "").endsWith("8038047847");
+  if (stillAndrews) unreassigned.push(k);
+  console.log(
+    `  ${k.padEnd(30)}${stillAndrews ? "⚠ still Andrew's personal number" : v ? "✓ reassigned" : "· unset"}  (${v || "—"})`
+  );
+}
+const isAndrews = unreassigned.length > 0;
 
 console.log(`  inquiry_flow_start_at         ${settings.inquiry_flow_start_at ?? "(unset)"}`);
 console.log(`  rejected_stage_label          ${settings.rejected_stage_label ?? "(unset)"}  — inert by decision; no such stage exists`);
@@ -134,7 +188,10 @@ console.log(`  rejected_stage_label          ${settings.rejected_stage_label ?? 
 console.log("\n── Blocking on automation ─────────────────────────────────────────────");
 console.log(`  ${testGateTotal > 0 ? "⚠" : "✓"} ${testGateTotal} test gate(s) still present`);
 console.log(`  ${hasTestStage ? "⚠" : "✓"} allowed_stages ${hasTestStage ? "still on testing value" : "on production value"}`);
-console.log(`  ${isAndrews ? "⚠" : "✓"} unmatched alert phone ${isAndrews ? "not reassigned" : "reassigned"}`);
+console.log(
+  `  ${isAndrews ? "⚠" : "✓"} ${unreassigned.length} of ${ALERT_PHONE_KEYS.length} alert phone(s) not reassigned` +
+    (isAndrews ? `: ${unreassigned.join(", ")}` : "")
+);
 
 console.log("\n── Cannot be checked here (manual) ────────────────────────────────────");
 console.log("  · Properties rows for live Zillow addresses with no match");
