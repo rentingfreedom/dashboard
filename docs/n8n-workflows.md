@@ -1894,6 +1894,150 @@ go through the Next.js app's API.
   `42 Peppertree Lane` unit have wrong `address` fields in DoorLoop and are
   deliberately unmatched. They need a client-side DoorLoop data fix, not code.
 
+### Reconciliation report on the "Sync now" button (2026-08-07)
+
+The dashboard's **Sync now** button now returns a read-only report of what a
+human still needs to do about properties that exist on one side and not the
+other. The occupancy write itself is unchanged.
+
+**Three categories, and the distinction between them is the whole point:**
+
+| Category | Meaning | Count on 2026-08-07 |
+|---|---|---|
+| `create` | DoorLoop unit with **no dashboard row at all** | 5 |
+| `link` | Dashboard row exists but `doorloop_property_id` is empty | 0 (was 8â€“13) |
+| `remove` | Row points at a unit DoorLoop **no longer returns** | 0 |
+| `known` | Blocked on DoorLoop data / excluded by design / orphan rows | 16 |
+
+> **A naive unit-id set difference is wrong and dangerous here.** It reports
+> **19** "create" items, because it cannot tell an *unlinked* row from a
+> *missing* one â€” 13 of those 19 already had a dashboard row. Telling the
+> client to create them would produce duplicates. The report therefore does
+> full address matching (exact, then suffix-only core match) before deciding
+> that something is genuinely missing.
+>
+> Equally, **an unlinked row is NOT a removal candidate.** 15 rows had no
+> DoorLoop unit at match time, but almost all were suffix spelling
+> differences ("102 Braeford" vs DoorLoop "102 Braeford Ct"). A report saying
+> "remove these 15" would invite deleting live properties. `remove` is
+> populated *only* from rows whose non-empty `doorloop_property_id` is absent
+> from the units response â€” the same `stale` signal `Compute Occupancy`
+> already computed and only ever logged.
+
+**Known/blocked items are shown, not omitted** â€” collapsed behind a
+"Known â€” no action needed (N)" line that expands to each item and its reason.
+Omitting them means that when the client fixes a DoorLoop address, nothing
+visibly changes and nobody can tell "suppressed" from "matched".
+
+**Workflow changes** (`4bMsEAi18j4CPK8k`, 7 nodes â†’ 9):
+
+1. New `Fetch Properties` node (DoorLoop `/properties`) between
+   `Fetch Active Leases` and `Read Properties`. The report needs parent
+   property *names* to apply the client's exclusion rules; the sync never did.
+2. New `Build Reconciliation Report` Code node **after**
+   `Write Status to Properties`, so it is the last node to run.
+   `onError: continueRegularOutput` â€” read-only bookkeeping must never be able
+   to fail a sync that has already written (gotcha 19).
+
+   **Button-only, by client preference (2026-08-07).** The node short-circuits
+   on the hourly schedule run and returns
+   `{ skipped: 'scheduled_run', status_rows_written: N }` instead of a list.
+   Trigger detection is `try { $('Manual Sync Trigger').all().length > 0 }
+   catch { false }` â€” referencing a node that never executed throws, and the
+   schedule path never executes the webhook node. There is nobody to hand the
+   report to on a cron run, and an hourly "properties to create" list that no
+   human reads is exactly the kind of output that goes stale unnoticed.
+
+   Consequence for the verify scripts: they must stub `Manual Sync Trigger` in
+   the `$` context or the report short-circuits and the preview comes back
+   empty. Both already do.
+3. `Manual Sync Trigger` `responseMode`: `onReceived` â†’ **`lastNode`**, so the
+   dashboard's POST gets the report as the HTTP response. Deliberately *not* a
+   `Respond to Webhook` node â€” `lastNode` is inert on the `Every Hour`
+   schedule path, where there is no webhook to respond to.
+
+`Compute Occupancy` and `Write Status to Properties` are **not** touched.
+
+**Source of truth is `n8n/doorloop-recon-report.js`**, not the builder script â€”
+so the verifier can execute the same file the workflow runs.
+`normAddr` / `coreAddr` / `SUFFIXES` / `EXCLUDED_PROPERTY_NAMES` /
+`findUntrustworthyUnits` are ported **verbatim** from `scripts/doorloop-match.mjs`.
+**If that file's matching rules change, change them here too** or the report and
+the matcher will disagree about what counts as linked.
+
+```bash
+node scripts/doorloop-recon-verify.mjs           # run the local report source
+node scripts/doorloop-recon-verify.mjs --live    # run the code deployed in n8n
+node scripts/doorloop-recon-cases.mjs            # 18 case assertions
+node scripts/n8n-add-doorloop-recon.mjs          # dry run
+node scripts/n8n-add-doorloop-recon.mjs --apply
+node scripts/n8n-add-doorloop-recon.mjs --revert --apply
+```
+
+`--live` also diffs the deployed `jsCode` against the local file, which is the
+check to run after editing the report. Backup in `n8n/BEFORE-doorloop-recon/`.
+
+`doorloop-recon-cases.mjs` exists because **live data leaves `link` and
+`remove` empty**, so a live run proves nothing about either branch â€” the two
+categories most likely to cause harm if wrong. It re-runs the report against
+live data with small in-memory mutations (clear one row's id; point one row at
+a dangling id; fake a truncated page; omit `Manual Sync Trigger` to simulate a
+cron run) and asserts the classification. **21 assertions**, all passing.
+
+**Known divergence from `doorloop-match.mjs`, and it is intentional.** The
+matcher reports 7 blocked units; the report shows 6. `7636 Winchester st B` is
+already linked **by id** (row 49), so the report skips it â€” a direct id link
+does not depend on address matching at all, and needs no action. The matcher
+answers "is this address matchable?"; the report answers "is this linked?".
+
+**The `link` category was emptied on 2026-08-07** by running
+`node scripts/doorloop-match.mjs --apply --accept-near-matches`, which wrote
+`doorloop_property_id` to 8 rows (column Z only, zero overwrites,
+`ambiguous=0 collisions=0`). Sheet rows now 61 linked / 6 unlinked, and
+`Compute Occupancy` writes 61 rows instead of 53.
+
+The 8 written were rows **10, 59, 63, 64, 65, 66, 67, 68** â€” `121 Marinella dr`,
+`42 Peppertree Lane`, `296 Blue Haw Drive`, `12 Lighthouse Drive`,
+`103 Cardinal Flower Court`, `165 River Hill Road`, `214 Devonshire Drive`,
+`5464 Crown Avenue`. These were **exact** address matches whose id had simply
+never been written (rows 61â€“68 were added to the sheet after the last
+`--apply`). The eight *near-match* pairs the matcher reports (rows 2, 27, 28,
+34, 38, 44, 47, 55) already held correct ids and needed no write â€” the matcher
+keeps listing them as "near" because their sheet address still differs from
+DoorLoop's by a street suffix, which id-linking does not change.
+
+**Two statuses changed as a result**: `296 Blue Haw Drive` and
+`12 Lighthouse Drive` went `vacant` â†’ `occupied`, because linking handed their
+status to DoorLoop, which reports both occupied. Neither had a
+`status_override`. Correct outcome, but worth knowing that linking a row is not
+always status-neutral â€” check `doorloop-sync-preview.mjs` before linking rows
+whose manual status you care about.
+
+Note `42 Peppertree Lane` linked cleanly, so the "Blocked units" bullet above is
+**out of date for that unit** â€” its DoorLoop address has since been fixed. The
+Tyler Portfolio units remain genuinely blocked.
+
+**Next.js side:** `src/app/api/properties/sync-doorloop/route.ts` now *waits*
+for the workflow rather than firing and forgetting, so it carries
+`maxDuration = 60` and a 45s `AbortSignal.timeout`. The ceiling is Sheets quota
+retries (5 Ã— 15s), not normal runtime â€” a live run is ~2s. On timeout it
+returns `{started: true, report: null, timedOut: true}`: the sync is still
+running in n8n and its write still lands, only the report is abandoned.
+
+**Verified live 2026-08-07:** executions 14669 and 14670, both `success`, all 8
+nodes (`Fetch Properties=1`, `Build Reconciliation Report=1`). The webhook
+returned the full report body over HTTP in ~2.1s, matching
+`doorloop-recon-verify.mjs` exactly: `create=5 link=0 remove=0 known=16`
+(6 blocked, 4 excluded, 6 orphan). **Not yet observed:** an `Every Hour`
+schedule run after the patch â€” the 19:00 tick predates it. The schedule path
+shares the same linear chain and `responseMode` does not apply to it, so the
+expected result is an unchanged 61-row write plus one extra no-op report node.
+
+`522 Temple Rd` correctly appears as **blocked, not missing** â€” contradicting
+pre-launch checklist item 4, which says to add a Properties row for it. It is
+one of two units at `7636 Winchester st LLC` sharing an identical address in
+DoorLoop, so adding a row will not help until the client fixes that address.
+
 ## Cal.com Reminder System
 
 Replaces Calendly's built-in Workflows (confirmation/cancellation/reminder/

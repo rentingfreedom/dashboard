@@ -10,8 +10,9 @@ import { AddPropertyDialog } from "@/components/properties/add-property-dialog";
 import { EditPropertyDrawer } from "@/components/properties/edit-property-drawer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import type { Property, Lockbox } from "@/lib/types";
+import type { Property, Lockbox, DoorLoopReconReport } from "@/lib/types";
 import { useRole } from "@/lib/auth/use-role";
+import { DoorLoopReconPanel } from "@/components/properties/doorloop-recon-panel";
 
 export default function PropertiesPage() {
   const { canWrite, isAdmin } = useRole();
@@ -23,6 +24,7 @@ export default function PropertiesPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [editProperty, setEditProperty] = useState<Property | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [recon, setRecon] = useState<DoorLoopReconReport | null>(null);
 
   const workflowBusy = properties.some(
     (p) => p.provisioning_status === "pending_create" || p.provisioning_status === "pending_delete"
@@ -64,15 +66,41 @@ export default function PropertiesPage() {
 
   async function handleSyncNow() {
     setSyncing(true);
+    setRecon(null);
     try {
+      // The route now waits for the workflow and returns its reconciliation
+      // report, so this resolves once the sync has actually finished writing.
       const res = await fetch("/api/properties/sync-doorloop", { method: "POST" });
       if (!res.ok) {
         const { error } = await res.json();
         toast.error(error ?? "Failed to trigger sync");
         return;
       }
-      toast.success("Sync started — this takes a few seconds");
-      setTimeout(() => load(true), 4000);
+      const { report, timedOut } = (await res.json()) as {
+        report: DoorLoopReconReport | null;
+        timedOut?: boolean;
+      };
+
+      if (timedOut) {
+        // The sync is still running in n8n; only the report was abandoned.
+        toast.warning("Sync is taking longer than usual — statuses will still update");
+      } else if (!report) {
+        toast.success("Sync complete — statuses updated");
+      } else {
+        setRecon(report);
+        const actionable =
+          report.counts.create + report.counts.link + report.counts.remove;
+        if (!report.ok) {
+          toast.error("Sync ran, but reconciliation could not be completed");
+        } else if (actionable === 0) {
+          toast.success("Sync complete — DoorLoop and the dashboard match");
+        } else {
+          toast.warning(
+            `Sync complete — ${actionable} propert${actionable === 1 ? "y" : "ies"} to review`
+          );
+        }
+      }
+      load(true);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to trigger sync");
     } finally {
@@ -111,10 +139,16 @@ export default function PropertiesPage() {
                   onClick={handleSyncNow}
                   disabled={syncing}
                   className="h-8"
-                  title="Trigger the DoorLoop occupancy sync immediately instead of waiting for the hourly run"
+                  title={
+                    "Run the DoorLoop sync now instead of waiting for the hourly run.\n\n" +
+                    "Updates each property's vacant/occupied status from DoorLoop, then reports " +
+                    "any properties that are in DoorLoop but missing from the dashboard, and any " +
+                    "dashboard properties whose DoorLoop unit no longer exists.\n\n" +
+                    "The report is read-only — nothing is created or deleted for you."
+                  }
                 >
                   <Satellite className="h-3.5 w-3.5 mr-1.5" />
-                  {syncing ? "Starting…" : "Sync now"}
+                  {syncing ? "Syncing…" : "Sync now"}
                 </Button>
                 <SyncFreshness syncedAt={newestDoorLoopSync} />
               </div>
@@ -141,6 +175,7 @@ export default function PropertiesPage() {
           <ErrorState message={error} onRetry={() => load()} />
         ) : (
           <>
+            {recon && <DoorLoopReconPanel report={recon} onDismiss={() => setRecon(null)} />}
             <StatCards properties={properties} />
             <PropertiesTable
               properties={properties}

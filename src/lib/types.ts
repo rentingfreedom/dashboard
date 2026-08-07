@@ -179,6 +179,54 @@ export interface CreateLockboxInput {
 
 // ─── Misc ────────────────────────────────────────────────────────────────────
 
+/**
+ * Reconciliation report returned by the DoorLoop sync webhook.
+ *
+ * Read-only: the sync writes occupancy, this describes what a human still needs
+ * to do about properties that exist on one side and not the other. Shape is
+ * produced by the `Build Reconciliation Report` node — source of truth is
+ * `n8n/doorloop-recon-report.js`.
+ */
+export interface DoorLoopReconItem {
+  label: string;
+  address?: string;
+  unit_id?: string;
+  property_name?: string;
+}
+
+export interface DoorLoopReconRow {
+  row: number | null;
+  property_key: string;
+  street_address: string;
+  unit_id: string;
+  doorloop_address?: string;
+  label?: string;
+  /** `exact` — addresses match outright. `suffix` — differ only by street suffix. */
+  confidence?: "exact" | "suffix";
+}
+
+export interface DoorLoopReconKnown {
+  /** `blocked` needs a DoorLoop data fix; the rest need nothing. */
+  kind: "blocked" | "excluded" | "orphan" | "ambiguous" | "skipped";
+  label: string;
+  reason: string;
+}
+
+export interface DoorLoopReconReport {
+  ok: boolean;
+  generated_at: string;
+  status_rows_written: number;
+  counts: { create: number; link: number; remove: number; known: number };
+  /** In DoorLoop, no dashboard row at all. */
+  create: DoorLoopReconItem[];
+  /** Dashboard row exists but carries no `doorloop_property_id`. */
+  link: DoorLoopReconRow[];
+  /** Row points at a unit DoorLoop no longer returns. The only removal signal. */
+  remove: DoorLoopReconRow[];
+  known: DoorLoopReconKnown[];
+  error?: string;
+}
+
 export interface SheetsConnectionStatus {
   connected: boolean;
   spreadsheetId: string;
