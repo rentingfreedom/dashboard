@@ -35,16 +35,46 @@ status of everything below that can be checked programmatically.
 
 ### Blocking — the system does not serve real leads until these are done
 
-1. **Lift every test gate — all 16, across 12 workflows.** They are
-   independent and in different forms; lifting some but not all leaves the
-   chain half-dead in a way that looks like a bug rather than a config state.
-   See "Test gate" for the full table, for why the sweep's IF node is the easy
-   one to miss, and for the two Cal.com ordering notes (lift Immediate Sends
-   before the Cron; `isTestBooking()` is a six-place edit). Four of them
-   (Booking Handler + Access Code Dispatch) come off in one command —
-   `node scripts/n8n-add-access-test-gate.mjs --revert --apply`. Run
-   `node scripts/launch-audit.mjs` afterwards and confirm `hardGates=0`
-   everywhere.
+1. **Lift every test gate — all 16, across 12 workflows.**
+
+   > **Do not hand-edit the gate nodes. Run the scripts, in this order.**
+   > They are idempotent, they refuse to patch anything whose expected text
+   > they can't find, and they write backups. Hand-editing 16 gates in 12
+   > workflows is how you end up with the chain half-lifted — which looks
+   > like a bug rather than a config state, and is the single most likely
+   > way to break this launch.
+
+   ```bash
+   # 1. What would fire the moment the gates come off? Read-only.
+   node scripts/launch-backlog-check.mjs
+
+   # 2. Review what will change. Changes nothing.
+   node scripts/n8n-lift-test-gates.mjs
+
+   # 3. THE change — 6 gates across 5 workflows + the sweep.
+   #    Refuses to run without --confirm-live. Real SMS/email follow.
+   node scripts/n8n-lift-test-gates.mjs --apply --confirm-live
+
+   # 4. The remaining 4 (Booking Handler + Access Code Dispatch),
+   #    owned by their own script because it owns their backups.
+   node scripts/n8n-add-access-test-gate.mjs --revert --apply
+
+   # 5. Verify. Expect hardGates=0 on every workflow.
+   node scripts/launch-audit.mjs
+   ```
+
+   Undo for step 3 is `node scripts/n8n-lift-test-gates.mjs --revert --apply`;
+   for step 4 it is the same script without `--revert`. Neither undoes an SMS
+   already sent.
+
+   Background if you need it: "Test gate" has the full 16-row table, why the
+   sweep's IF node is the easy one to miss, and the two Cal.com ordering notes
+   (Immediate Sends must be lifted before the Cron; `isTestBooking()` is a
+   six-place edit). "Launch tooling" explains the two judgment calls the lift
+   script bakes in — neither is obvious, and both are easy to get wrong by
+   hand. As of 2026-08-07 the lift script is **dry-run verified only**: its
+   `--apply` and `--revert` paths have never executed, so run step 3 with a
+   human watching and follow one real lead end to end before trusting the rest.
 2. **Set `allowed_stages` to the production value** —
    `node scripts/stage-gate-setup.mjs --production --apply`. Client confirmed
    2026-07-28 that `Incoming Rental Leads` must not be live. **Move Test Test9
