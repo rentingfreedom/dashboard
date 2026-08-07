@@ -1,0 +1,1115 @@
+{
+  "updatedAt": "2026-08-04T13:25:10.575Z",
+  "createdAt": "2026-07-24T12:36:41.083Z",
+  "id": "L13GUyrWbjSJwn8p",
+  "name": "RentingFreedom Production - Identity Verification Gate",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "idv-webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        208
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "phone-added-send-text",
+        "options": {}
+      },
+      "webhookId": "phone-added-send-text"
+    },
+    {
+      "id": "idv-get-person",
+      "name": "FUB - Get Person",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        208
+      ],
+      "parameters": {
+        "url": "={{ $json.body.uri }}&fields=allFields",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "id": "idv-read-settings",
+      "name": "Read Settings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        208
+      ],
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Settings",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "id": "idv-read-identity-log",
+      "name": "Read Identity Verifications",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        448,
+        208
+      ],
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Identity_Verifications",
+          "mode": "name"
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "eB6JrDkriJ1BATPy",
+          "name": "RF Dashboard Service Account (Project 2, Sheets)"
+        }
+      },
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "id": "idv-check-guards",
+      "name": "Check Guards",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        208
+      ],
+      "parameters": {
+        "jsCode": "const person = $items(\"FUB - Get Person\")[0]?.json?.people?.[0] || {};\nconst settingsRows = $items(\"Read Settings\").map(i => i.json || {});\nconst identityRows = $items(\"Read Identity Verifications\").map(i => i.json || {});\nconst originalBody = $(\"Webhook\").first().json.body || {};\n\nconst settings = {};\nfor (const row of settingsRows) {\n  if (row.key && row.value !== undefined) settings[row.key] = row.value;\n}\n\nconst rejectedLabel = (settings.rejected_stage_label || \"Rejected\").trim().toLowerCase();\nconst stage = (person.stage || \"\").trim();\nconst phone = person.phones?.[0]?.value;\n\nfunction fail(reason) {\n  return [{ json: {\n    proceed: false, reason,\n    person_id: person.id ? String(person.id) : \"\",\n    person_name: person.name || \"\",\n  } }];\n}\n\n// Same safeguard as the existing SMS workflow: only proceed for synthetic\n// test leads until this is validated end-to-end on real applicants.\nconst isTestMode = (person.firstName || \"\") === \"Test\";\nif (!isTestMode) return fail(\"not_test_mode\");\n\nif (!phone) return fail(\"no_phone\");\n\n// ── TRASH_GATE_MARKER: hard block, independent of allowed_stages ──────────\nif (stage.toLowerCase() === \"trash\") return fail(\"stage_trash\");\n\nif (stage.toLowerCase() === rejectedLabel) return fail(\"rejected_stage\");\n\n// ── STAGE_GATE_MARKER: FUB stage gate ────────────────────────────────────────────\n// A lead outside the allowed stages never gets a verification SMS.\n// Empty / missing allowed_stages == allow everything, so losing the Settings\n// row degrades to the pre-gate behaviour rather than muting the whole system.\nconst allowedStages = String(settings.allowed_stages ?? \"\")\n  .split(\",\")\n  .map((s) => s.trim().toLowerCase())\n  .filter(Boolean);\n// Sheets coerces on write and the stage names contain punctuation and mixed\n// case (\"Tenant Inquiry Lead (Do Not Contact)\"), so compare normalized.\nconst personStage = String(person.stage ?? \"\").trim().toLowerCase();\nconst stageAllowed = allowedStages.length === 0 || allowedStages.includes(personStage);\n\nif (!stageAllowed) return fail(\"stage_not_allowed:\" + stage);\n\n\n// Test-mode leads are reused indefinitely for end-to-end testing, so\n// don't let a prior session block a fresh test run.\nconst alreadySent = identityRows.some(r => String(r.lead_id) === String(person.id));\nif (!isTestMode && alreadySent) return fail(\"already_sent\");\n\nconst digits = phone.replace(/\\D/g, \"\");\nconst toNumber = digits.length === 10 ? `+1${digits}` : `+${digits}`;\n\nreturn [{ json: {\n  proceed: true,\n  reason: \"ok\",\n  person_id: String(person.id),\n  person_name: person.name || \"\",\n  first_name: person.firstName || person.name || \"\",\n  email: person.emails?.[0]?.value || \"\",\n  stage,\n  phone: toNumber,\n  from_number: settings.from_number || \"\",\n  identity_sms_template: settings.identity_verification_sms_template || \"\",\n  original_webhook_body: JSON.stringify(originalBody),\n} }];"
+      }
+    },
+    {
+      "id": "idv-should-proceed",
+      "name": "Should Proceed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        896,
+        208
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.proceed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "idv-create-session",
+      "name": "Create Stripe Identity Session",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        112
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://dashboard.rentingfreedom.com/api/identity/create-session",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead_id: $json.person_id, lead_name: $json.person_name, phone: $json.phone, email: $json.email, stage: $json.stage, source: \"fub_phone_added\" }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "LstfkvTtbGOIQdtO",
+          "name": "RF Dashboard Internal API"
+        }
+      }
+    },
+    {
+      "id": "idv-build-sms",
+      "name": "Build Verification SMS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        112
+      ],
+      "parameters": {
+        "jsCode": "const guard = $(\"Check Guards\").first().json;\nconst session = $json;\n\nconst template = guard.identity_sms_template ||\n  \"Hi {{first_name}}, before we can schedule your showing we need to quickly verify your ID. Please complete this short verification: {{verify_link}}\";\n\nconst message = template\n  .replace(/\\{\\{first_name\\}\\}/g, guard.first_name || \"\")\n  .replace(/\\{\\{verify_link\\}\\}/g, session.url || \"\");\n\nreturn [{ json: {\n  message,\n  phone: guard.phone,\n  from_number: guard.from_number,\n  session_id: session.sessionId,\n  person_id: guard.person_id,\n  person_name: guard.person_name,\n  original_webhook_body: guard.original_webhook_body,\n  sent_at: new Date().toISOString(),\n} }];"
+      }
+    },
+    {
+      "id": "idv-send-sms",
+      "name": "Send Verification SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        1568,
+        112
+      ],
+      "parameters": {
+        "from": "={{ $json.from_number }}",
+        "to": "={{ $json.phone }}",
+        "message": "={{ $json.message }}",
+        "options": {}
+      },
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      }
+    },
+    {
+      "id": "idv-log-sheet",
+      "name": "Log to Identity Verifications",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1792,
+        112
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Identity_Verifications",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "session_id": "={{ $('Build Verification SMS').first().json.session_id }}",
+            "lead_id": "={{ $('Build Verification SMS').first().json.person_id }}",
+            "lead_name": "={{ $('Build Verification SMS').first().json.person_name }}",
+            "phone": "={{ $('Build Verification SMS').first().json.phone }}",
+            "original_webhook_body": "={{ $('Build Verification SMS').first().json.original_webhook_body }}",
+            "status": "pending",
+            "sent_at": "={{ $('Build Verification SMS').first().json.sent_at }}",
+            "resolved_at": "",
+            "error_code": "",
+            "error_reason": ""
+          },
+          "schema": [
+            {
+              "id": "session_id",
+              "displayName": "session_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "lead_id",
+              "displayName": "lead_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "lead_name",
+              "displayName": "lead_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "original_webhook_body",
+              "displayName": "original_webhook_body",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sent_at",
+              "displayName": "sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "resolved_at",
+              "displayName": "resolved_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "error_code",
+              "displayName": "error_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "error_reason",
+              "displayName": "error_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "eB6JrDkriJ1BATPy",
+          "name": "RF Dashboard Service Account (Project 2, Sheets)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "id": "gate-fub-note",
+      "name": "FUB - Log Note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1568,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Build Verification SMS').first().json.person_id), body: 'Automated SMS sent (ID verification):\\n\\n' + $('Build Verification SMS').first().json.message }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "FUB - Get Person",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Get Person": {
+      "main": [
+        [
+          {
+            "node": "Read Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Settings": {
+      "main": [
+        [
+          {
+            "node": "Read Identity Verifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Identity Verifications": {
+      "main": [
+        [
+          {
+            "node": "Check Guards",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Guards": {
+      "main": [
+        [
+          {
+            "node": "Should Proceed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Proceed?": {
+      "main": [
+        [
+          {
+            "node": "Create Stripe Identity Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Stripe Identity Session": {
+      "main": [
+        [
+          {
+            "node": "Build Verification SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Verification SMS": {
+      "main": [
+        [
+          {
+            "node": "Send Verification SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Verification SMS": {
+      "main": [
+        [
+          {
+            "node": "FUB - Log Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Log Note": {
+      "main": [
+        [
+          {
+            "node": "Log to Identity Verifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "9ea7d6f3-d23e-4b21-a670-0b527bfb0151",
+  "activeVersionId": "9ea7d6f3-d23e-4b21-a670-0b527bfb0151",
+  "versionCounter": 12,
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-07-24T12:36:41.083Z",
+      "createdAt": "2026-07-24T12:36:41.083Z",
+      "role": "workflow:owner",
+      "workflowId": "L13GUyrWbjSJwn8p",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-08-04T13:25:10.576Z",
+    "createdAt": "2026-08-04T13:25:10.576Z",
+    "versionId": "9ea7d6f3-d23e-4b21-a670-0b527bfb0151",
+    "workflowId": "L13GUyrWbjSJwn8p",
+    "nodes": [
+      {
+        "id": "idv-webhook",
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          -224,
+          208
+        ],
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "phone-added-send-text",
+          "options": {}
+        },
+        "webhookId": "phone-added-send-text"
+      },
+      {
+        "id": "idv-get-person",
+        "name": "FUB - Get Person",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          0,
+          208
+        ],
+        "parameters": {
+          "url": "={{ $json.body.uri }}&fields=allFields",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        }
+      },
+      {
+        "id": "idv-read-settings",
+        "name": "Read Settings",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          224,
+          208
+        ],
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Settings",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "alwaysOutputData": true,
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "id": "idv-read-identity-log",
+        "name": "Read Identity Verifications",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          448,
+          208
+        ],
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Identity_Verifications",
+            "mode": "name"
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "credentials": {
+          "googleApi": {
+            "id": "eB6JrDkriJ1BATPy",
+            "name": "RF Dashboard Service Account (Project 2, Sheets)"
+          }
+        },
+        "alwaysOutputData": true,
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "id": "idv-check-guards",
+        "name": "Check Guards",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          672,
+          208
+        ],
+        "parameters": {
+          "jsCode": "const person = $items(\"FUB - Get Person\")[0]?.json?.people?.[0] || {};\nconst settingsRows = $items(\"Read Settings\").map(i => i.json || {});\nconst identityRows = $items(\"Read Identity Verifications\").map(i => i.json || {});\nconst originalBody = $(\"Webhook\").first().json.body || {};\n\nconst settings = {};\nfor (const row of settingsRows) {\n  if (row.key && row.value !== undefined) settings[row.key] = row.value;\n}\n\nconst rejectedLabel = (settings.rejected_stage_label || \"Rejected\").trim().toLowerCase();\nconst stage = (person.stage || \"\").trim();\nconst phone = person.phones?.[0]?.value;\n\nfunction fail(reason) {\n  return [{ json: {\n    proceed: false, reason,\n    person_id: person.id ? String(person.id) : \"\",\n    person_name: person.name || \"\",\n  } }];\n}\n\n// Same safeguard as the existing SMS workflow: only proceed for synthetic\n// test leads until this is validated end-to-end on real applicants.\nconst isTestMode = (person.firstName || \"\") === \"Test\";\nif (!isTestMode) return fail(\"not_test_mode\");\n\nif (!phone) return fail(\"no_phone\");\n\n// ── TRASH_GATE_MARKER: hard block, independent of allowed_stages ──────────\nif (stage.toLowerCase() === \"trash\") return fail(\"stage_trash\");\n\nif (stage.toLowerCase() === rejectedLabel) return fail(\"rejected_stage\");\n\n// ── STAGE_GATE_MARKER: FUB stage gate ────────────────────────────────────────────\n// A lead outside the allowed stages never gets a verification SMS.\n// Empty / missing allowed_stages == allow everything, so losing the Settings\n// row degrades to the pre-gate behaviour rather than muting the whole system.\nconst allowedStages = String(settings.allowed_stages ?? \"\")\n  .split(\",\")\n  .map((s) => s.trim().toLowerCase())\n  .filter(Boolean);\n// Sheets coerces on write and the stage names contain punctuation and mixed\n// case (\"Tenant Inquiry Lead (Do Not Contact)\"), so compare normalized.\nconst personStage = String(person.stage ?? \"\").trim().toLowerCase();\nconst stageAllowed = allowedStages.length === 0 || allowedStages.includes(personStage);\n\nif (!stageAllowed) return fail(\"stage_not_allowed:\" + stage);\n\n\n// Test-mode leads are reused indefinitely for end-to-end testing, so\n// don't let a prior session block a fresh test run.\nconst alreadySent = identityRows.some(r => String(r.lead_id) === String(person.id));\nif (!isTestMode && alreadySent) return fail(\"already_sent\");\n\nconst digits = phone.replace(/\\D/g, \"\");\nconst toNumber = digits.length === 10 ? `+1${digits}` : `+${digits}`;\n\nreturn [{ json: {\n  proceed: true,\n  reason: \"ok\",\n  person_id: String(person.id),\n  person_name: person.name || \"\",\n  first_name: person.firstName || person.name || \"\",\n  email: person.emails?.[0]?.value || \"\",\n  stage,\n  phone: toNumber,\n  from_number: settings.from_number || \"\",\n  identity_sms_template: settings.identity_verification_sms_template || \"\",\n  original_webhook_body: JSON.stringify(originalBody),\n} }];"
+        }
+      },
+      {
+        "id": "idv-should-proceed",
+        "name": "Should Proceed?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          896,
+          208
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.proceed }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "idv-create-session",
+        "name": "Create Stripe Identity Session",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1120,
+          112
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://dashboard.rentingfreedom.com/api/identity/create-session",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ lead_id: $json.person_id, lead_name: $json.person_name, phone: $json.phone, email: $json.email, stage: $json.stage, source: \"fub_phone_added\" }) }}",
+          "options": {}
+        },
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "LstfkvTtbGOIQdtO",
+            "name": "RF Dashboard Internal API"
+          }
+        }
+      },
+      {
+        "id": "idv-build-sms",
+        "name": "Build Verification SMS",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1344,
+          112
+        ],
+        "parameters": {
+          "jsCode": "const guard = $(\"Check Guards\").first().json;\nconst session = $json;\n\nconst template = guard.identity_sms_template ||\n  \"Hi {{first_name}}, before we can schedule your showing we need to quickly verify your ID. Please complete this short verification: {{verify_link}}\";\n\nconst message = template\n  .replace(/\\{\\{first_name\\}\\}/g, guard.first_name || \"\")\n  .replace(/\\{\\{verify_link\\}\\}/g, session.url || \"\");\n\nreturn [{ json: {\n  message,\n  phone: guard.phone,\n  from_number: guard.from_number,\n  session_id: session.sessionId,\n  person_id: guard.person_id,\n  person_name: guard.person_name,\n  original_webhook_body: guard.original_webhook_body,\n  sent_at: new Date().toISOString(),\n} }];"
+        }
+      },
+      {
+        "id": "idv-send-sms",
+        "name": "Send Verification SMS",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          1568,
+          112
+        ],
+        "parameters": {
+          "from": "={{ $json.from_number }}",
+          "to": "={{ $json.phone }}",
+          "message": "={{ $json.message }}",
+          "options": {}
+        },
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        }
+      },
+      {
+        "id": "idv-log-sheet",
+        "name": "Log to Identity Verifications",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          1792,
+          112
+        ],
+        "parameters": {
+          "operation": "append",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Identity_Verifications",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "session_id": "={{ $('Build Verification SMS').first().json.session_id }}",
+              "lead_id": "={{ $('Build Verification SMS').first().json.person_id }}",
+              "lead_name": "={{ $('Build Verification SMS').first().json.person_name }}",
+              "phone": "={{ $('Build Verification SMS').first().json.phone }}",
+              "original_webhook_body": "={{ $('Build Verification SMS').first().json.original_webhook_body }}",
+              "status": "pending",
+              "sent_at": "={{ $('Build Verification SMS').first().json.sent_at }}",
+              "resolved_at": "",
+              "error_code": "",
+              "error_reason": ""
+            },
+            "schema": [
+              {
+                "id": "session_id",
+                "displayName": "session_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "lead_id",
+                "displayName": "lead_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "lead_name",
+                "displayName": "lead_name",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "phone",
+                "displayName": "phone",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "original_webhook_body",
+                "displayName": "original_webhook_body",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "status",
+                "displayName": "status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "sent_at",
+                "displayName": "sent_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "resolved_at",
+                "displayName": "resolved_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "error_code",
+                "displayName": "error_code",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "error_reason",
+                "displayName": "error_reason",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ]
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "credentials": {
+          "googleApi": {
+            "id": "eB6JrDkriJ1BATPy",
+            "name": "RF Dashboard Service Account (Project 2, Sheets)"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "id": "gate-fub-note",
+        "name": "FUB - Log Note",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          1568,
+          300
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.followupboss.com/v1/notes",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ personId: Number($('Build Verification SMS').first().json.person_id), body: 'Automated SMS sent (ID verification):\\n\\n' + $('Build Verification SMS').first().json.message }) }}",
+          "options": {}
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        }
+      }
+    ],
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "node": "FUB - Get Person",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Get Person": {
+        "main": [
+          [
+            {
+              "node": "Read Settings",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Settings": {
+        "main": [
+          [
+            {
+              "node": "Read Identity Verifications",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Identity Verifications": {
+        "main": [
+          [
+            {
+              "node": "Check Guards",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check Guards": {
+        "main": [
+          [
+            {
+              "node": "Should Proceed?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Should Proceed?": {
+        "main": [
+          [
+            {
+              "node": "Create Stripe Identity Session",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Create Stripe Identity Session": {
+        "main": [
+          [
+            {
+              "node": "Build Verification SMS",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Verification SMS": {
+        "main": [
+          [
+            {
+              "node": "Send Verification SMS",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Send Verification SMS": {
+        "main": [
+          [
+            {
+              "node": "FUB - Log Note",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Log Note": {
+        "main": [
+          [
+            {
+              "node": "Log to Identity Verifications",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Justin Artis",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-08-04T13:25:10.611Z",
+        "id": 254,
+        "workflowId": "L13GUyrWbjSJwn8p",
+        "versionId": "9ea7d6f3-d23e-4b21-a670-0b527bfb0151",
+        "event": "deactivated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      },
+      {
+        "createdAt": "2026-08-04T13:25:10.625Z",
+        "id": 255,
+        "workflowId": "L13GUyrWbjSJwn8p",
+        "versionId": "9ea7d6f3-d23e-4b21-a670-0b527bfb0151",
+        "event": "activated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    ]
+  }
+}

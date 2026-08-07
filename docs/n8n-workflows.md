@@ -48,8 +48,9 @@ status of everything below that can be checked programmatically.
    2026-07-28 that `Incoming Rental Leads` must not be live. **Move Test Test9
    (person 2545) to `Tenant Still Looking For Rental` first** or this also
    disables your own test path. See "Testing vs launch value".
-3. **Reassign `unmatched_inquiry_alert_phone`.** It is still `+18038047847`,
-   Andrew's personal number.
+3. **Reassign the alert-phone placeholders** — `unmatched_inquiry_alert_phone`,
+   `rental_application_alert_phone`, and `cal_send_failure_alert_phone` are
+   all still `+18038047847`, Andrew's personal number.
 4. **Add Properties rows for the live Zillow addresses that do not match** —
    `522 Temple Rd`, `296 Blue Haw Dr`, `5464 Crown Ave`. Those leads get
    nothing until the rows exist. (`2019 Codorus Ln #1` is deliberately
@@ -120,6 +121,76 @@ Triggered by the FUB `eventsCreated` webhook (registered as FUB webhook **id 8**
    (`reset-1785…`) rather than person ids. Phones are compared on their last 10
    digits: FUB stores `8038047847`, the sheet `18038047847`, Twilio
    `+18038047847`.
+
+### Person-lookup fix — wrong-person misroute (2026-08-05, launch-blocking)
+
+`FUB - Get Person`'s URL used `{{ $json.events[0].personId }}`. `$json` there
+is `FUB - Get Event`'s output — and FUB's real webhook payload's `uri` is
+path-style (`https://api.followupboss.com/v1/events/1759`), which returns the
+event object **unwrapped** (no `.events` array). So the expression resolved
+to `undefined`, the request became `.../people/undefined?...`, and FUB did
+not error — it silently fell back to the **list** endpoint and returned a
+page of people. `Resolve Inquiry`'s `personPayload.people?.[0] ?? personPayload`
+fallback then silently took whoever was first in that list. Confirmed live
+(execution 12597): an unrelated, more-recently-active test person (2637) got
+attached to an inquiry that actually belonged to person 2545 — `event_id`/
+`person_id` in `Resolve Inquiry`'s own output stayed correct (those come from
+`ev`, reliably scoped from the event), but `person.phones[0].value` — the
+actual SMS `to` number for a matched, immediate-send inquiry — was the wrong
+person's. This is not a test-environment fluke: it happens any time some
+other CRM record is more recently active than the actual inquiring lead when
+this node runs, which is the normal state of a live, actively-worked CRM.
+
+**Fix, two parts:**
+
+1. `FUB - Get Person`'s URL now reads `personId` explicitly from
+   `FUB - Get Event` by node name — `{{ ($('FUB - Get Event').item.json.events?.[0]
+   ?? $('FUB - Get Event').item.json).personId }}` — handling both shapes
+   `FUB - Get Event` can produce (the normal path-style unwrapped event, or
+   the `{events:[...]}` wrapper from its query-style fallback URL when
+   `body.uri` is absent), same defensive unwrap `Resolve Inquiry` already
+   uses for `ev`. `FUB - Get Person` was already structurally downstream of
+   `FUB - Get Event` in the graph (not parallel off the webhook), so no
+   rewiring was needed — only the expression was wrong.
+2. `Resolve Inquiry` no longer silently accepts `personPayload.people?.[0]`.
+   It now **throws** if the response is list-shaped (`.people` present — this
+   single-person-by-id endpoint should never return a list) or if the
+   resolved person's `id` doesn't match the event's `personId`. Same "fail
+   loudly rather than quietly" principle as the DoorLoop sync's zero-units
+   check — a wrong-person match stops the execution and surfaces in the
+   execution log instead of silently texting a stranger.
+
+**Audited every other FUB person-lookup node for the same pattern** (2026-08-05):
+`L13GUyrWbjSJwn8p` (Identity Gate), `UbO0l29GtILMm1sP` (sweep),
+`Ih8zMmNeUwKvITGf` and `HwXpYAqwbG1zwGls` (legacy). All four use
+`{{ $json.body.uri }}&fields=allFields` wired **directly** off their own
+Webhook node — `$json` there is the live webhook payload for that exact
+invocation, and `body.uri` is a field FUB itself populates pointing at the
+precise resource the webhook fired for, not reconstructed from a separately-
+fetched intermediate node. Confirmed clean, no changes needed.
+
+Add / remove (idempotent, checks current node values before patching, backup
+in `n8n/BEFORE-inquiry-person-lookup-fix/`):
+
+```bash
+node scripts/n8n-fix-inquiry-person-lookup.mjs                  # dry run
+node scripts/n8n-fix-inquiry-person-lookup.mjs --apply
+node scripts/n8n-fix-inquiry-person-lookup.mjs --revert --apply
+```
+
+Verified live 2026-08-05: added a note to an unrelated test person (2637) to
+make them the most-recently-active CRM record, then fired a fresh inquiry for
+a different, already-verified test lead (2545). `FUB - Get Person`'s response
+was a single object (`id: 2545, name: "Test Test9"`, no `_metadata` list
+wrapper) and `Resolve Inquiry`'s `phone` field matched 2545's real number, not
+2637's. Separately confirmed the fail-loud path: temporarily reverted just the
+URL back to the buggy expression (fail-loud check left active) and fired
+another fresh inquiry for 2545 while 2637 was still most-recently-active —
+both the resulting executions (FUB's own auto-fired webhook and a manual
+trigger for the same event) failed with
+`FUB - Get Person returned a people LIST instead of a single person...`
+instead of silently misrouting. Restored the fixed URL and re-ran once more to
+confirm clean success (`id: 2545`, no error).
 
 ### Workflow B — `UbO0l29GtILMm1sP`, webhook `send-cal-link-after-verification`
 
@@ -292,6 +363,91 @@ the mutable Person record, and both are still active:
 Nothing reads `customCalLink` any more, so neither can misroute a link today.
 They were left running rather than disabled unilaterally. Retiring both is
 probably right, but that is a live-behaviour change and wants sign-off.
+
+## Identity Verification Gate
+
+`L13GUyrWbjSJwn8p`, webhook `phone-added-send-text`. Guards → Stripe Identity
+session → verify SMS. Triggered on every FUB `peopleUpdated`/inquiry event for
+a lead with a phone who isn't yet verified — including repeatedly, by design,
+since the Inquiry flow calls it on **every** inquiry from an unverified lead
+(a lead who inquires on two properties before finishing verification hits this
+gate twice). That means `Check Guards` has to be safe to call more than once
+for the same lead while a session is still open — see the pending-session
+guard below.
+
+`Check Guards` returns structured `proceed`/`reason` pairs for every block
+condition (`not_test_mode`, `no_phone`, `stage_trash`, `rejected_stage`,
+`stage_not_allowed:<stage>`, `already_sent`, and now
+`verification_already_pending`). `Should Proceed?` only wires its **true**
+branch to `Create Stripe Identity Session` — a `proceed: false` execution
+ends cleanly at that IF with no Stripe session and no SMS.
+
+### Pending-verification guard (2026-08-05)
+
+Confirmed live: test lead Test Test13 (person 2636) inquired on two different
+properties ~3 minutes apart, both before completing Stripe Identity. Both
+inquiries correctly triggered this gate (the Inquiry flow working as
+designed), but `Check Guards` had no awareness of the still-open session from
+inquiry 1, so inquiry 2 created a **second** Stripe Identity session and sent
+a **second**, near-identical "verify your identity" SMS to the same phone —
+confirmed as two separate `pending` rows in `Identity_Verifications` for the
+same person, both created before either resolved. Only one of the two Stripe
+sessions ever gets completed; the other sits orphaned in `pending` forever.
+
+`Check Guards` already reads `Read Identity Verifications` (no new node
+needed). It now also blocks when a `pending` row exists for this lead's
+`person_id` **or** phone (last 10 digits — same normalization discipline as
+the Inquiry flow's identity lookup, since FUB/sheet/Twilio all format phones
+differently) that isn't stale, returning
+`proceed: false, reason: "verification_already_pending"`. Nothing is logged
+for this case — no FUB note, no new `Identity_Verifications` row — since
+nothing new happened. This check applies to test leads too (`isTestMode`
+doesn't bypass it); the existing `already_sent` check right above it, by
+contrast, is written to always skip for test leads via
+`if (!isTestMode && alreadySent)`, so it never actually fires once `isTestMode`
+is guaranteed true by the earlier `not_test_mode` guard — that's pre-existing
+behavior, unrelated to this fix and not changed here.
+
+**Staleness — don't block forever.** A lead who starts Stripe Identity and
+never finishes (abandons the flow, link expires) must not be permanently
+stuck unable to get a fresh verification SMS on a later real inquiry. A
+`pending` row older than the new `identity_verification_pending_ttl_hours`
+Settings key (default `24`, added via `scripts/setup-identity-verification.mjs`)
+does not count as "in flight" and is treated as abandoned. Age is measured
+against `sent_at`; an unparseable `sent_at` is treated as age `0` (still
+pending) rather than stale — that column is always written by our own code as
+an ISO timestamp, so this only matters for corrupted data, and blocking is
+the safer failure direction given this guard exists specifically to stop
+duplicate sends.
+
+Deliberately not touching the Inquiry flow (`JDsKrVRHf9TEVj7j`) — it's
+correctly calling this gate on every inquiry from an unverified lead. Not
+touching the sweep (`UbO0l29GtILMm1sP`) either — its "deliver all unsent rows
+once verified" behavior was confirmed correct in this same test; the
+duplicate-SMS bug was isolated to this gate.
+
+Add / remove (idempotent, marker `PENDING_VERIFICATION_GUARD_MARKER`, backup
+in `n8n/BEFORE-pending-verification-guard/`):
+
+```bash
+node scripts/n8n-add-pending-verification-guard.mjs                  # dry run
+node scripts/n8n-add-pending-verification-guard.mjs --apply
+node scripts/n8n-add-pending-verification-guard.mjs --revert --apply
+```
+
+Verified live 2026-08-05 against a fresh test lead (Test TestGuard, person
+2637): firing two `phone-added-send-text` webhooks ~10s apart produced
+`Check Guards → proceed: true` on the first (Stripe session created, SMS
+sent) and `proceed: false, reason: "verification_already_pending"` on the
+second, which stopped at `Should Proceed?` and never reached `Create Stripe
+Identity Session` or `Send Verification SMS` — confirmed in `runData`, not
+just execution status, and confirmed directly against `Identity_Verifications`
+that exactly one `pending` row existed. Separately verified the staleness
+path: with `identity_verification_pending_ttl_hours` temporarily forced to a
+near-zero value, a third webhook call against the same still-`pending` row
+correctly proceeded (`proceed: true`) and created a second session + sent a
+second SMS — confirmed two distinct session rows in `Identity_Verifications`
+afterward. TTL restored to `24` immediately after.
 
 ## Zillow Rental Application Flow
 
@@ -652,7 +808,7 @@ therefore never matched anything since it was built. Left inert by decision on
 2026-07-27: the client has not decided whether they want rejected-lead logic at
 all. Revisit alongside that decision, not before.
 
-## FUB Trash-stage gate
+## FUB Trash-stage gate — SUPERSEDED by "FUB Trash-tag gate" below
 
 Client request (2026-08-04): no FUB workflow should act on a person whose FUB
 `stage` is `Trash`. Applied with `node scripts/n8n-add-trash-gate.mjs --apply`
@@ -660,6 +816,16 @@ Client request (2026-08-04): no FUB workflow should act on a person whose FUB
 Verify offline any time with `node scripts/trash-gate-verify.mjs` — pulls the
 live `jsCode` and runs it against a synthetic Trash-stage person, same
 technique as `stage-gate-verify.mjs`. Sends nothing, writes nothing.
+
+**Retired 2026-08-07** — see "Investigated 2026-08-05/06" below and "FUB
+Trash-tag gate": this plain stage check is unreliable because FUB's own
+lead-flow automation un-trashes a person server-side before any of our
+workflows read their stage. Left in this doc for history; the code itself has
+been replaced everywhere `TRASH_GATE_MARKER` appeared. `scripts/
+n8n-add-trash-gate.mjs --revert --apply` still works if a rollback to the
+plain stage check is ever needed (restores from `n8n/BEFORE-trash-gate/`),
+but the untagged-fallback branch of the new gate already covers the same
+case, so there should be no reason to.
 
 **Deliberately separate from `allowed_stages`.** Three workflows (Identity
 Gate, Inquiry flow, Sweep) already exclude Trash *implicitly* today, because
@@ -722,6 +888,346 @@ A trashed match never falls through to `FUB - Create Person` either — it
 still routes through the found/trashed branch, so no duplicate person is
 created for someone already in FUB, matching the existing dedup guard's
 intent.
+
+### Investigated 2026-08-05/06 — live SMS to a Trash-stage lead, corrected root cause
+
+Test lead Test Test8 (person 2525), genuinely Trash-staged, received a real
+cal.com link SMS from the Inquiry flow despite the gate above. Initial
+hypothesis (a plain `GET /v1/people/{id}` silently substituting a wrong
+stage for a trashed person, needing `includeTrash=true` added everywhere)
+does **not** hold up — reproduced directly against the live API and ruled
+out:
+
+- The single-person-by-ID endpoint (`/v1/people/{id}`, what every
+  `FUB - Get Person` node in this system uses) correctly returns
+  `stage: "Trash"` for a genuinely-trashed person, with or without
+  `includeTrash=true` — confirmed against three real currently-trashed
+  people (2631, 2619, 2616). The parameter is a no-op there. **Do not add
+  it to those nodes.**
+- `includeTrash=true` only matters on FUB's **list/filter** endpoints
+  (`?id=`, `?name=`, `?stage=`) — those genuinely exclude Trash-stage
+  people unless the parameter is set (confirmed: `?stage=Trash` returns 0
+  results without it, the real count with it).
+
+**Actual cause: FUB itself auto-reactivates a Trash-stage person out of
+Trash when a new inbound lead event arrives for them, server-side, before
+our workflow ever reads their stage.** Reproduced directly, using only the
+test contact: set person 2525 to `Trash` via the API, then created a fresh
+`Property Inquiry` event for them (source "Zillow Rentals", matching
+`leadFlowId: 2`) via the FUB events API. ~11 seconds later the person's
+stage had changed itself, server-side, to
+`Tenant Inquiry Lead (Do Not Contact)` — no code of ours touched it. This
+matches execution 12630 exactly: event 1766 created at `21:48:40Z`, the
+person's own `updated` field also `21:48:40Z`, our `FUB - Get Person` call
+one second later at `21:48:41Z` — the person was already legitimately
+un-trashed by FUB's own automation by the time the gate checked.
+
+The trash gate is checking the correct, current, live stage — the problem
+is that the same inbound event that should be gated is also the event that
+FUB's own lead-flow uses to un-trash the person, so by the time any of our
+nodes look, they're telling the truth: the person genuinely isn't in Trash
+anymore. **Left open, pending a client decision**, on whether to treat
+FUB's own reactivation as authoritative (no code change — a lead FUB itself
+decided is active again is arguably fine to contact) or to override it
+(block anyway based on very-recent Trash history, which is more code and
+overrides the client's own CRM automation). Not implemented either way yet.
+
+**What was fixed, confirmed real and unrelated to the incident's actual
+cause:** `FUB - Search Existing Person` in the Zillow flow uses a `?name=`
+list-style search for its dedup guard, which is exactly the endpoint type
+that does hide Trash — a name search for a genuinely-trashed person
+returned zero results without `includeTrash=true`, meaning a trashed
+existing person would be invisible to the dedup check and the flow would
+fall through to creating a duplicate person instead of hitting the
+"Existing Person Trashed?" skip branch above. Fixed by adding
+`&includeTrash=true` to that node's URL — confirmed live (Xavier Fripp,
+person 2619, genuinely Trash-staged: 0 results without the parameter, 1
+correct result with it). Non-trashed searches are unaffected by this
+parameter, so this is additive only. Idempotent, backup in
+`n8n/BEFORE-zillow-search-include-trash/`:
+
+```bash
+node scripts/n8n-add-zillow-search-include-trash.mjs                  # dry run
+node scripts/n8n-add-zillow-search-include-trash.mjs --apply
+node scripts/n8n-add-zillow-search-include-trash.mjs --revert --apply
+```
+
+## FUB Trash-tag gate
+
+Replaces the plain `stage == "Trash"` gate above (2026-08-07). That gate was
+unreliable for the exact reason found in "Investigated 2026-08-05/06": FUB's
+own lead-flow automation un-trashes a person server-side the moment a new
+inbound event (e.g. a fresh inquiry) hits them, seconds before any of our
+workflows read their stage. A tag survives that auto-reactivation; a plain
+`stage` read does not.
+
+### Policy
+
+Three tags, applied by the **client's own FUB automation** on stage entry —
+this system only ever reads them, never writes them:
+
+| Tag | Applied on entering stage | Reapply window |
+|---|---|---|
+| `Permanent Trash` | `Permanent Trash` | never (always blocks) |
+| `Temporary Trash` | `Trash` | 90 days |
+| `Denied Credit` | `Cold Rental Lead 1 month Hold` | 365 days |
+
+Comparison is `String(x).trim().toLowerCase()` on tags and stage names alike
+(gotcha 14). Decision table, evaluated in this order:
+
+- **`Permanent Trash` tag** → hard block, unconditionally. No date check —
+  there is no reapply window for this one.
+- **`Denied Credit` tag present** → governs entirely, even if `Temporary
+  Trash` is also present (that tag's own window is ignored in this case) —
+  block if `daysSinceTrash <= 365`.
+- **`Temporary Trash` tag only** → block if `daysSinceTrash <= 90`.
+- **None of the three tags** → plain stage fallback: block if the person's
+  *current* stage is `Trash` / `Permanent Trash` / `Cold Rental Lead 1 month
+  Hold`. Suppress-only — there's no `trash_date` to check, so no
+  reapply-reroute for this branch. Decided 2026-08-07 to close the gap for
+  anyone already sitting in a trash-family stage before this shipped (the
+  client's tagging automation only fires on new stage-entry events, so it
+  never touches pre-existing records). If the "keep as safety net" framing
+  ever needs revisiting, this is the branch to change.
+
+`daysSinceTrash` is computed from `customTrashDate`, a new FUB custom field
+(id 19, created live via `POST /v1/customFields` — confirmed FUB's API
+supports field creation, returns a validation error rather than 404 on a bad
+body). An unparseable/missing `customTrashDate` computes as `Infinity` days,
+which only matters for `Denied Credit`/`Temporary Trash` (their windows
+require a real elapsed time — `Infinity` never satisfies `<=`, so a tag with
+no date is treated as **expired**, not blocking); `Permanent Trash` doesn't
+consult the date at all.
+
+### `customTrashDate` write rule — transition-based, not tag-presence-based
+
+Stamped `= now` only when a person's stage **transitions into** one of the
+three trash-family stages from something else — not every time they're seen
+sitting in one. This correctly gives someone trashed on 1/1, let back out,
+then trashed again on 5/1 for a new reason two distinct dates instead of one
+static value that never updates.
+
+**Verified live (2026-08-06/07) before building anything:** does FUB's
+`peopleUpdated` webhook payload carry the person's previous stage? No —
+inspected three real executions of the Identity Gate's `Webhook` node
+(including one triggered by moving person 2525 to `Trash` and back via the
+API mid-investigation), and the payload is always the thin
+`{eventId, event, resourceIds, uri}` shape with no before/after field data.
+This confirms the payload alone can't detect a transition — hence the second
+new custom field below.
+
+`customTrashGateLastStage` (id 19... field id 20 — see below) is a cache of
+"what stage did we last see this person in," written by the watcher on every
+relevant event. A transition is "current stage is trash-family AND the cache
+shows something different." First-ever-seen already-trashed people (cache
+empty pre-launch) get `customTrashDate` stamped as the day this shipped, not
+their true original trash date — there's no way to recover that
+retroactively from tags alone. Known, accepted limitation, same "go-forward
+only" territory as `inquiry_flow_start_at`.
+
+### Where it's enforced
+
+Six workflows — the same set `TRASH_GATE_MARKER` touched:
+
+| Workflow | Node | Behaviour |
+|---|---|---|
+| `L13GUyrWbjSJwn8p` Identity Gate | `Check Guards` | Tag policy **with** reapply-reroute (the only workflow that writes to FUB people). |
+| `UbO0l29GtILMm1sP` Catch-up sweep | `Check & Build Message` | Tag policy, suppress-only. `bail(trashBlock \|\| "stage_not_allowed", ...)`. |
+| `JDsKrVRHf9TEVj7j` Inquiry flow | `Resolve Inquiry` | Tag policy, suppress-only. Row still recorded with `link_sent = "skipped_" + trashBlock` (e.g. `skipped_trash_permanent`, `skipped_trash_untagged_fallback`) — more specific than the old single `skipped_trash_gate` value. |
+| `Ih8zMmNeUwKvITGf` / `HwXpYAqwbG1zwGls` legacy | `Match & Resolve Cal Link` | Tag policy, suppress-only. Early `{ skipped: true, reason: trashBlock }`. |
+| `X1lih7X05rpnTPmb` Zillow flow | `Check Existing Match` | Tag policy against the matched *existing* person, suppress-only — same structural IF chain (`Existing Person Trashed?` → `Append Trash-Skipped Row`) as before, now driven by `existing_trash_reason` instead of a plain stage check. Its `FUB - Search Existing Person` node also gets `&fields=allFields` added — confirmed live that a list/search endpoint returns `tags` by default but not custom fields, so `customTrashDate` was invisible to this one node without it (tags-only checks, i.e. `Permanent Trash`, would have worked either way). |
+
+Five of the six are code-only patches — no new nodes, same blast radius as
+the plain-stage gate they replace. Only the Identity Gate gets new nodes,
+covered next.
+
+### Reapply-reroute — the Identity Gate only
+
+This is a **new class of side effect for this system**: every gate before
+this one has been read-only/suppress-only. When `Check Guards` finds someone
+blocked *and* their current stage doesn't match the tag's expected stage
+(they drifted — manually moved, or FUB's own auto-reactivation moved them),
+it PATCHes them back and leaves an audit note. Deliberately **not**
+duplicated across the other five workflows: they'd each need their own write
+capability, and near-simultaneous corrections from multiple workflows for the
+same event wave is a real race with no upside over having exactly one
+enforcement point. The Identity Gate already fires on **every** `peopleUpdated`
+event (the same reason it's the transition-watcher's trigger point), so
+routing the correction through it is a straightforward extension of that
+existing choke point rather than a new one.
+
+New nodes, wired off `Should Proceed?`'s previously-unwired false branch:
+
+`Needs Reapply Reroute?` (IF: `needs_reapply_reroute == true`) →
+- **true** → `FUB - Update Person (Reapply)` — `PUT /people/{id}` with
+  `{ stage: reapply_reroute_stage, customTrashDate: reapply_preserved_trash_date }`
+  in the **same call**, so the correction can't race the transition watcher
+  into overwriting the preserved date with "now" — then
+  `FUB - Log Reapply Note` — `POST /notes`, body
+  `"Automation: reapply blocked, rerouted to <stage>, trash_date preserved
+  from <date>"`.
+- **false** → nothing (matches the existing "ends cleanly" convention for a
+  blocked, non-actionable execution).
+
+Idempotent by construction: `Check Guards` only sets `needs_reapply_reroute`
+when the person's current stage doesn't already match the target, so a
+person already sitting correctly never gets a redundant PATCH/note.
+
+### Stage-transition watcher — also the Identity Gate only
+
+New nodes spliced between `FUB - Get Person` and `Read Settings`:
+`FUB - Get Recent Notes` → `Trash Transition Watcher` (code) →
+`Watcher Needs Write?` (IF) → `FUB - Update Person (Watcher)` on the true
+branch, both branches rejoining into `Read Settings`. Inserting nodes ahead
+of `Read Settings`/`Check Guards` is safe here specifically because both
+already read `$items("FUB - Get Person")` **by name**, not `$json`/`$input`
+(verified before writing this — gotcha 19 is exactly the failure mode this
+would otherwise hit).
+
+**Self-collision handling.** The reapply-reroute PATCH above and the
+watcher's own PATCH both touch the same person and each re-fires this same
+`peopleUpdated` webhook. Without a guard, the reapply PATCH's own webhook
+delivery would look to the watcher like a fresh transition into the trash
+stage (cache still shows the stage the person had drifted to) and re-stamp
+`customTrashDate = now`, destroying the value the reapply PATCH had just
+carefully preserved. `Trash Transition Watcher` checks `FUB - Get Recent
+Notes` (last 5, sorted newest-first) for a note containing `"Automation:
+reapply blocked"` created in the last 5 minutes; if found, it still updates
+the cache field (so future comparisons are accurate) but skips re-stamping
+the date.
+
+**Loop safety.** The watcher's own write is itself an update, which
+re-triggers the webhook — but it only fires a PUT when `cacheStale` (cache ≠
+current stage) or a genuine stamp is needed. Once a write brings the cache in
+sync with the current stage, the next unrelated `peopleUpdated` event (a
+phone edit, a note, anything not a stage change) sees `cacheStale = false`
+and does nothing — no infinite loop. Verified offline (see below) across the
+steady-state case explicitly.
+
+`FUB - Get Recent Notes`: `GET /notes?personId={id}&limit=5&sort=-created`,
+same Header Auth / Basic Auth credential (`Iap4KzaMs92QWwSR`, "FUB Owner") as
+every other FUB node in this workflow.
+
+### New FUB custom fields
+
+Created live via `POST /v1/customFields` (2026-08-06/07) — confirmed the
+endpoint exists and works (returns a 400 validation error rather than 404 on
+a bad body, then 201 on a real one):
+
+| Field key | FUB field id | Purpose |
+|---|---|---|
+| `customTrashDate` | 19 | ISO timestamp of the most recent transition into a trash-family stage. Read by the tag policy's window math; written only by the watcher and the reapply-reroute PATCH. |
+| `customTrashGateLastStage` | 20 | Cache of "what stage did we last see this person in" — see "stage-transition watcher" above for why this exists (the webhook payload alone can't detect a transition). |
+
+Both are plain `text` fields (not FUB's `date` type) so they round-trip a
+full ISO timestamp — confirmed both fields' values survive a PUT/GET
+round-trip unchanged, including on the list/search endpoint once
+`&fields=allFields` is present (verified against person 2525: absent from a
+plain `GET /people/{id}` response, present and correct with `fields=allFields`
+appended, same behavior already relied on for `customCalLink` elsewhere in
+this codebase).
+
+**A live side effect caught during this same investigation, not shipped
+as a bug:** setting `customTrashGateLastStage` on person 2525 while testing
+the payload/field mechanics coincided with the client's own automation
+adding a real `Temporary Trash` tag to that person (a delayed reaction to an
+earlier live stage-to-Trash test moments before, most likely — not something
+our code did). Cleaned up immediately (tag removed) so it doesn't
+contaminate later testing. Left here as confirmation that the client's
+tagging automation is live and does fire with some delay, not instantaneous
+with the stage change itself — worth remembering if a live test doesn't show
+a tag appear right away.
+
+### Verify offline before touching anything live
+
+Unit-tested the tag policy and the watcher's transition/self-collision/loop
+logic against synthetic data before ever running `--apply` — 14 policy cases
+(each tag alone, both `Temporary Trash` + `Denied Credit` together with
+`Denied Credit` both within and past its window, the untagged fallback for
+all three stage names, a malformed date, a tag surviving even when the
+person's current stage has already drifted away from it) and 6 watcher cases
+(fresh transition, steady-state no-op, self-collision suppressed by a recent
+marker note, an old note correctly ignored, and first-ever-sight cache
+initialization) — all passed. Sends nothing, writes nothing; this is the
+cheap check to re-run after any future edit to this logic, same discipline
+as `stage-gate-verify.mjs` / `trash-gate-verify.mjs`.
+
+Apply / revert (idempotent, marker `TRASH_TAG_GATE_MARKER`, backups in
+`n8n/BEFORE-trash-tag-gate/`):
+
+```bash
+node scripts/n8n-add-trash-tag-gate.mjs                  # dry run
+node scripts/n8n-add-trash-tag-gate.mjs --apply
+node scripts/n8n-add-trash-tag-gate.mjs --revert --apply
+```
+
+**Applied and verified live 2026-08-07** against Test Test8 (person 2525),
+after review and approval of the dry run above. `--apply` pushed cleanly to
+all 6 workflows (0 failures). Reviewed the two already-inactive legacy
+workflows' `active` flags before and after the push to confirm the PUT
+itself didn't change activation state (it didn't — both were already
+inactive per their own pre-change backups).
+
+**One real bug found and fixed during live testing, not shipped:** the first
+version of `Trash Transition Watcher` built its PUT body as
+`{ id: person.id, ... }`. FUB's `PUT /people/{id}` rejects `id` as an invalid
+body field (400 — `"Invalid fields in the request body: id."`), since the id
+belongs in the URL, not the body. This crashed the execution before it ever
+reached `Check Guards`, so the very first live drift test never got that far.
+Fixed live (`const updateBody = {}`) and in the source script, then re-ran
+the same drift scenario successfully. See gotcha 19's pattern — a
+newly-added node still needs its own request shape checked, not just its
+trigger logic.
+
+**Drift scenario, verified live end-to-end:** set person 2525 to
+`tags: [..., "Temporary Trash"]`, `customTrashDate` = 10 days ago (within the
+90-day window), `customTrashGateLastStage` = `"Trash"`, but the *current*
+stage manually moved to `"Lead"` — simulating exactly the FUB
+auto-reactivation scenario that motivated this whole rebuild. Fired the real
+`phone-added-send-text` webhook. Execution 13468's `runData` confirms:
+`Check Guards` → `{"proceed":false,"reason":"trash_temporary",
+"needs_reapply_reroute":true,"reapply_reroute_stage":"Trash",
+"reapply_preserved_trash_date":"2026-07-28T00:28:00.496Z"}` (the original
+10-days-ago value, not "now") → `FUB - Update Person (Reapply)` PATCHed
+stage back to `Trash` → `FUB - Log Reapply Note` posted note 2647,
+`"Automation: reapply blocked, rerouted to Trash, trash_date preserved from
+2026-07-28T00:28:00.496Z"`. A direct FUB read afterward confirmed
+`customTrashDate` was still the original preserved value, unchanged.
+
+**A second, pre-existing issue surfaced by this testing, not introduced by
+it, and deliberately not fixed here:** once person 2525 was correctly back
+in `Trash`, every *subsequent* `peopleUpdated` event for them returned an
+**empty** person from `FUB - Get Person` in this workflow (confirmed:
+`GET /people?id=2525&fields=allFields` → `total: 0`; the same call with
+`&includeTrash=true` → `total: 1`, person present). `FUB - Get Person` in
+four of these six workflows (Identity Gate, Catch-up sweep, and both legacy
+Cal-link workflows) builds its URL from FUB's own webhook-supplied `uri`,
+which for every real `peopleUpdated`/`eventsCreated` event observed live is
+the **list-style** `?id=` endpoint — exactly the endpoint type gotcha 18
+already established excludes Trash-stage people by default. (`Resolve
+Inquiry`'s `FUB - Get Person`, by contrast, uses the path-style
+`/people/{id}` endpoint and is unaffected — confirmed in the original
+person-lookup-fix investigation.) Consequence: while someone sits in genuine
+Trash, these four workflows see `person = {}` for any unrelated event on
+them — every downstream check (`isTestMode`, `phone`, `stage`) reads as
+empty/falsy, so they fail safe (blocked, for a generic reason like
+`not_test_mode` rather than a trash-specific one) rather than leaking. It
+does **not** corrupt `customTrashDate` — the transition watcher's
+`enteringTrashFamily` check requires the *current* stage to be trash-family,
+and an empty person's stage reads as `""`, so no incorrect stamp is ever
+attempted; the only side effect is that `customTrashGateLastStage` can go
+stale while the person is invisible this way; it self-corrects to the real
+stage as soon as they either leave Trash (visible again) or the cache
+happens to already match by coincidence. Not fixed here: adding
+`&includeTrash=true` to these four nodes' shared `FUB - Get Person` would
+also change behavior for every *other* thing those nodes do (not just trash
+handling), which is a broader change than "replace the trash gate" and
+deserves its own decision rather than a silent side-fix bundled into this
+one.
+
+Person 2525 restored to a clean baseline afterward (tags/`customTrashDate`/
+`customTrashGateLastStage` cleared, stage back to `Tenant Inquiry Lead (Do
+Not Contact)`).
 
 ## DoorLoop Occupancy Sync
 
@@ -933,6 +1439,94 @@ Worth knowing if this is revisited: with both at T-1h the reconfirm is not
 gating access — the code arrives regardless. If the intent is ever "confirm
 before you get the code", the fix is an earlier reconfirm offset, not a merge.
 
+### Cron Poll send isolation — one bad phone/email used to block the entire pipeline (2026-08-06, launch-blocking)
+
+Confirmed live: a test booking with a syntactically invalid phone
+(`+11234567890`) reached its `reminder_2h_sms` step. `Send SMS` (Twilio)
+threw (error 21211, invalid `To`). n8n's default node behavior aborts the
+**whole execution** on any node throw — confirmed in execution 13273: several
+other bookings' sends earlier in that same tick had already succeeded, but
+the crash meant `Mark Step Sent` never ran for the bad-phone row, so
+`reminder_2h_sms_sent` stayed `false`. Because `Find Due Notifications`
+re-selects any unsent-and-due row on every tick, the very next 5-minute tick
+(execution 13277) crashed on the **same** booking/step — confirmed as a real
+infinite crash loop, not a one-off, by observing two consecutive failing
+ticks. Bad phone/email data is not an edge case in a live CRM (typos,
+landlines, reformatted numbers); left unfixed, this turns one bad data point
+into a standing denial-of-service against reminders for every lead, forever,
+until a human manually patches the sheet.
+
+**The fix, three parts:**
+
+1. `Send Email` / `Send SMS` get `onError: "continueRegularOutput"` — the
+   same per-node property already used elsewhere in this codebase (`FUB -
+   Update Cal Link` / `FUB - Add Tag` in the sweep workflow) — so a failed
+   send produces `{ error }` and lets the item continue instead of aborting
+   the execution.
+2. A new `Send Failed?` IF node sits between the send nodes and
+   `Mark Step Sent`. False (no error) is the unchanged existing path. True
+   (error) routes to `Build Send-Failure Record` → `Mark Step Failed` →
+   `Send Failure Alert`, then rejoins `Loop Back` — so `SplitInBatches`
+   (`Process One at a Time`) always advances to the next item regardless of
+   outcome, and one bad recipient can no longer starve every other due item
+   behind it in the same batch.
+3. `Mark Step Failed` writes the sentinel `"failed"` (not `true`) into the
+   step's own `sentCol` via the same `values:batchUpdate` mechanism as
+   `Mark Step Sent` — reusing the existing per-step column pair rather than
+   adding ~19 new failure columns. `Find Due Notifications`'s `alreadySent`
+   check now treats `"failed"` as resolved (not due), the same way it already
+   treats `true`, so a permanently-bad recipient's step gives up after
+   **exactly one** failed attempt instead of crash-looping forever. This
+   deliberately does not retry — malformed contact info doesn't self-heal,
+   and one attempt plus a human alert is simpler and safer than a retry
+   counter across ~19 step keys. `Send Failure Alert` texts the new Settings
+   key `cal_send_failure_alert_phone` (defaulted to Andrew's number, same
+   placeholder convention as `unmatched_inquiry_alert_phone` /
+   `rental_application_alert_phone`) with the booking, step, and the actual
+   Twilio/Gmail error — "fails loudly" discipline, same as the DoorLoop
+   sync's zero-units check and the Inquiry flow's append-failure alert.
+
+**A bug in the fix itself, caught during testing, not shipped:** the first
+version of `Send Failure Alert` read `={{ $json.from_number }}` /
+`={{ $json.alertPhone }}` / `={{ $json.alertMessage }}`. Live test (two
+bookings in one due batch — one bad phone, one good) reproduced a **second**
+crash: `Send Failure Alert` threw `Twilio 21604 — A 'To' phone number is
+required`, aborting the execution again and starving the good-phone
+booking's items behind it in the same batch — the exact bug this fix exists
+to prevent, reintroduced one node downstream, in the node added to fix it.
+Root cause: `$json` at that point is `Mark Step Failed`'s own HTTP response
+(the Sheets API's `batchUpdate` result), not the alert data — same failure
+mode as gotcha 12 (`$json` after a send node is that node's response, not
+your data). Fixed by switching to named-node references —
+`$('Build Send-Failure Record').item.json.alertPhone` etc., matching
+`Mark Step Sent`'s own existing `$('Build Message').item.json.range`
+convention — **and** adding `onError: "continueRegularOutput"` to
+`Send Failure Alert` itself, so even a failure sending the *alert* (e.g. a
+malformed alert-phone setting, a Twilio outage) can't crash the batch either.
+See gotcha 19.
+
+Idempotent (checks for the `Send Failed?` node). Backup in
+`n8n/BEFORE-cron-send-isolation/`.
+
+```bash
+node scripts/n8n-add-cron-send-isolation.mjs                  # dry run
+node scripts/n8n-add-cron-send-isolation.mjs --apply
+node scripts/n8n-add-cron-send-isolation.mjs --revert --apply
+```
+
+Verified live 2026-08-06 with the corrected version: two test bookings (one
+`+11234567890`, one a real number) timed so both had a due `reminder_2h_sms`
+in the same poll. Execution 13430's `runData` shows all 4 due items
+(email+SMS × 2 bookings) processed in **one** execution with **no** execution
+error: the good-phone booking's email and SMS both sent successfully; the
+bad-phone booking's email sent, its SMS failed and was correctly isolated
+(`Send Failed?` routed it to the failure path, `Mark Step Failed` wrote
+`"failed"`, and `Send Failure Alert` delivered a real Twilio SMS with no
+error — confirmed by inspecting the node's actual Twilio API response, not
+just execution status). The following tick (13432) shows **zero** due items
+for the bad-phone booking — no crash-loop, confirmed across multiple
+subsequent ticks.
+
 ### Test gate
 
 Same discipline as the rest of the system, adapted for a Cal.com-booking-
@@ -949,6 +1543,103 @@ logged to `Cal Bookings`, nothing is silently dropped, but their sends are
 gated off until the system is confirmed ready — flip `isTestBooking`'s
 callers the same way the rest of the system flips its test gates.
 
+### Immediate Sends booking idempotency — no protection against a redelivered webhook (2026-08-06, launch-blocking)
+
+Confirmed live: captured a real `BOOKING_CREATED` payload and replayed the
+identical payload a second time against the live webhook — the kind of
+at-least-once redelivery any webhook sender (including Cal.com) can do on a
+timeout/retry, not an exotic edge case. Result: two `Cal Bookings` rows for
+the same `booking_uid`, and `Send Confirmation Email` /
+`Send Nicole Immediate Email` both ran a second time — a real lead would get
+duplicate confirmation/Nicole emails on any retry, and two rows for one real
+event doubles every subsequent Cron Poll reminder/follow-up for it too, not
+just the initial confirmation. Unlike the FUB Inquiry flow (`event_id`-keyed
+dedup via `Resolve Inquiry`), this workflow had no equivalent check at all.
+
+**Fix — same shape as the Inquiry flow's dedup, keyed on `booking_uid`:**
+
+- **BOOKING_CREATED**: `Route by Trigger`'s `created` output now goes to a
+  new `Read Cal Bookings (Dedup Check)` → `Check Duplicate (Created)` →
+  `Already Recorded?` IF before `Classify & Build Row` ever runs. True
+  (already recorded) → `Log Duplicate Skip (Created)`, a terminal node that
+  logs to the execution log and does nothing else — no new row, no
+  Classify & Build Row, no confirmation/Nicole email. False → unchanged path
+  into `Classify & Build Row` → `Append Booking Row`. This is the single
+  choke point for both sends (`Read Settings (Immediate)` and
+  `Build Nicole Immediate Email` both fan out from `Append Booking Row`'s
+  output), so gating one step earlier covers both with one check.
+- **BOOKING_CANCELLED**: audited the same question rather than assumed safe.
+  `Send Cancellation Email` had **no** guard against re-sending on a
+  redelivered `BOOKING_CANCELLED` — same class of gap. Same shape applied: a
+  new `Read Cal Bookings (Dedup Check - Cancel)` → `Check Already Cancelled`
+  → `Already Cancelled?` IF (checking the row's own `cancellation_sent` flag)
+  sits before `Read Settings (Cancel)`. True → `Log Duplicate Skip (Cancel)`,
+  terminal. False → unchanged existing path.
+- **BOOKING_RESCHEDULED**: audited, deliberately **not** patched.
+  `Reset Row Fields (by old uid)` / `Swap In New UID (by start_time)` send no
+  email/SMS of their own (the spec has no "your time changed" copy) — a
+  replay just re-writes the same start/end time and re-resets the
+  reminder-sent flags to `false`. The only real exposure is a narrow race: if
+  a reminder step already fired in the gap between the original delivery and
+  a retry, the retry would un-mark it sent and it could fire again later.
+  Webhook retries land within seconds to a couple minutes of the original,
+  and the cron only runs every 5 minutes, so the window is small and the
+  consequence (one duplicate reminder, not a duplicate booking/confirmation)
+  is much lower blast radius than the CREATED/CANCELLED cases. Left as a
+  known, narrow gap rather than building a third guard for a much smaller
+  risk.
+
+**A bug in the fix itself, caught during testing, not shipped:** the first
+version of `Check Duplicate (Created)` returned only
+`{ json: { uid, alreadyRecorded } }`. Live test showed the appended row had
+`event_category: "showing"` (wrong — should have been `"walkthrough"`) and
+`is_test: false` (wrong — the booking WAS test-gated). Root cause:
+`Classify & Build Row` reads `$input.first().json` — its **immediate**
+input — not a named-node lookup. Before this fix, that immediate input was
+always `Parse Booking`'s full output; after inserting the dedup nodes in
+front of it, the immediate input became `Already Recorded?`'s slim
+`{ uid, alreadyRecorded }` object, silently starving `Classify & Build Row`
+of `eventTypeId`/`attendeeEmail`/`personId`/etc. Fixed by having
+`Check Duplicate (Created)` spread the original `Parse Booking` fields back
+in (`{ ...b, alreadyRecorded }`) so `Classify & Build Row`'s `$input`-based
+read still sees everything it expects. The corrupted test row was identified
+and cleared before the corrected version shipped — never reached a real
+lead. `Check Already Cancelled` (cancel branch) did **not** need this fix:
+`Build Cancellation Email` already reads via `$('Parse Booking').first().json`
+(a named lookup, not `$input`), so it was unaffected by nodes inserted in
+front of it. See gotcha 19.
+
+Idempotent (checks for the `Already Recorded?` node). Backup in
+`n8n/BEFORE-booking-idempotency/`.
+
+```bash
+node scripts/n8n-add-booking-idempotency.mjs                  # dry run
+node scripts/n8n-add-booking-idempotency.mjs --apply
+node scripts/n8n-add-booking-idempotency.mjs --revert --apply
+```
+
+Verified live 2026-08-06 with the corrected version:
+- **CREATED replay** (second delivery fired only after the first execution
+  had fully finished, the realistic redelivery-after-timeout case — a
+  near-simultaneous concurrent delivery is a separate, already-documented,
+  accepted race, see below): first execution ran `Classify & Build Row` →
+  `Append Booking Row` → both emails sent (`category: "walkthrough"`
+  correct). Replay execution's `runData` shows `Already Recorded?` routed
+  straight to `Log Duplicate Skip (Created)` — `Classify & Build Row` never
+  ran, neither email sent a second time. `Cal Bookings` confirmed to hold
+  exactly one row for the `booking_uid`.
+- **CANCELLED replay**: same pattern — first delivery sent the cancellation
+  email and marked the row; the replay's `runData` shows `Already
+  Cancelled?` routed to `Log Duplicate Skip (Cancel)`, no second email.
+- **Known limitation surfaced, not introduced, by this testing**: firing the
+  CREATED webhook twice with *no* delay (two genuinely concurrent
+  deliveries, not a redelivery-after-completion) reproduced the **same**
+  Google Sheets append-race already documented for Inquiries/Cal Bookings
+  (gotcha 15) — one of the two appends was silently lost, leaving exactly
+  one row. This dedup fix targets the realistic redelivery-after-timeout
+  case; the near-instant concurrent case remains the same accepted,
+  documented risk as everywhere else in this system.
+
 ### Settings keys
 
 Tier 1 (adjustable without a redeploy) — all added by
@@ -962,6 +1653,13 @@ below), `cal_nicole_email`, `cal_justin_phone`, `cal_review_link`,
 `cal_reminder_24h_offset_hours`, `cal_reminder_2h_offset_hours`,
 `cal_reconfirm_offset_hours`, `cal_showing_reconfirm_offset_hours`,
 `cal_host_sms_offset_hours`, `cal_reconfirm_base_url`.
+
+`cal_send_failure_alert_phone` — added by
+`node scripts/n8n-add-cron-send-isolation.mjs --apply` (2026-08-06). Alert
+recipient when a Cron Poll reminder/follow-up permanently fails to send (see
+"Cron Poll send isolation" above). Placeholder default is Andrew's personal
+number, same convention as `unmatched_inquiry_alert_phone` /
+`rental_application_alert_phone` — reassign before launch alongside those.
 
 Tier 2 (hardcoded subject/body copy, straight from the spec) lives in the
 workflow JSON's Code nodes — see `n8n/cal-reminder-immediate.json` and
@@ -1091,6 +1789,10 @@ body = {
 13. **Google Sheets nodes need an explicit `columns.schema`** when built via the API. Without it, append/update throws `Could not get parameter` at runtime even though the node looks correctly configured.
 14. **Sheets coerces on write.** `"true"` becomes boolean `TRUE`, `"1668"` becomes number `1668`, and a leading `+` on a phone is stripped. Compare with `String(x).trim().toLowerCase()` rather than `=== "true"`.
 15. **Google Sheets `append` mode is not a reliable dedup boundary under sub-second concurrency.** Two nearly-simultaneous `values:append` calls to the same tab can still race and one row silently never lands — confirmed live on the Inquiries tab (two inquiry events ~800ms apart, only one row survived) even though the node is documented as safe for concurrent writes. A row that never gets appended looks identical to "nothing happened" — no error, no clue in `runData` beyond the append node's own successful-looking output. If a lost row would be silently costly (a lead never getting their link, not just a delayed reminder), re-read the tab after appending and verify the row is actually there before trusting it — see "Append-race fix" under "FUB Inquiry Flow".
+16. **A gate that's only called once per lead doesn't stay that way once another workflow is allowed to call it repeatedly.** The Identity Verification Gate's `Check Guards` had guard conditions for stage/trash/rejected but nothing checking whether a verification session was already open — fine when it was only ever triggered once per phone-added event, silently wrong once the Inquiry flow started correctly calling it on every inquiry from an unverified lead (two inquiries a few minutes apart before verification completes = two Stripe sessions + two near-identical SMS to the same phone, confirmed live). If a downstream gate can legitimately be invoked more than once for the same entity before the first call resolves, it needs its own in-flight check — don't assume "gets called once" just because it used to.
+17. **A malformed FUB API path can silently fall back to a list endpoint instead of erroring.** `FUB - Get Person`'s URL referenced `$json.events[0].personId`, which resolved to `undefined` because the upstream node's real output shape didn't have an `.events` wrapper (see "Person-lookup fix" under "FUB Inquiry Flow"). `GET /v1/people/undefined?...` did not 404 or 400 — FUB returned the unfiltered people list, and the existing `personPayload.people?.[0] ?? personPayload` defensive fallback (written to handle a genuinely different, legitimate response shape) silently took whoever was first, misattributing the whole record to the wrong person. A broken id in a REST path is not guaranteed to error just because it "looks like" it should — if a lookup result gets used for something consequential (here: who an SMS goes to), verify the returned identity matches what you asked for and throw if it doesn't, rather than trusting that a malformed request fails loudly on its own.
+18. **`includeTrash=true` only matters on FUB's list/filter endpoints, not the single-resource one — and a plausible-sounding root cause still needs to be reproduced, not just inferred from a parameter name.** A report that a Trash-stage lead got a real SMS came with a specific hypothesis: the plain `GET /v1/people/{id}` endpoint silently substitutes a different stage for a trashed person unless `includeTrash=true` is added. That turned out to be false — reproduced directly against three genuinely-trashed people, the by-ID endpoint returns the correct `stage: "Trash"` with or without the parameter; it only affects list-style calls (`?id=`, `?name=`, `?stage=`), which really do exclude Trash records by default. The real cause (see "Investigated 2026-08-05/06" under "Zillow Rental Application Flow") was FUB's own lead-flow automation un-trashing the person server-side, seconds before our node read their stage — a live behavior race, not an API-parameter bug. Reproducing the exact failure end-to-end (not just testing the proposed fix in isolation) is what surfaced this; applying the requested fix blind would have shipped a no-op and left the real gap open.
+19. **A newly-added recovery/alert path needs the same isolation and named-node-reference discipline as the path it's recovering from — it is not exempt just because it only runs on the unhappy path.** Building error isolation for the Cron Poll's `Send SMS`/`Send Email` (see "Cron Poll send isolation") introduced a *new* node, `Send Failure Alert`, to tell a human about the failure. That node itself used `$json` instead of a named-node reference and had no `onError` of its own — so live testing reproduced the exact bug being fixed, one node downstream: a bad alert-phone read (`$json` was `Mark Step Failed`'s HTTP response, not the alert data — the same class of mistake as gotcha 12) crashed the alert send, which crashed the execution, which starved every other due item behind it in the same batch. Similarly, building idempotency for the Immediate Sends `BOOKING_CREATED` branch (see "Immediate Sends booking idempotency") inserted new nodes in front of `Classify & Build Row`, which reads its *immediate* input (`$input.first().json`) rather than a named lookup — invisible until a live replay test showed the appended row had the wrong category and `is_test: false`. Both were caught by testing the actual failure/replay scenario end-to-end, not by testing the new logic in isolation and assuming the rest of the chain still worked unchanged. Any node inserted **in front of** an existing node must be checked for whether that existing node reads `$json`/`$input` (fragile — silently sees whatever the new node happens to output) versus a named-node reference (safe — unaffected by insertions). Any node added to a failure/alert path needs the same `onError` treatment as the primary path it's alerting about, not an implicit assumption that the unhappy path "won't have its own failures."
 
 ## Test cadence
 

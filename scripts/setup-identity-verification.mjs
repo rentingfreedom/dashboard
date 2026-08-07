@@ -68,6 +68,12 @@ const NEW_SETTINGS = [
       "Hi {{first_name}}, we weren't able to verify your ID automatically. Someone from our team will follow up with you shortly.",
     notes: "PLACEHOLDER wording — Andrew to finalize. Sent when Stripe returns requires_input/canceled.",
   },
+  {
+    key: "identity_verification_pending_ttl_hours",
+    value: "24",
+    notes:
+      "Check Guards (Identity Verification Gate) treats a pending Identity_Verifications row older than this as abandoned rather than in-flight, so a second inquiry gets a fresh verification SMS instead of staying blocked forever. Added 2026-08-05 for the duplicate-SMS fix — see docs/n8n-workflows.md.",
+  },
 ];
 
 async function main() {
