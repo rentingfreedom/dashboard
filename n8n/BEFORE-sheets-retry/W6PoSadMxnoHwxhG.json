@@ -1,0 +1,528 @@
+{
+  "updatedAt": "2026-06-24T21:34:04.414Z",
+  "createdAt": "2026-06-24T21:14:01.593Z",
+  "id": "W6PoSadMxnoHwxhG",
+  "name": "RentingFreedom - Delete Property",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "trigger-1",
+      "name": "Google Sheets - Watch Properties",
+      "type": "n8n-nodes-base.googleSheetsTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Properties"
+        },
+        "event": "anyUpdate",
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsTriggerOAuth2Api": {
+          "id": "OdBlDOqZdIKqbLuN",
+          "name": "Google Sheets Trigger account"
+        }
+      }
+    },
+    {
+      "id": "filter-1",
+      "name": "Only Delete Rows",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.active }}",
+              "rightValue": "Delete",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-1",
+      "name": "Prep Delete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst row = $input.first().json;\nconst calEventTypeId = String(row.cal_event_type_id || '').trim();\nconst propertyKey = String(row.property_key || '').trim();\nconst rowNumber = row.row_number ?? row.rowNumber ?? null;\n\nif (!propertyKey) throw new Error('property_key is empty — cannot delete');\nif (!rowNumber) throw new Error('row_number not found in trigger data — cannot delete row');\n\nreturn [{\n  json: {\n    property_key: propertyKey,\n    cal_event_type_id: calEventTypeId,\n    row_number: rowNumber,\n    has_cal_event_type: !!calEventTypeId,\n    cal_delete_url: calEventTypeId ? `https://api.cal.com/v2/event-types/${calEventTypeId}` : null,\n    admin_delete_url: `https://admin.googleapis.com/admin/directory/v1/customer/my_customer/resources/calendars/${encodeURIComponent(propertyKey)}`,\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "http-1",
+      "name": "Cal.com - Delete Event Type",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        900,
+        300
+      ],
+      "parameters": {
+        "method": "DELETE",
+        "url": "={{ $json.cal_delete_url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "cal-api-version",
+              "value": "2024-06-14"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Uyhr5FNmPBQkGhp3",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "id": "http-2",
+      "name": "Google Admin - Delete Resource",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1120,
+        300
+      ],
+      "parameters": {
+        "method": "DELETE",
+        "url": "={{ $('Prep Delete').first().json.admin_delete_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleOAuth2Api",
+        "options": {}
+      },
+      "credentials": {
+        "googleOAuth2Api": {
+          "id": "8cK53nGg6kaf4Djf",
+          "name": "Google Workspace Auth"
+        }
+      }
+    },
+    {
+      "id": "sheets-1",
+      "name": "Google Sheets - Delete Row",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1340,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://sheets.googleapis.com/v4/spreadsheets/1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw:batchUpdate",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ requests: [{ deleteDimension: { range: { sheetId: 0, dimension: 'ROWS', startIndex: $('Prep Delete').first().json.row_number - 1, endIndex: $('Prep Delete').first().json.row_number } } }] }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Google Sheets - Watch Properties": {
+      "main": [
+        [
+          {
+            "node": "Only Delete Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Only Delete Rows": {
+      "main": [
+        [
+          {
+            "node": "Prep Delete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep Delete": {
+      "main": [
+        [
+          {
+            "node": "Cal.com - Delete Event Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cal.com - Delete Event Type": {
+      "main": [
+        [
+          {
+            "node": "Google Admin - Delete Resource",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Admin - Delete Resource": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets - Delete Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {
+    "node:Google Sheets - Watch Properties": {
+      "documentId": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+      "sheetId": 0,
+      "lastRevision": 2347,
+      "lastRevisionLink": "https://docs.google.com/spreadsheets/export?id=1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw&revision=2347&exportFormat=xlsx"
+    }
+  },
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "b107b90c-0842-4013-b4fa-e0547849cd78",
+  "activeVersionId": "b107b90c-0842-4013-b4fa-e0547849cd78",
+  "versionCounter": 3,
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-06-24T21:14:01.593Z",
+      "createdAt": "2026-06-24T21:14:01.593Z",
+      "role": "workflow:owner",
+      "workflowId": "W6PoSadMxnoHwxhG",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-06-24T21:34:04.417Z",
+    "createdAt": "2026-06-24T21:34:04.417Z",
+    "versionId": "b107b90c-0842-4013-b4fa-e0547849cd78",
+    "workflowId": "W6PoSadMxnoHwxhG",
+    "nodes": [
+      {
+        "id": "trigger-1",
+        "name": "Google Sheets - Watch Properties",
+        "type": "n8n-nodes-base.googleSheetsTrigger",
+        "typeVersion": 1,
+        "position": [
+          240,
+          300
+        ],
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "gid=0",
+            "mode": "list",
+            "cachedResultName": "Properties"
+          },
+          "event": "anyUpdate",
+          "options": {}
+        },
+        "credentials": {
+          "googleSheetsTriggerOAuth2Api": {
+            "id": "OdBlDOqZdIKqbLuN",
+            "name": "Google Sheets Trigger account"
+          }
+        }
+      },
+      {
+        "id": "filter-1",
+        "name": "Only Delete Rows",
+        "type": "n8n-nodes-base.filter",
+        "typeVersion": 2,
+        "position": [
+          460,
+          300
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": false,
+              "leftValue": "",
+              "typeValidation": "loose"
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.active }}",
+                "rightValue": "Delete",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "code-1",
+        "name": "Prep Delete",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          680,
+          300
+        ],
+        "parameters": {
+          "jsCode": "\nconst row = $input.first().json;\nconst calEventTypeId = String(row.cal_event_type_id || '').trim();\nconst propertyKey = String(row.property_key || '').trim();\nconst rowNumber = row.row_number ?? row.rowNumber ?? null;\n\nif (!propertyKey) throw new Error('property_key is empty — cannot delete');\nif (!rowNumber) throw new Error('row_number not found in trigger data — cannot delete row');\n\nreturn [{\n  json: {\n    property_key: propertyKey,\n    cal_event_type_id: calEventTypeId,\n    row_number: rowNumber,\n    has_cal_event_type: !!calEventTypeId,\n    cal_delete_url: calEventTypeId ? `https://api.cal.com/v2/event-types/${calEventTypeId}` : null,\n    admin_delete_url: `https://admin.googleapis.com/admin/directory/v1/customer/my_customer/resources/calendars/${encodeURIComponent(propertyKey)}`,\n  }\n}];\n"
+        }
+      },
+      {
+        "id": "http-1",
+        "name": "Cal.com - Delete Event Type",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          900,
+          300
+        ],
+        "parameters": {
+          "method": "DELETE",
+          "url": "={{ $json.cal_delete_url }}",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "cal-api-version",
+                "value": "2024-06-14"
+              },
+              {
+                "name": "Accept",
+                "value": "application/json"
+              }
+            ]
+          },
+          "options": {
+            "redirect": {
+              "redirect": {
+                "followRedirects": true
+              }
+            }
+          }
+        },
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "Uyhr5FNmPBQkGhp3",
+            "name": "Header Auth account"
+          }
+        }
+      },
+      {
+        "id": "http-2",
+        "name": "Google Admin - Delete Resource",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          1120,
+          300
+        ],
+        "parameters": {
+          "method": "DELETE",
+          "url": "={{ $('Prep Delete').first().json.admin_delete_url }}",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "googleOAuth2Api",
+          "options": {}
+        },
+        "credentials": {
+          "googleOAuth2Api": {
+            "id": "8cK53nGg6kaf4Djf",
+            "name": "Google Workspace Auth"
+          }
+        }
+      },
+      {
+        "id": "sheets-1",
+        "name": "Google Sheets - Delete Row",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          1340,
+          300
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://sheets.googleapis.com/v4/spreadsheets/1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw:batchUpdate",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "googleSheetsOAuth2Api",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ requests: [{ deleteDimension: { range: { sheetId: 0, dimension: 'ROWS', startIndex: $('Prep Delete').first().json.row_number - 1, endIndex: $('Prep Delete').first().json.row_number } } }] }) }}",
+          "options": {}
+        },
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        }
+      }
+    ],
+    "connections": {
+      "Google Sheets - Watch Properties": {
+        "main": [
+          [
+            {
+              "node": "Only Delete Rows",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Only Delete Rows": {
+        "main": [
+          [
+            {
+              "node": "Prep Delete",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Prep Delete": {
+        "main": [
+          [
+            {
+              "node": "Cal.com - Delete Event Type",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Cal.com - Delete Event Type": {
+        "main": [
+          [
+            {
+              "node": "Google Admin - Delete Resource",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Google Admin - Delete Resource": {
+        "main": [
+          [
+            {
+              "node": "Google Sheets - Delete Row",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Justin Artis",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-06-24T21:34:04.478Z",
+        "id": 14,
+        "workflowId": "W6PoSadMxnoHwxhG",
+        "versionId": "b107b90c-0842-4013-b4fa-e0547849cd78",
+        "event": "deactivated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      },
+      {
+        "createdAt": "2026-06-24T21:34:09.245Z",
+        "id": 15,
+        "workflowId": "W6PoSadMxnoHwxhG",
+        "versionId": "b107b90c-0842-4013-b4fa-e0547849cd78",
+        "event": "activated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    ]
+  }
+}

@@ -1229,6 +1229,511 @@ Person 2525 restored to a clean baseline afterward (tags/`customTrashDate`/
 `customTrashGateLastStage` cleared, stage back to `Tenant Inquiry Lead (Do
 Not Contact)`).
 
+### Post-build audit — 2026-08-07 (read cold; nothing here needs re-deciding urgently)
+
+Independent audit of the trash-tag gate after it shipped, run entirely
+against test/synthetic contacts (person 2525 "Test Test8" and synthetic
+people). No real lead was exercised, no workflow's active state was changed,
+no gate was loosened.
+
+#### 1. `not_test_mode` ordering — **PASS** (the headline check)
+
+`Check Guards`' `not_test_mode` short-circuit still runs **before** any
+trash-tag or reapply-reroute logic, on every code path. Verified two ways:
+
+- **By reading the live code**: `const isTestMode = (person.firstName || "")
+  === "Test"; if (!isTestMode) return fail("not_test_mode");` sits above the
+  `TRASH_TAG_GATE_MARKER` block, and `fail()` returns an object with no
+  `needs_reapply_reroute` field at all — so a real lead cannot acquire
+  reroute fields even in principle.
+- **By live execution**: executions 13470, 13469, 13451 all show
+  `Check Guards → {proceed:false, reason:"not_test_mode"}` →
+  `Should Proceed? items=0` → `Needs Reapply Reroute? items=0`, no error.
+  A real lead reaches the reroute IF and falls out its unwired false branch,
+  which is the intended "ends cleanly" convention.
+
+Worth knowing: the reroute IF uses `typeValidation: strict` against a
+`needs_reapply_reroute` that is `undefined` on the `not_test_mode` path. That
+combination *can* throw in n8n — it does not here, confirmed on real
+executions rather than assumed.
+
+#### 2. Stage-transition watcher is **NOT test-gated** — stated plainly
+
+The watcher (`FUB - Get Person` → `FUB - Get Recent Notes` →
+`Trash Transition Watcher` → `FUB - Update Person (Watcher)`) sits
+**upstream** of `Check Guards`. Nothing in that path checks `firstName ===
+"Test"`. So for a **real** lead, any `peopleUpdated` event causes a live
+`PUT /v1/people/{id}` writing `customTrashGateLastStage` (and
+`customTrashDate` if they are transitioning into a trash-family stage) onto
+that person's real FUB record — while every other part of the system is
+still test-gated.
+
+This is not hypothetical: real contacts fire this webhook routinely (person
+2643 "Carol Pritchett", person 2647 "Meredith Trophy Point", a
+`Local Real Estate Entpreneaurs` contact who is not a rental lead at all).
+Both currently have `customTrashGateLastStage = null`, so the first
+`peopleUpdated` event on either will write to them.
+
+**RESOLVED 2026-08-07** — client decision: the watcher must only act on
+people in, or coming from, the two gated tenant stages, because the CRM also
+serves other business functions. Implemented; see "Watcher stage scoping"
+below. This subsection is kept for the finding itself.
+
+#### 3. What was fixed — watcher isolation (applied)
+
+The watcher's two new HTTP nodes were spliced into the **critical path** of
+the only workflow that sends verification SMS, both at n8n's default
+onError (abort the entire execution). Bookkeeping could therefore kill the
+gate. Execution 13463 already proves the shape: it died at
+`FUB - Update Person (Watcher)` on a FUB 400 and never reached
+`Check Guards`. That specific 400 was fixed, but any FUB 429/5xx reproduces
+it — and this workflow errors on ~25% of executions (109 of the last 430,
+mostly Google Sheets quota), so upstream flakiness is normal here.
+
+This is exactly gotcha 19's pattern. Fixed with the same shape as the Cron
+Poll's send isolation:
+
+- `FUB - Get Recent Notes` → `onError: continueRegularOutput`,
+  `alwaysOutputData: true`
+- `FUB - Update Person (Watcher)` → `onError: continueRegularOutput`
+- `Trash Transition Watcher` → treats an errored notes fetch as "cannot
+  verify the reapply self-collision" and therefore **does not stamp**
+  `customTrashDate`. The cache field is still refreshed (harmless); the date
+  the whole window policy is computed from is never written unverified.
+
+No gate loosened, no connection rewired, no active state changed
+(`active=true` before and after).
+
+```bash
+node scripts/n8n-add-watcher-isolation.mjs                  # dry run
+node scripts/n8n-add-watcher-isolation.mjs --apply
+node scripts/n8n-add-watcher-isolation.mjs --revert --apply
+```
+
+Idempotent (marker `WATCHER_ISOLATION_MARKER`), backup in
+`n8n/BEFORE-watcher-isolation/`.
+
+#### 3b. Watcher stage scoping — client decision, applied 2026-08-07
+
+Per the decision above, the watcher now writes only to people in or coming
+from the two gated tenant stages. Rule as implemented in
+`Trash Transition Watcher`:
+
+| Situation | Behaviour |
+|---|---|
+| Current stage IS a gated tenant stage | refresh `customTrashGateLastStage` only — this is what makes a later trash transition detectable at all |
+| Trash-family stage, cache shows a gated tenant stage | stamp `customTrashDate` + refresh cache (the real "tenant lead got trashed" transition) |
+| Trash-family stage, cache EMPTY (never seen) | stamp anyway — see safety note |
+| Anything else (owner / lender / developer / any non-tenant stage) | **no write at all**, returns `reason: "out_of_scope"` |
+
+**Safety note on the empty-cache exception.** A trash tag with no
+`customTrashDate` computes `daysSinceTrash = Infinity`, and `Infinity` never
+satisfies `<= 90` / `<= 365`, so the tag policy treats it as **expired** and
+lets the lead through. Refusing to stamp a first-seen already-trashed person
+would convert "we don't know when they were trashed" into "they are not
+blocked". Stamping errs toward blocking, the safe direction, and matches the
+documented go-forward-only limitation.
+
+**A useful side effect**: refusing to write when the cache holds a
+non-tenant stage also closes the reroute-clobber path. After a
+reapply-reroute PATCH moves someone back to Trash, a later unrelated event
+would previously have looked like a fresh transition (cache showing the
+stage they had drifted to) and re-stamped `customTrashDate = now`,
+destroying the date the reroute had carefully preserved.
+
+`WATCH_SCOPE_STAGES` is **hardcoded** in the node rather than read from
+Settings' `allowed_stages`, because the watcher runs *before* `Read Settings`
+and moving it after would fan it out across all ~47 settings rows. This
+mirrors how `TRASH_STAGES` and the three tag names are already hardcoded in
+this same gate. **If the production `allowed_stages` value ever changes,
+update `WATCH_SCOPE_STAGES` to match.**
+
+```bash
+node scripts/n8n-add-watcher-scope.mjs                  # dry run
+node scripts/n8n-add-watcher-scope.mjs --apply
+node scripts/n8n-add-watcher-scope.mjs --revert --apply
+```
+
+Idempotent (marker `WATCHER_SCOPE_MARKER`), backup in
+`n8n/BEFORE-watcher-scope/`. Verified: 233 assertions pass (11 new scoping
+cases, including real non-tenant stages from this account —
+`Local Real Estate Entpreneaurs`, `Current Owners`), plus live execution
+13715 against person 2525.
+
+#### 4. Per-workflow results
+
+All six carry `TRASH_TAG_GATE_MARKER`. Policy correctness was verified
+offline against the **live** `jsCode` (see the new verify script below).
+
+| Workflow | Node | Result |
+|---|---|---|
+| `L13GUyrWbjSJwn8p` Identity Gate | `Check Guards` | **PASS** — full policy + reroute fields + `not_test_mode` ordering |
+| `UbO0l29GtILMm1sP` Catch-up sweep | `Check & Build Message` | **PASS** — suppress-only, correct `trash_*` bail reasons |
+| `JDsKrVRHf9TEVj7j` Inquiry flow | `Resolve Inquiry` | **PASS** — row still recorded, `link_sent = skipped_trash_*`, no send/gate |
+| `Ih8zMmNeUwKvITGf` Legacy New Lead | `Match & Resolve Cal Link` | **PASS** (workflow is inactive) |
+| `HwXpYAqwbG1zwGls` Legacy Address | `Match & Resolve Cal Link` | **PASS** (workflow is inactive) |
+| `X1lih7X05rpnTPmb` Zillow flow | `Check Existing Match` | **PASS** — `existing_trash_reason` correct incl. the no-match case |
+
+New: `node scripts/trash-tag-gate-verify.mjs` — pulls the live `jsCode` from
+all six nodes plus the watcher and runs **210 assertions** across 16 policy
+cases (each tag alone; `Denied Credit` + `Temporary Trash` together both
+inside and outside the window; malformed and missing dates; all three
+untagged-fallback stages; a tag surviving stage drift; tag case/whitespace)
+plus 8 watcher cases. Sends nothing, writes nothing. All pass against the
+patched live code. Re-run after any edit to this logic — same discipline as
+`stage-gate-verify.mjs` / `trash-gate-verify.mjs`.
+
+#### 5. Two documented assumptions corrected
+
+- **The watcher's own PUT does not re-fire the webhook — but this is
+  field-specific, NOT a general `X-System` suppression.** Executions
+  13471/13472 both completed a successful watcher PUT at 00:35:30Z and no
+  execution followed in the next 32 minutes, so the self-collision and
+  loop-safety logic is defensive rather than load-bearing.
+
+  **Corrected 2026-08-07** — the original conclusion drawn from that ("FUB
+  suppresses webhook delivery for changes originating from the same
+  `X-System` key") is **wrong**, and was disproved by the trash backfill's
+  5-record validation batch: 5 PUTs carrying `tags` + `customTrashDate`
+  produced **6** `peopleUpdated` deliveries within ~2 seconds. The
+  difference appears to be *which fields change* — a custom-field-only write
+  (the watcher's `customTrashGateLastStage`) does not fire the webhook, while
+  a `tags` write does. Do not assume our own writes are webhook-silent; that
+  only holds for custom-field-only updates. See "Trash backfill" for the
+  operational consequence.
+- **`GET /notes?personId=undefined` is safe.** When a person is
+  Trash-invisible on the `?id=` endpoint, `FUB - Get Recent Notes` builds
+  its URL with `personId=undefined`. Tested live: FUB returns
+  `total: 0`, not an unfiltered note list — so the gotcha-17 class of silent
+  wrong-person misattribution does **not** apply here. (The watcher also
+  correctly no-ops on an empty person: `cacheStale` is false, verified.)
+
+#### 6. What was NOT tested
+
+- **The error-isolation path was not exercised against a real FUB failure.**
+  It is verified offline (the watcher's `notesUnavailable` branch) and by
+  node configuration, but no live FUB 429/5xx was forced to watch the
+  execution survive it.
+- **No real lead was run through anything**, by design. The watcher's
+  behaviour on a real contact is reasoned from the code and from test-person
+  executions, not observed.
+- **The reapply-reroute PATCH was not re-run** after the isolation patch —
+  it was verified live on 2026-08-07 (execution 13468) before this change,
+  and this change does not touch those nodes.
+- **The five read-only workflows were not fired live.** Their gate logic is
+  verified against live `jsCode` offline; two of them are inactive anyway.
+- **Still not exercised post-PUT**: Cal.com Booking Handler and Cal Reminder
+  Immediate Sends (both need a real Cal.com booking) and the DoorLoop sync
+  (hourly, will self-run). Everything else in the retry patch has since run.
+
+**Closed 2026-08-07 (live, after the scoping patch):**
+
+- **Stamping path** — moved person 2525 from `Tenant Inquiry Lead (Do Not
+  Contact)` to `Cold Rental Lead 1 month Hold`. FUB's own `peopleUpdated`
+  webhook fired; execution 13731 shows `Trash Transition Watcher →
+  {needs_write:true, stamped:true, update_body:{customTrashDate:"…10:07:06Z",
+  customTrashGateLastStage:"Cold Rental Lead 1 month Hold"}}`, the PUT
+  landed, and `Check Guards` then blocked with `trash_untagged_fallback`.
+  Use a trash-family stage that is **not** literal `Trash` for this test —
+  a person in real Trash is invisible to the `?id=` endpoint (gotcha 18) so
+  the watcher would never see them.
+- **Exclusion path** — moved 2525 to `Current Owners` (a non-tenant business
+  stage). Execution 13732: `Trash Transition Watcher → {reason:
+  "out_of_scope", needs_write:false}`, and a direct FUB read confirmed
+  **neither** `customTrashGateLastStage` nor `customTrashDate` was written.
+  This is the client's actual requirement, verified against live data.
+- **Inquiry flow post-PUT** — execution 13736: all four Sheets reads
+  returned data (67 Properties / 39 Inquiries / 47 Settings / 9 Identity)
+  and `Resolve Inquiry` skipped cleanly on `before_flow_start`.
+
+2525 restored to baseline (stage back, `customTrashDate` cleared, cache
+correctly repopulated by the watcher). **Note:** the client's own FUB
+automation added an `Awaiting Google Review` tag to 2525 during this stage
+cycling — not ours, harmless, but more confirmation that their tagging
+automation is live and reacts to stage changes with a delay.
+
+Live end-to-end confirmation after the isolation patch: execution 13489
+(person 2525) ran the full chain — `FUB - Get Person` → `FUB - Get Recent
+Notes` → watcher (`no_change`) → `Read Settings` → `Read Identity
+Verifications` → `Check Guards` → `{proceed:false, reason:
+"verification_already_pending"}` — status success, no SMS, no Stripe
+session.
+
+#### 7. Left open
+
+- **Sheets quota — measured 2026-08-07, it is a testing artifact, not a
+  production risk.** Across 3,580 executions of the six active workflows,
+  121 errors, of which **101 are Sheets quota**. Correlating each execution
+  against how many other executions started in the preceding 60 seconds:
+
+  | Executions in preceding 60s | Total | Errors | Rate |
+  |---|---|---|---|
+  | 0 (isolated) | 1767 | 22 | **1.2%** |
+  | 1–2 | 1747 | 76 | 4.4% |
+  | 3–5 | 64 | 20 | **31.3%** |
+
+  Quota failures are a burst phenomenon, and the quota-error-by-day
+  histogram lines up with active development days (19 on 07-30, 17 on 08-05,
+  13 on 08-06). At the client's real traffic — a couple of leads per day,
+  each firing an isolated chain — this sits in the 1.2% band, and the two
+  5-minute crons contribute roughly 2 requests/min against a 60/min quota.
+
+  **Decided: do not move to Supabase for this.** Retry standardisation was
+  applied instead — see "Sheets retry strategy" below.
+- Person 2525's `customTrashGateLastStage` is currently
+  `"Tenant Inquiry Lead (Do Not Contact)"` (correct for their current
+  stage), not cleared. Harmless; noted because the prior section claims it
+  was cleared.
+- **A trash tag with no `customTrashDate` is treated as EXPIRED, so it does
+  not block.** This is the documented policy (`Infinity` never satisfies
+  `<= 90` / `<= 365`), and the watcher's empty-cache stamping exception
+  above exists specifically to stop it biting. But it remains true for any
+  person who acquires a `Temporary Trash` / `Denied Credit` tag without our
+  watcher ever stamping a date — e.g. the pre-existing tagged backlog. The
+  alternative (treat a dated-less tag as blocking) is a policy change and
+  wants sign-off; flagged rather than changed.
+
+## Trash backfill + fall-through fix (2026-08-07)
+
+Two complementary changes closing the "dateless trash tag" hole.
+
+### Fall-through fix — `TRASH_FALLTHROUGH_MARKER`
+
+The policy was an `if / else-if` chain ending in the stage fallback, so
+matching **any** tag skipped the fallback — even when that tag produced no
+block. A dateless tag computes `daysSinceTrash = Infinity`, never satisfies
+`<=`, and therefore silently suppressed the fallback. Net effect: a person
+with `Temporary Trash` and no date, sitting in stage `Trash`, was **not
+blocked**, while an identical *untagged* person **was**. The tag made them
+less protected. One such person existed live.
+
+Fixed by de-chaining the fallback: `if (!trashBlock && stage is
+trash-family)`. Behaviour moves in exactly one direction — toward blocking —
+and only for people whose current stage is already trash-family. An expired
+tag on someone who has genuinely **left** the trash stages still serves them
+(the reapply path, deliberately untouched).
+
+```bash
+node scripts/n8n-add-trash-fallthrough.mjs                  # dry run
+node scripts/n8n-add-trash-fallthrough.mjs --apply
+node scripts/n8n-add-trash-fallthrough.mjs --revert --apply
+```
+
+Applied to all 6 workflows, `active` preserved. Verifier extended to 299
+assertions (6 new regression cases × 6 workflows), all passing.
+
+### Data backfill — 593 people
+
+Client decision: stamp `customTrashDate = today` and apply the stage-matching
+tag to everyone currently in a trash-family stage. Client confirmed everyone
+in Cold is there for credit reasons, that the 365-day window is intended
+despite the stage name, and accepted that dating an old record as "today"
+restarts its timeout.
+
+| Stage | Count | Tag applied |
+|---|---|---|
+| `Trash` | 555 | `Temporary Trash` |
+| `Cold Rental Lead 1 month Hold` | 38 | `Denied Credit` |
+| `Permanent Trash` | 0 | — |
+
+**593 updated, 0 failures.** Never overwrites an existing `customTrashDate`,
+never removes an existing tag (appends to the current array), skips
+already-compliant records so it is safe to re-run or resume. Journal of every
+person's prior tags/date in `n8n/BEFORE-trash-backfill/journal.json`;
+`--revert --apply` restores from it.
+
+```bash
+node scripts/fub-trash-backfill.mjs                      # dry run
+node scripts/fub-trash-backfill.mjs --apply --limit 5    # validation batch
+node scripts/fub-trash-backfill.mjs --apply              # the rest
+node scripts/fub-trash-backfill.mjs --revert --apply
+```
+
+**Operational lesson — writes are NOT webhook-silent.** The 5-record
+validation batch produced **6** `peopleUpdated` deliveries in ~2 seconds,
+every one of which failed on Sheets quota. Scaling that to 593 would have
+meant ~590 failed executions saturating the quota and starving real lead
+traffic for the duration. A `tags` write fires the webhook; the watcher's
+custom-field-only write does not (see the corrected note in the audit
+section). **Run this kind of bulk write with the Identity Gate deactivated**
+— it is the only *active* workflow subscribed to `peopleUpdated`. That is
+what was done here (deactivate → 588 writes in ~4 min → reactivate),
+confirmed `active=true` afterwards and health-checked with execution 13775.
+
+**Behavioural consequence to remember:** those 593 are now blocked by *tag*
+rather than by *current stage*. A tag persists across stage changes, so
+moving one of them into a tenant stage will block them and — once the test
+gate is lifted at launch — trigger the reapply-reroute, PATCHing them back
+into their trash stage with an "Automation: reapply blocked" note. Inert
+today because `not_test_mode` short-circuits first.
+
+### Deactivating does NOT avoid the webhook storm — FUB retries
+
+**Learned the hard way, 2026-08-07.** The backfill was run with the Identity
+Gate deactivated specifically to avoid ~590 executions. It did not work.
+FUB **queues and retries** webhook deliveries that fail, so every delivery
+the deactivated Gate rejected came back once it was reactivated:
+~330 Identity Gate executions between 11:28 and 11:31Z, peaking at ~140/min,
+**every one of them failing** on Sheets quota.
+
+Consequences and mitigations for next time:
+
+- It was **harmless but not free**. All those executions died at
+  `Read Settings` / `Read Identity Verifications`, upstream of
+  `Check Guards`, so nothing acted on any real lead. But the quota was
+  saturated for ~4 minutes, during which genuine lead traffic would also
+  have failed — and a live test firing in that window did fail.
+- **The retry standardisation amplifies a storm rather than damping it.**
+  5 tries × 15s means each failing execution holds for 75s and spends 5
+  quota attempts. 330 executions × 5 = ~1,650 requests against a 60/min
+  bucket, which prolongs the saturation it is trying to ride out. The
+  setting is still right for isolated failures (the real-world case); just
+  do not expect it to help under a self-inflicted burst.
+- **The actual fix for a future bulk write is to pace the writes**, not to
+  deactivate the consumer. ~1 write per 9s keeps deliveries under the quota
+  and never queues a retry backlog. Deactivating only defers the load into
+  a worse, concentrated burst.
+
+### Expired-tag cleanup — `TAG_EXPIRY_CLEANUP_MARKER` (applied)
+
+Removes a trash tag whose window has provably expired, at the moment the
+Identity Gate evaluates that person, plus a FUB note so history isn't
+silently deleted.
+
+- Only `Temporary Trash` (90d) and `Denied Credit` (365d) are removable.
+  `Permanent Trash` has no window and is **never** touched.
+- Requires a **real parsed** `customTrashDate`. A dateless tag reads as
+  `Infinity` days ("expired"), but absence of *our* field is not evidence
+  about the *client's* tag — removing on that basis would delete their data
+  because we failed to stamp. Left alone; the fall-through fix already stops
+  it defeating the stage fallback.
+- Runs regardless of block outcome — tag expiry is a fact about the tag.
+- All other tags are preserved (FUB's PUT replaces the whole array, so
+  survivors are re-sent verbatim).
+
+**Wiring — the important bit.** `Tag Cleanup Needed?` fans out in
+**parallel** off `Check Guards`, alongside the existing `Should Proceed?`.
+It is deliberately **not** inserted in front of it: `Should Proceed?` reads
+`{{ $json.proceed }}`, its immediate input, so anything inserted ahead would
+feed it an HTTP response and break the entire gate. Gotcha 19 exactly.
+
+**Known limitation**: the cleanup fields ride on only two of `Check Guards`'
+return paths — the trash-blocked return and the success return. The other
+`fail()` paths (`no_phone`, `rejected_stage`, `stage_not_allowed`,
+`already_sent`, `verification_already_pending`) don't carry them, so cleanup
+doesn't fire there. Observed live: a first test attempt returned
+`verification_already_pending` and correctly did nothing. Also, someone in
+literal `Trash` is invisible to this workflow's `?id=` lookup (gotcha 18),
+so their tags are only cleaned once they leave Trash — which is exactly when
+it matters.
+
+Also worth knowing: **entering a trash stage re-stamps `customTrashDate`**,
+so a previously-expired tag becomes in-window again. That is correct (a new
+trash event), but it means you cannot test the cleanup by moving someone
+into a trash stage — the watcher runs first and refreshes the date. Test by
+letting them settle in the stage, then rewinding `customTrashDate` with a
+custom-field-only write (webhook-silent).
+
+```bash
+node scripts/n8n-add-tag-expiry-cleanup.mjs                  # dry run
+node scripts/n8n-add-tag-expiry-cleanup.mjs --apply
+node scripts/n8n-add-tag-expiry-cleanup.mjs --revert --apply
+```
+
+Idempotent (marker `TAG_EXPIRY_CLEANUP_MARKER`), backup in
+`n8n/BEFORE-tag-expiry-cleanup/`. Verifier now at **323 assertions**.
+
+**Verified live, execution 14441** — one run that proves both this and the
+fall-through fix together. Person 2525, settled in `Cold Rental Lead 1 month
+Hold` with a `Temporary Trash` tag dated 200 days ago:
+`Check Guards → {reason:"trash_untagged_fallback", needs_tag_cleanup:true,
+expired_tags:["Temporary Trash"], cleaned_tags:["Moncks Corner","29461"]}`
+→ `FUB - Remove Expired Tags` (tags now `["29461","Moncks Corner"]`, others
+preserved) → `FUB - Log Tag Cleanup Note` (note 2650, *"Automation: trash
+tag(s) expired and removed: Temporary Trash (trash_date 2026-01-19…)"*).
+Pre-fix that person would have been **unblocked**, since the expired tag
+suppressed the stage fallback.
+
+2525 restored to baseline afterwards, including its full original tag list —
+note that seeding a tag test **overwrites the whole tags array**, so capture
+the original set before testing.
+
+### Resolved — the shared-date precedence problem
+
+All three tags share **one** `customTrashDate`, which always holds the most
+recent transition. So a lead whose `Denied Credit` window expires, who
+reapplies successfully and is later trashed again for an unrelated reason,
+ends up carrying **both** tags with a fresh date — and `Denied Credit`
+governs, giving them 365 days instead of 90 and rerouting them to
+`Cold Rental Lead 1 month Hold` instead of `Trash`. Wrong window *and* wrong
+stage, written back to the CRM.
+
+Precedence logic alone cannot fix this — with one shared date, both tags look
+equally current. The only moment the staleness is knowable is while the
+window is still expired, i.e. before the person is re-trashed. **Built and
+verified** as the expired-tag cleanup above (client sign-off 2026-08-07).
+
+The "nonresponsive tag" question raised during this work is **closed** —
+the client confirmed they meant `Temporary Trash`. There is no fourth tag;
+the three-tag policy stands as documented.
+
+## Sheets retry strategy
+
+Applied 2026-08-07 after the quota analysis in "Post-build audit" above.
+**68 nodes across 13 workflows** standardised to `retryOnFail: true`,
+`maxTries: 5`, `waitBetweenTries: 15000`.
+
+Two distinct gaps were closed:
+
+1. **The retry window did not span the quota window.** Nodes that already
+   retried used 5 × 8000ms = 40s. The Sheets quota is a **per-minute**
+   bucket, so all five tries could be spent inside the same exhausted 60s
+   window and still fail. 5 × 15s = 75s clears it.
+2. **Several nodes in ACTIVE workflows had no retry at all**, so they failed
+   on the first quota hit. The consequential ones:
+   - `3hGnl6mPnu2AMbZ1` Cron Poll — `Read Settings (Cron)`,
+     `Read Cal Bookings`: the highest-frequency Sheets readers in the system
+     (every 5 minutes, forever).
+   - `5LwTZS4dw5qmInL2` Immediate Sends — `Read Cal Bookings (Dedup Check)`
+     and `(Dedup Check - Cancel)`: these **are** the booking idempotency
+     guard, so a quota failure aborted before the row was recorded.
+   - `41HFRjgWiPEFJwTU` Reconfirm Webhook — `Read Cal Bookings (Reconfirm)`:
+     a guest clicking their reconfirm link.
+   - `TGGhSkTSZGYPrZo9` / `W6PoSadMxnoHwxhG` — the Properties write/delete.
+
+**Scope**: every `googleSheets` node **except polling trigger nodes** (a
+retry there is meaningless — the two `Google Sheets - Watch Properties`
+triggers are deliberately untouched), plus every `httpRequest` node calling
+`sheets.googleapis.com` directly (the Cron Poll's `Mark Step Sent` /
+`Mark Step Failed`, the Result Handler's two row updates, Delete Property's
+row delete). Deliberately **excluded**: the two legacy cal-link workflows
+(pending retirement), `Populife Code Test`, and `Test Helper: Reset +
+Trigger` — none are production paths, and they still read `retry=false` in a
+survey, which is expected rather than a miss.
+
+**Tradeoff worth knowing**: under sustained quota exhaustion a single failing
+node can now spend up to ~60s retrying, so a 5-minute cron tick could in
+principle overlap the next one. That only happens while the quota is already
+exhausted — exactly when backing off is correct — and both crons dedup off
+sheet state rather than execution timing. Worth remembering if cron overlap
+is ever investigated.
+
+**Note on the n8n editor**: `waitBetweenTries` has a UI slider capped at
+5000ms, but the API accepts and stores larger values (8000 was already in
+use before this change). Opening one of these nodes in the editor and saving
+it by hand may clamp it back down — re-run the script if that happens.
+
+```bash
+node scripts/n8n-set-sheets-retry.mjs                  # dry run
+node scripts/n8n-set-sheets-retry.mjs --apply
+node scripts/n8n-set-sheets-retry.mjs --revert --apply
+```
+
+Idempotent (reports "already compliant" per workflow and changes nothing).
+Pre-change backups in `n8n/BEFORE-sheets-retry/`. All 13 PUTs preserved
+`active` state; verified live afterwards (execution 13722, Identity Gate,
+full chain success) and the 233-assertion gate verifier still passes.
+
 ## DoorLoop Occupancy Sync
 
 DoorLoop is the source of truth for each property's vacant/occupied status. This

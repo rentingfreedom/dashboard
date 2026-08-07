@@ -1,0 +1,474 @@
+#!/usr/bin/env node
+/**
+ * Offline verification of the FUB Trash-TAG gate (TRASH_TAG_GATE_MARKER),
+ * added by n8n-add-trash-tag-gate.mjs.
+ *
+ *   node scripts/trash-tag-gate-verify.mjs
+ *
+ * Pulls the LIVE jsCode out of all 6 patched code-nodes plus the Identity
+ * Gate's "Trash Transition Watcher" and executes each against synthetic FUB
+ * people, asserting the documented decision table in docs/n8n-workflows.md
+ * ("FUB Trash-tag gate").
+ *
+ * Also asserts the ORDERING property that matters most while the system is
+ * still test-gated: in the Identity Gate, `not_test_mode` must short-circuit
+ * BEFORE any trash-tag or reapply-reroute logic runs, so a real lead can
+ * never acquire reroute fields.
+ *
+ * Sends nothing, writes nothing, touches no n8n state. Same discipline as
+ * stage-gate-verify.mjs / trash-gate-verify.mjs — the cheap check to re-run
+ * after any edit to this logic.
+ */
+
+import { readFileSync, existsSync } from "fs";
+import { resolve, dirname } from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const envPath = resolve(__dirname, "../.env.local");
+if (existsSync(envPath)) {
+  for (const line of readFileSync(envPath, "utf8").split("\n")) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const i = t.indexOf("=");
+    if (i === -1) continue;
+    const k = t.slice(0, i).trim();
+    const v = t.slice(i + 1).trim().replace(/^["']|["']$/g, "");
+    if (!process.env[k]) process.env[k] = v;
+  }
+}
+const N8N_KEY = process.env.N8N_API_KEY;
+if (!N8N_KEY) {
+  console.error("N8N_API_KEY missing from .env.local");
+  process.exit(1);
+}
+
+const wfCache = new Map();
+async function getWorkflow(id) {
+  if (!wfCache.has(id)) {
+    const r = await fetch(`https://automation.rentingfreedom.com/api/v1/workflows/${id}`, {
+      headers: { "X-N8N-API-KEY": N8N_KEY },
+    });
+    if (!r.ok) throw new Error(`workflow ${id}: HTTP ${r.status}`);
+    wfCache.set(id, await r.json());
+  }
+  return wfCache.get(id);
+}
+function codeOf(wf, nodeName) {
+  const n = wf.nodes.find((x) => x.name === nodeName);
+  if (!n) throw new Error(`node "${nodeName}" not found in ${wf.name}`);
+  if (!n.parameters?.jsCode) throw new Error(`node "${nodeName}" has no jsCode`);
+  return n.parameters.jsCode;
+}
+
+/** Execute a code node's jsCode with stubbed n8n globals. */
+function run(code, itemsMap, { webhookBody = {}, json = {} } = {}) {
+  const $items = (name) => (itemsMap[name] ?? []).map((j) => ({ json: j }));
+  const $ = (name) => {
+    if (name === "Webhook") return { first: () => ({ json: { body: webhookBody } }) };
+    const arr = itemsMap[name] ?? [];
+    return { item: { json: arr[0] ?? {} }, first: () => ({ json: arr[0] ?? {} }) };
+  };
+  const fn = new Function("$items", "$", "$json", "$input", code);
+  return fn($items, $, json, { first: () => ({ json }), all: () => [{ json }] });
+}
+
+let failures = 0;
+let checks = 0;
+function expect(label, actual, want) {
+  checks++;
+  const ok = JSON.stringify(actual) === JSON.stringify(want);
+  if (!ok) failures++;
+  console.log(
+    `    ${ok ? "PASS" : "FAIL"}  ${label}: ${JSON.stringify(actual)}` +
+      (ok ? "" : `   (expected ${JSON.stringify(want)})`)
+  );
+}
+function section(t) {
+  console.log("\n" + "=".repeat(74) + "\n" + t + "\n" + "=".repeat(74));
+}
+
+const daysAgo = (d) => new Date(Date.now() - d * 86400000).toISOString();
+
+const ALLOWED_STAGE = "Tenant Still Looking For Rental";
+const settingsRows = [
+  { key: "allowed_stages", value: "Tenant Inquiry Lead (Do Not Contact),Tenant Still Looking For Rental,Incoming Rental Leads" },
+  { key: "sms_template", value: "Hi {{first_name}} {{cal_link}}" },
+  { key: "from_number", value: "+18035550000" },
+  { key: "unmatched_inquiry_alert_phone", value: "+18035550001" },
+  { key: "identity_verification_pending_ttl_hours", value: "24" },
+  { key: "rejected_stage_label", value: "Rejected" },
+  { key: "inquiry_flow_start_at", value: "2000-01-01T00:00:00Z" },
+];
+
+/**
+ * The documented decision table. `want` is the expected trash reason, or null
+ * when the person should NOT be trash-blocked.
+ */
+const POLICY_CASES = [
+  { label: "Permanent Trash tag, no date",              tags: ["Permanent Trash"],                  trashDate: "",             stage: "Trash",              want: "trash_permanent" },
+  { label: "Permanent Trash tag, 999d old (no window)", tags: ["Permanent Trash"],                  trashDate: daysAgo(999),   stage: "Permanent Trash",    want: "trash_permanent" },
+  { label: "Permanent Trash tag, stage drifted away",   tags: ["Permanent Trash"],                  trashDate: daysAgo(1),     stage: ALLOWED_STAGE,        want: "trash_permanent" },
+  { label: "Denied Credit, 10d (within 365)",           tags: ["Denied Credit"],                    trashDate: daysAgo(10),    stage: "Cold Rental Lead 1 month Hold", want: "trash_denied_credit" },
+  { label: "Denied Credit, 400d (past 365)",            tags: ["Denied Credit"],                    trashDate: daysAgo(400),   stage: ALLOWED_STAGE,        want: null },
+  { label: "Denied Credit + Temp Trash, 200d",          tags: ["Temporary Trash", "Denied Credit"], trashDate: daysAgo(200),   stage: ALLOWED_STAGE,        want: "trash_denied_credit" },
+  { label: "Denied Credit + Temp Trash, 400d",          tags: ["Temporary Trash", "Denied Credit"], trashDate: daysAgo(400),   stage: ALLOWED_STAGE,        want: null },
+  { label: "Temporary Trash, 10d (within 90)",          tags: ["Temporary Trash"],                  trashDate: daysAgo(10),    stage: "Trash",              want: "trash_temporary" },
+  { label: "Temporary Trash, 100d (past 90)",           tags: ["Temporary Trash"],                  trashDate: daysAgo(100),   stage: ALLOWED_STAGE,        want: null },
+  { label: "Temporary Trash, malformed date",           tags: ["Temporary Trash"],                  trashDate: "not-a-date",   stage: ALLOWED_STAGE,        want: null },
+  { label: "Temporary Trash, missing date",             tags: ["Temporary Trash"],                  trashDate: "",             stage: ALLOWED_STAGE,        want: null },
+  { label: "Untagged fallback, stage Trash",            tags: [],                                   trashDate: "",             stage: "Trash",              want: "trash_untagged_fallback" },
+  { label: "Untagged fallback, Permanent Trash stage",  tags: [],                                   trashDate: "",             stage: "Permanent Trash",    want: "trash_untagged_fallback" },
+  { label: "Untagged fallback, Cold Rental Hold stage", tags: [],                                   trashDate: "",             stage: "Cold Rental Lead 1 month Hold", want: "trash_untagged_fallback" },
+  { label: "Untagged, allowed stage (clean lead)",      tags: [],                                   trashDate: "",             stage: ALLOWED_STAGE,        want: null },
+  { label: "Tag casing/whitespace tolerated",           tags: ["  pErManEnt TRASH "],               trashDate: "",             stage: ALLOWED_STAGE,        want: "trash_permanent" },
+  // TRASH_FALLTHROUGH_MARKER regressions. Before the fix these four fell
+  // through the else-if chain and were NOT blocked, because a matching tag
+  // suppressed the stage fallback even when it produced no block of its own
+  // — leaving a tagged person LESS protected than an untagged one.
+  { label: "Dateless Temp Trash + still in Trash stage", tags: ["Temporary Trash"],                 trashDate: "",             stage: "Trash",              want: "trash_untagged_fallback" },
+  { label: "Dateless Denied Credit + in Cold Hold",      tags: ["Denied Credit"],                   trashDate: "",             stage: "Cold Rental Lead 1 month Hold", want: "trash_untagged_fallback" },
+  { label: "EXPIRED Temp Trash + still in Trash stage",  tags: ["Temporary Trash"],                 trashDate: daysAgo(200),   stage: "Trash",              want: "trash_untagged_fallback" },
+  { label: "EXPIRED Denied Credit + still in Cold Hold", tags: ["Denied Credit"],                   trashDate: daysAgo(500),   stage: "Cold Rental Lead 1 month Hold", want: "trash_untagged_fallback" },
+  // ...but an expired tag on someone who has genuinely LEFT the trash stages
+  // must still be served. That is the reapply path and is deliberately intact.
+  { label: "EXPIRED Temp Trash, moved to tenant stage",  tags: ["Temporary Trash"],                 trashDate: daysAgo(200),   stage: ALLOWED_STAGE,        want: null },
+  { label: "EXPIRED Denied Credit, moved to tenant stg", tags: ["Denied Credit"],                   trashDate: daysAgo(500),   stage: ALLOWED_STAGE,        want: null },
+];
+
+function person(c, over = {}) {
+  return {
+    id: 999999,
+    name: "Test Trashcase",
+    firstName: "Test",
+    lastName: "Trashcase",
+    stage: c.stage,
+    tags: c.tags,
+    customTrashDate: c.trashDate,
+    phones: [{ value: "8035551234" }],
+    emails: [{ value: "trashcase@example.com" }],
+    source: "Zillow Rentals",
+    addresses: [{ street: "130 Sandtrap Road" }],
+    ...over,
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+section("1. Identity Gate (L13GUyrWbjSJwn8p) · Check Guards");
+const gateWf = await getWorkflow("L13GUyrWbjSJwn8p");
+const gateCode = codeOf(gateWf, "Check Guards");
+
+const runGate = (p) =>
+  run(gateCode, {
+    "FUB - Get Person": [{ people: [p] }],
+    "Read Settings": settingsRows,
+    "Read Identity Verifications": [],
+  })[0].json;
+
+for (const c of POLICY_CASES) {
+  console.log(`\n  ${c.label}`);
+  const j = runGate(person(c));
+  if (c.want) {
+    expect("proceed", j.proceed, false);
+    expect("reason", j.reason, c.want);
+  } else {
+    // Not trash-blocked: must reach a NON-trash outcome (proceed, or a later
+    // guard like stage_not_allowed) — never a trash_* reason.
+    expect("no trash_* reason", String(j.reason).startsWith("trash_"), false);
+  }
+}
+
+section("1b. Identity Gate · not_test_mode ORDERING (the launch-critical one)");
+console.log("\n  Real (non-Test) lead carrying a Permanent Trash tag");
+{
+  const j = runGate(person(POLICY_CASES[0], { firstName: "Carol", name: "Carol Pritchett" }));
+  expect("reason is not_test_mode (short-circuits first)", j.reason, "not_test_mode");
+  expect("proceed", j.proceed, false);
+  expect("needs_reapply_reroute absent", j.needs_reapply_reroute, undefined);
+  expect("reapply_reroute_stage absent", j.reapply_reroute_stage, undefined);
+}
+console.log("\n  Real (non-Test) lead, drifted stage + in-window Temporary Trash tag");
+{
+  const j = runGate(
+    person(
+      { tags: ["Temporary Trash"], trashDate: daysAgo(10), stage: "Lead" },
+      { firstName: "Carol", name: "Carol Pritchett" }
+    )
+  );
+  expect("reason is not_test_mode", j.reason, "not_test_mode");
+  expect("needs_reapply_reroute absent", j.needs_reapply_reroute, undefined);
+}
+
+section("1c. Identity Gate · reapply-reroute fields (test leads only)");
+console.log("\n  Temp Trash tag 10d, stage drifted to 'Lead' -> reroute back to Trash");
+{
+  const j = runGate(person({ tags: ["Temporary Trash"], trashDate: daysAgo(10), stage: "Lead" }));
+  expect("reason", j.reason, "trash_temporary");
+  expect("needs_reapply_reroute", j.needs_reapply_reroute, true);
+  expect("reapply_reroute_stage", j.reapply_reroute_stage, "Trash");
+  expect("preserved trash date is the ORIGINAL", j.reapply_preserved_trash_date.slice(0, 10), daysAgo(10).slice(0, 10));
+}
+console.log("\n  Already sitting in the correct stage -> no redundant PATCH");
+{
+  const j = runGate(person({ tags: ["Temporary Trash"], trashDate: daysAgo(10), stage: "Trash" }));
+  expect("needs_reapply_reroute", j.needs_reapply_reroute, false);
+}
+console.log("\n  Untagged fallback -> no reroute target, must not PATCH");
+{
+  const j = runGate(person({ tags: [], trashDate: "", stage: "Trash" }));
+  expect("reason", j.reason, "trash_untagged_fallback");
+  expect("needs_reapply_reroute", j.needs_reapply_reroute, false);
+}
+console.log("\n  Denied Credit 10d, stage drifted -> reroute to Cold Rental Lead 1 month Hold");
+{
+  const j = runGate(person({ tags: ["Denied Credit"], trashDate: daysAgo(10), stage: "Lead" }));
+  expect("reapply_reroute_stage", j.reapply_reroute_stage, "Cold Rental Lead 1 month Hold");
+  expect("needs_reapply_reroute", j.needs_reapply_reroute, true);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+section("1d. Identity Gate · expired-tag cleanup (TAG_EXPIRY_CLEANUP_MARKER)");
+const cleanupCases = [
+  ["Expired Temp Trash (200d) -> remove it",        { tags: ["Moncks Corner", "Temporary Trash"], trashDate: daysAgo(200), stage: ALLOWED_STAGE }, true,  ["Temporary Trash"], ["Moncks Corner"]],
+  ["Expired Denied Credit (500d) -> remove it",     { tags: ["Denied Credit"], trashDate: daysAgo(500), stage: ALLOWED_STAGE },                    true,  ["Denied Credit"],   []],
+  ["In-window Temp Trash (10d) -> keep",            { tags: ["Temporary Trash"], trashDate: daysAgo(10), stage: ALLOWED_STAGE },                   false, [],                  null],
+  ["In-window Denied Credit (100d) -> keep",        { tags: ["Denied Credit"], trashDate: daysAgo(100), stage: ALLOWED_STAGE },                    false, [],                  null],
+  ["Permanent Trash NEVER removed (999d)",          { tags: ["Permanent Trash"], trashDate: daysAgo(999), stage: ALLOWED_STAGE },                  false, [],                  null],
+  ["Dateless tag left alone (no evidence)",         { tags: ["Temporary Trash"], trashDate: "", stage: ALLOWED_STAGE },                            false, [],                  null],
+  ["Malformed date left alone",                     { tags: ["Denied Credit"], trashDate: "not-a-date", stage: ALLOWED_STAGE },                    false, [],                  null],
+  ["Both expired -> both removed, others kept",     { tags: ["Ladson", "Temporary Trash", "Denied Credit"], trashDate: daysAgo(900), stage: ALLOWED_STAGE }, true, ["Temporary Trash", "Denied Credit"], ["Ladson"]],
+  ["Expired tag while still trash-blocked by stage",{ tags: ["Denied Credit"], trashDate: daysAgo(500), stage: "Cold Rental Lead 1 month Hold" },  true,  ["Denied Credit"],   []],
+];
+for (const [label, p, wantCleanup, wantExpired, wantKept] of cleanupCases) {
+  console.log(`\n  ${label}`);
+  const j = runGate(person(p));
+  expect("needs_tag_cleanup", j.needs_tag_cleanup, wantCleanup);
+  expect("expired_tags", j.expired_tags, wantExpired);
+  if (wantKept !== null) expect("cleaned_tags (survivors)", j.cleaned_tags, wantKept);
+}
+console.log("\n  Real (non-Test) lead with an expired tag -> gated, no cleanup fields");
+{
+  const j = runGate(person({ tags: ["Temporary Trash"], trashDate: daysAgo(200), stage: ALLOWED_STAGE },
+    { firstName: "Carol", name: "Carol Pritchett" }));
+  expect("reason", j.reason, "not_test_mode");
+  expect("needs_tag_cleanup absent", j.needs_tag_cleanup, undefined);
+}
+
+section("2. Catch-up sweep (UbO0l29GtILMm1sP) · Check & Build Message");
+const sweepCode = codeOf(await getWorkflow("UbO0l29GtILMm1sP"), "Check & Build Message");
+for (const c of POLICY_CASES) {
+  console.log(`\n  ${c.label}`);
+  const j = run(sweepCode, {
+    "FUB - Get Person": [{ people: [person(c)] }],
+    "Read Text Log": [],
+    "Read Settings": settingsRows,
+    "Read Inquiries": [
+      { person_id: "999999", link_sent: "false", match_status: "matched", cal_link: "https://cal.com/x/y" },
+    ],
+  })[0].json;
+  if (c.want) {
+    expect("skipped", j.skipped, true);
+    expect("reason", j.reason, c.want);
+  } else {
+    expect("no trash_* reason", String(j.reason ?? "").startsWith("trash_"), false);
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+section("3. Inquiry flow (JDsKrVRHf9TEVj7j) · Resolve Inquiry");
+const inqCode = codeOf(await getWorkflow("JDsKrVRHf9TEVj7j"), "Resolve Inquiry");
+for (const c of POLICY_CASES) {
+  console.log(`\n  ${c.label}`);
+  const p = person(c);
+  const j = run(inqCode, {
+    "FUB - Get Event": [
+      {
+        id: 1668,
+        personId: 999999,
+        type: "Property Inquiry",
+        created: new Date().toISOString(),
+        source: "Zillow Rentals",
+        property: { street: "130 Sandtrap Road", city: "Summerville" },
+      },
+    ],
+    "FUB - Get Person": [p], // unwrapped, per the WRONG_PERSON_GUARD
+    "Read Properties": [
+      { street_address: "130 Sandtrap Road", property_key: "130-sandtrap", cal_link: "https://cal.com/x/y" },
+    ],
+    "Read Inquiries": [],
+    "Read Settings": settingsRows,
+    "Read Identity Verifications": [{ lead_id: "999999", phone: "18035551234", status: "verified" }],
+  })[0].json;
+  if (c.want) {
+    expect("send_now", j.send_now, false);
+    expect("needs_gate", j.needs_gate, false);
+    expect("link_sent", j.link_sent, "skipped_" + c.want);
+    expect("row still recorded (skip not set)", !!j.skip, false);
+  } else {
+    expect("link_sent is not a trash skip", String(j.link_sent ?? "").startsWith("skipped_trash"), false);
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+section("4. Legacy New Lead (Ih8zMmNeUwKvITGf) · Match & Resolve Cal Link");
+const legacy1 = codeOf(await getWorkflow("Ih8zMmNeUwKvITGf"), "Match & Resolve Cal Link");
+for (const c of POLICY_CASES) {
+  console.log(`\n  ${c.label}`);
+  const j = run(legacy1, {
+    "FUB - Get Person": [{ people: [person(c)] }],
+    "FUB - Get Events": [
+      { events: [{ type: "Property Inquiry", property: { street: "130 Sandtrap Road" } }] },
+    ],
+    "Google Sheets - Read Properties": [
+      { street_address: "130 Sandtrap Road", property_key: "130-sandtrap", cal_link: "https://cal.com/x/y" },
+    ],
+  })[0].json;
+  if (c.want) expect("reason", j.reason, c.want);
+  else expect("no trash_* reason", String(j.reason ?? "").startsWith("trash_"), false);
+}
+
+section("5. Legacy Address (HwXpYAqwbG1zwGls) · Match & Resolve Cal Link");
+const legacy2 = codeOf(await getWorkflow("HwXpYAqwbG1zwGls"), "Match & Resolve Cal Link");
+for (const c of POLICY_CASES) {
+  console.log(`\n  ${c.label}`);
+  const j = run(legacy2, {
+    "FUB - Get Person": [{ people: [person(c)] }],
+    "Google Sheets - Read Properties": [
+      { street_address: "130 Sandtrap Road", property_key: "130-sandtrap", cal_link: "https://cal.com/x/y" },
+    ],
+  })[0].json;
+  if (c.want) expect("reason", j.reason, c.want);
+  else expect("no trash_* reason", String(j.reason ?? "").startsWith("trash_"), false);
+}
+
+section("6. Zillow flow (X1lih7X05rpnTPmb) · Check Existing Match");
+const zillow = codeOf(await getWorkflow("X1lih7X05rpnTPmb"), "Check Existing Match");
+for (const c of POLICY_CASES) {
+  console.log(`\n  ${c.label}`);
+  const j = run(zillow, {}, { json: { people: [person(c)] } })[0].json;
+  expect("existing_found", j.existing_found, true);
+  expect("existing_trashed", j.existing_trashed, !!c.want);
+  if (c.want) expect("existing_trash_reason", j.existing_trash_reason, c.want);
+}
+console.log("\n  No existing person at all (fresh applicant)");
+{
+  const j = run(zillow, {}, { json: { people: [] } })[0].json;
+  expect("existing_found", j.existing_found, false);
+  expect("existing_trashed", j.existing_trashed, false);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+section("7. Identity Gate · Trash Transition Watcher");
+const watchCode = codeOf(gateWf, "Trash Transition Watcher");
+const runWatch = (p, notes = []) =>
+  run(watchCode, {
+    "FUB - Get Person": [{ people: [p] }],
+    "FUB - Get Recent Notes": [{ notes }],
+  })[0].json;
+
+console.log("\n  Fresh transition into Trash (cache shows a gated tenant stage)");
+{
+  const j = runWatch({ id: 1, stage: "Trash", customTrashGateLastStage: "Tenant Still Looking For Rental" });
+  expect("needs_write", j.needs_write, true);
+  expect("stamped", j.stamped, true);
+  expect("body has customTrashDate", "customTrashDate" in j.update_body, true);
+  expect("body has cache field", j.update_body.customTrashGateLastStage, "Trash");
+  expect("PUT body omits id (FUB 400s on it)", "id" in j.update_body, false);
+}
+console.log("\n  Steady state, in scope: cache already matches -> no write (loop safety)");
+{
+  const j = runWatch({ id: 1, stage: ALLOWED_STAGE, customTrashGateLastStage: ALLOWED_STAGE });
+  expect("needs_write", j.needs_write, false);
+  expect("reason", j.reason, "no_change");
+}
+console.log("\n  Steady state, already trashed: short-circuits as out_of_scope (also no write)");
+{
+  const j = runWatch({ id: 1, stage: "Trash", customTrashGateLastStage: "Trash" });
+  expect("needs_write", j.needs_write, false);
+  expect("reason", j.reason, "out_of_scope");
+}
+console.log("\n  Self-collision: recent reapply marker note suppresses re-stamp");
+{
+  const j = runWatch(
+    { id: 1, stage: "Trash", customTrashGateLastStage: "Tenant Still Looking For Rental" },
+    [{ body: "Automation: reapply blocked, rerouted to Trash, trash_date preserved from X", created: new Date().toISOString() }]
+  );
+  expect("needs_write (cache still refreshed)", j.needs_write, true);
+  expect("stamped", j.stamped, false);
+  expect("customTrashDate NOT clobbered", "customTrashDate" in j.update_body, false);
+  expect("suppressed_by_reapply_note", j.suppressed_by_reapply_note, true);
+}
+console.log("\n  Old reapply note (>5min) is correctly ignored");
+{
+  const j = runWatch(
+    { id: 1, stage: "Trash", customTrashGateLastStage: "Tenant Still Looking For Rental" },
+    [{ body: "Automation: reapply blocked, rerouted to Trash", created: new Date(Date.now() - 20 * 60000).toISOString() }]
+  );
+  expect("stamped", j.stamped, true);
+}
+console.log("\n  First-ever sight, non-trash stage -> cache init only, no stamp");
+{
+  const j = runWatch({ id: 1, stage: ALLOWED_STAGE, customTrashGateLastStage: "" });
+  expect("needs_write", j.needs_write, true);
+  expect("stamped", j.stamped, false);
+  expect("no customTrashDate written", "customTrashDate" in j.update_body, false);
+}
+console.log("\n  Empty person (Trash-invisible on the ?id= endpoint) -> no write");
+{
+  const j = run(watchCode, { "FUB - Get Person": [{ people: [] }], "FUB - Get Recent Notes": [{ notes: [] }] })[0].json;
+  expect("needs_write", j.needs_write, false);
+}
+
+// WATCHER_ISOLATION_MARKER coverage — the notes fetch is allowed to fail
+// (onError: continueRegularOutput) rather than abort the gate, so the watcher
+// must not stamp customTrashDate on a basis it could not verify.
+console.log("\n  Notes fetch ERRORED (isolation) -> refresh cache but never stamp");
+{
+  const j = run(watchCode, {
+    "FUB - Get Person": [{ people: [{ id: 1, stage: "Trash", customTrashGateLastStage: "Tenant Still Looking For Rental" }] }],
+    "FUB - Get Recent Notes": [{ error: "FUB 429 Too Many Requests" }],
+  })[0].json;
+  expect("needs_write (cache refresh still ok)", j.needs_write, true);
+  expect("stamped", j.stamped, false);
+  expect("customTrashDate NOT written unverified", "customTrashDate" in j.update_body, false);
+  expect("cache field still written", j.update_body.customTrashGateLastStage, "Trash");
+}
+console.log("\n  Notes fetch errored AND cache already current -> no write at all");
+{
+  const j = run(watchCode, {
+    "FUB - Get Person": [{ people: [{ id: 1, stage: "Trash", customTrashGateLastStage: "Trash" }] }],
+    "FUB - Get Recent Notes": [{ error: "FUB 500" }],
+  })[0].json;
+  expect("needs_write", j.needs_write, false);
+}
+
+// WATCHER_SCOPE_MARKER coverage — client decision 2026-08-07: the watcher must
+// only act on people in, or coming from, the two gated tenant stages, because
+// the CRM also holds owners/lenders/developers for other business functions.
+section("8. Identity Gate · Trash Transition Watcher — stage scoping");
+const scopeCases = [
+  ["Tenant Inquiry Lead, cache empty -> cache init (in scope)",        { stage: "Tenant Inquiry Lead (Do Not Contact)", customTrashGateLastStage: "" }, true, false],
+  ["Tenant Still Looking, cache empty -> cache init (in scope)",       { stage: "Tenant Still Looking For Rental", customTrashGateLastStage: "" }, true, false],
+  ["Tenant stage, cache already current -> no write",                  { stage: "Tenant Still Looking For Rental", customTrashGateLastStage: "Tenant Still Looking For Rental" }, false, false],
+  ["Tenant stage -> Trash (the real transition) -> STAMP",             { stage: "Trash", customTrashGateLastStage: "Tenant Still Looking For Rental" }, true, true],
+  ["Tenant Inquiry -> Cold Rental Hold -> STAMP",                      { stage: "Cold Rental Lead 1 month Hold", customTrashGateLastStage: "Tenant Inquiry Lead (Do Not Contact)" }, true, true],
+  ["First-ever sight already in Trash (empty cache) -> STAMP (safe)",  { stage: "Trash", customTrashGateLastStage: "" }, true, true],
+  ["Lender/owner contact (Local Real Estate Entpreneaurs) -> NO WRITE",{ stage: "Local Real Estate Entpreneaurs", customTrashGateLastStage: "" }, false, false],
+  ["Current Owners -> NO WRITE",                                       { stage: "Current Owners", customTrashGateLastStage: "" }, false, false],
+  ["Incoming Rental Leads (not a gated stage) -> NO WRITE",            { stage: "Incoming Rental Leads", customTrashGateLastStage: "" }, false, false],
+  ["Non-tenant stage -> Trash (owner got trashed) -> NO WRITE",        { stage: "Trash", customTrashGateLastStage: "Current Owners" }, false, false],
+  ["Post-reroute: cache shows drifted non-tenant stage -> NO WRITE",   { stage: "Trash", customTrashGateLastStage: "Lead" }, false, false],
+];
+for (const [label, p, wantWrite, wantStamp] of scopeCases) {
+  console.log(`\n  ${label}`);
+  const j = runWatch({ id: 1, ...p });
+  expect("needs_write", j.needs_write, wantWrite);
+  if (wantWrite) expect("stamped", j.stamped, wantStamp);
+  else if (!wantWrite && !("reason" in j && j.reason === "no_change")) expect("reason", j.reason, "out_of_scope");
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+console.log("\n" + "=".repeat(74));
+console.log(`${failures === 0 ? "ALL PASS" : failures + " FAILURE(S)"} — ${checks} assertions across 6 workflows + watcher`);
+console.log("=".repeat(74));
+process.exit(failures === 0 ? 0 : 1);

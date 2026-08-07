@@ -1,0 +1,4959 @@
+{
+  "updatedAt": "2026-07-31T01:52:09.173Z",
+  "createdAt": "2026-07-09T13:04:35.401Z",
+  "id": "gR6FWXMcc08ps8LT",
+  "name": "RentingFreedom - Cal.com Booking Handler",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "name": "Cal.com Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "f36633d2-73af-4b35-98f5-fe35f32dd861",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "calcom-booking",
+        "responseMode": "onReceived",
+        "options": {
+          "responseCode": 200
+        },
+        "responseData": "noData"
+      },
+      "id": "f34f41ac-9b50-4b4b-95e7-97388d054996"
+    },
+    {
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        160
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "OK",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "1ff5a65f-72c2-49da-9fd9-8015f2a649ee"
+    },
+    {
+      "name": "Route by Event",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "outputKey": "created",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ ($json.body ?? $json).triggerEvent }}",
+                    "rightValue": "BOOKING_CREATED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "outputKey": "rescheduled",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ ($json.body ?? $json).triggerEvent }}",
+                    "rightValue": "BOOKING_RESCHEDULED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "outputKey": "cancelled",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ ($json.body ?? $json).triggerEvent }}",
+                    "rightValue": "BOOKING_CANCELLED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "none"
+        }
+      },
+      "id": "28360c82-8202-4746-8bb0-126f73dd0b5a"
+    },
+    {
+      "name": "Parse Created Booking",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        180
+      ],
+      "parameters": {
+        "jsCode": "\nconst payload = $input.first().json.body ?? $input.first().json;\nconst booking = payload.payload ?? payload;\n\nconst uid         = booking.uid ?? booking.bookingId ?? '';\nconst startTime   = booking.startTime ?? '';\nconst propertyKey = (booking.type ?? '').toLowerCase().trim();\n\nconst attendees     = booking.attendees ?? [];\nconst primary       = attendees[0] ?? {};\nconst attendeeEmail = primary.email ?? booking.responses?.email?.value ?? '';\nconst attendeeName  = primary.name  ?? booking.responses?.name?.value  ?? '';\n\nconst meta      = booking.metadata ?? {};\nconst personId  = String(meta.fub_person_id ?? '');\nconst metaPhone = meta.phone ?? '';\nconst formPhone = booking.responses?.attendeePhoneNumber?.value\n  ?? booking.responses?.phone?.value ?? '';\nconst attendeePhone = metaPhone || formPhone;\n\nif (!uid)         throw new Error('Cal.com booking UID missing');\nif (!propertyKey) throw new Error('Cal.com event type missing');\nif (!startTime)   throw new Error('Cal.com startTime missing');\n\nreturn [{ json: { uid, startTime, propertyKey, attendeeEmail, attendeeName, attendeePhone, personId } }];\n"
+      },
+      "id": "d642905a-2a6b-41cb-9419-674658634035"
+    },
+    {
+      "name": "Read Properties",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        680,
+        180
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Properties",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "d6dec995-8014-46bb-9398-7301174bc88b",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "name": "Find Property",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        180
+      ],
+      "parameters": {
+        "jsCode": "\nconst booking   = $('Parse Created Booking').first().json;\nconst allRows   = $input.all().map(i => i.json);\nconst propKey   = booking.propertyKey;\n\nconst prop = allRows.find(r => (r.property_key ?? '').trim() === propKey.trim());\nif (!prop) throw new Error(`Property not found for key: ${propKey}`);\n\nconst lockId = String(prop.populife_lock_id ?? '').trim();\nif (!lockId) throw new Error(`No Populife lock ID on property ${propKey} — assign a lockbox first`);\n\nreturn [{ json: {\n  propertyKey:     prop.property_key,\n  propertyAddress: prop.street_address ?? propKey,\n  populifeLockId:  lockId,\n} }];\n"
+      },
+      "id": "adc72678-75f1-49e8-9c13-5464b6d81ff0"
+    },
+    {
+      "name": "FUB - Search by Phone",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        180
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "parameters": {
+        "url": "={{ (() => { const raw = $('Parse Created Booking').first().json.attendeePhone; const digits = (raw || '').replace(/\\D/g,''); return 'https://api.followupboss.com/v1/people?phone=' + encodeURIComponent(digits) + '&limit=1'; })() }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": true
+            }
+          }
+        },
+        "continueOnFail": true
+      },
+      "id": "0af4c8a4-2130-4fda-947e-9c19099e4b9b"
+    },
+    {
+      "name": "Build Showing Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        180
+      ],
+      "parameters": {
+        "jsCode": "\nconst booking  = $('Parse Created Booking').first().json;\nconst prop     = $('Find Property').first().json;\nconst fubResp  = $('FUB - Search by Phone').first().json;\n\nconst fubPerson = (fubResp.people ?? [])[0] ?? {};\nconst personId  = booking.personId || (fubPerson.id ? String(fubPerson.id) : '');\n\nconst fubPhone = (fubPerson.phones ?? [])[0]?.value ?? '';\nconst rawPhone = booking.attendeePhone || fubPhone;\nconst digits   = rawPhone.replace(/\\D/g, '');\nconst phone    = digits.length === 10 ? `+1${digits}` : digits ? `+${digits}` : '';\n\nconst now = new Date();\nconst showingTime = new Date(booking.startTime);\nconst isImmediate = (showingTime - now) < 60 * 60 * 1000;\n\n// ── ACCESS_GATE_MARKER: test gate ──────────────────────────────────────────────\n// The FUB person's firstName, NOT booking.attendeeName. The cal.com booking\n// carries whatever name the tester typed; the FUB lead is the thing the rest\n// of the system gates on. Stamped into the row so the 5-minute cron (which\n// has no FUB person) can read the verdict without an extra API call.\n// Empty fubPerson (phone not found in FUB) => not a test => blocked. Safe.\nconst isTestLead = String(fubPerson.firstName ?? '').trim().split(/\\s+/)[0] === 'Test';\n\nconst row = {\n  booking_uid:      booking.uid,\n  property_key:     prop.propertyKey,\n  property_address: prop.propertyAddress,\n  person_id:        personId,\n  person_name:      booking.attendeeName,\n  person_email:     booking.attendeeEmail,\n  person_phone:     phone,\n  showing_time:     booking.startTime,\n  status:           'scheduled',\n  populife_lock_id: prop.populifeLockId,\n  access_code:      '',\n  access_code_id:   '',\n  code_sent_at:     '',\n  created_at:       now.toISOString(),\n  updated_at:       now.toISOString(),\n  is_test:          isTestLead ? 'true' : 'false', // ACCESS_GATE_MARKER\n};\n\nreturn [{ json: { ...row, isImmediate, isTestLead, personId, populifeLockId: prop.populifeLockId } }];\n"
+      },
+      "id": "d40e2fb4-077f-4a02-80f0-9fc71bc1f79b"
+    },
+    {
+      "name": "Append to Showings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1780,
+        180
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Showings",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "booking_uid": "={{ $('Build Showing Row').first().json.booking_uid }}",
+            "property_key": "={{ $('Build Showing Row').first().json.property_key }}",
+            "property_address": "={{ $('Build Showing Row').first().json.property_address }}",
+            "person_id": "={{ $('Build Showing Row').first().json.person_id }}",
+            "person_name": "={{ $('Build Showing Row').first().json.person_name }}",
+            "person_email": "={{ $('Build Showing Row').first().json.person_email }}",
+            "person_phone": "={{ $('Build Showing Row').first().json.person_phone }}",
+            "showing_time": "={{ $('Build Showing Row').first().json.showing_time }}",
+            "status": "={{ $('Build Showing Row').first().json.status }}",
+            "populife_lock_id": "={{ $('Build Showing Row').first().json.populife_lock_id }}",
+            "access_code": "={{ $('Build Showing Row').first().json.access_code }}",
+            "access_code_id": "={{ $('Build Showing Row').first().json.access_code_id }}",
+            "code_sent_at": "={{ $('Build Showing Row').first().json.code_sent_at }}",
+            "created_at": "={{ $('Build Showing Row').first().json.created_at }}",
+            "updated_at": "={{ $('Build Showing Row').first().json.updated_at }}",
+            "is_test": "={{ $json.is_test }}"
+          },
+          "schema": [
+            {
+              "id": "booking_uid",
+              "displayName": "booking_uid",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_key",
+              "displayName": "property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_address",
+              "displayName": "property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_name",
+              "displayName": "person_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_email",
+              "displayName": "person_email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_phone",
+              "displayName": "person_phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "showing_time",
+              "displayName": "showing_time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "access_code",
+              "displayName": "access_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "access_code_id",
+              "displayName": "access_code_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "code_sent_at",
+              "displayName": "code_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "populife_lock_id",
+              "displayName": "populife_lock_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "is_test",
+              "displayName": "is_test",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ]
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "id": "8f8903c3-10a9-4f35-9d62-f111024f22f4",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "name": "FUB - Note Showing Scheduled",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1780,
+        180
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ (() => { const pid = Number($('Build Showing Row').first().json.personId || 0); if (!pid) return JSON.stringify({ body: 'no personId', personId: 0 }); return JSON.stringify({ personId: pid, body: 'Showing scheduled: ' + new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date($('Build Showing Row').first().json.showing_time)) + ' at ' + $('Build Showing Row').first().json.property_address }); })() }}",
+        "options": {}
+      },
+      "id": "5623cd49-5003-4a90-a697-df31eacce33a",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Immediate? (Created)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2000,
+        180
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $('Build Showing Row').first().json.isImmediate }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            },
+            {
+              "id": "access-gate-test-lead",
+              "leftValue": "={{ $('Build Showing Row').first().json.isTestLead }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c8b6bd81-deeb-4e13-be84-f5a6d74601c4"
+    },
+    {
+      "name": "Read Settings (Code Gen)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2220,
+        100
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Settings",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "8b208e44-bb6a-4c10-b4db-9dff54d8c4f2",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "name": "Calc Code Window (Created)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2440,
+        100
+      ],
+      "parameters": {
+        "jsCode": "\nfunction calcWindow(showingTimeISO, availableBeforeMinutes) {\n  const dt = new Date(showingTimeISO);\n  const pad = n => String(n).padStart(2, '0');\n\n  // Shift start back by available_before_minutes, then floor to hour\n  const effectiveStart = new Date(dt.getTime() - availableBeforeMinutes * 60 * 1000);\n  const startUtc = new Date(effectiveStart);\n  startUtc.setUTCMinutes(0, 0, 0);\n\n  // End is always the showing's own hour + 1\n  const showingFloor = new Date(dt);\n  showingFloor.setUTCMinutes(0, 0, 0);\n  const endUtc = new Date(showingFloor.getTime() + 3600 * 1000);\n\n  const fmt = d => `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:00`;\n  return { startDate: fmt(startUtc), endDate: fmt(endUtc), tzOffset: '0' };\n}\n\nconst row = $('Build Showing Row').first().json;\nconst settings = {};\n$('Read Settings (Code Gen)').all().forEach(i => {\n  if (i.json.key && i.json.value) settings[i.json.key] = i.json.value;\n});\n\nconst appKey    = settings.populife_app_key ?? '';\nconst appSecret = settings.populife_app_secret ?? '';\nif (!appKey || !appSecret) throw new Error('Populife credentials missing from Settings sheet');\n\nconst availableBeforeMinutes = parseInt(settings.available_before_minutes || '0');\nconst { startDate, endDate, tzOffset } = calcWindow(row.showing_time, availableBeforeMinutes);\n\nreturn [{ json: {\n  ...row,\n  appKey, appSecret,\n  startDate, endDate, tzOffset,\n  populifeLockId: row.populifeLockId,\n} }];\n"
+      },
+      "id": "ccdc14fa-0a44-4174-9653-19b855146727"
+    },
+    {
+      "name": "Populife - Get Token (Created)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2660,
+        100
+      ],
+      "parameters": {
+        "url": "={{ 'https://open.populife.co/api/auth/access_token/get?appKey=' + $json.appKey + '&appSecret=' + $json.appSecret }}",
+        "options": {}
+      },
+      "id": "5ba3c5e0-8bdf-4fee-bfc9-7957e93a89da"
+    },
+    {
+      "name": "Populife - Generate Code (Created)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2880,
+        100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://open.populife.co/api/password/generate/deadline",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/x-www-form-urlencoded;charset=utf-8"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "string",
+        "body": "={{ 'appKey=' + encodeURIComponent($('Calc Code Window (Created)').first().json.appKey) + '&accessToken=' + encodeURIComponent($('Populife - Get Token (Created)').first().json.data.accessToken) + '&lockId=' + encodeURIComponent($('Calc Code Window (Created)').first().json.populifeLockId) + '&startDate=' + encodeURIComponent($('Calc Code Window (Created)').first().json.startDate) + '&endDate=' + encodeURIComponent($('Calc Code Window (Created)').first().json.endDate) + '&timeZone=' + encodeURIComponent($('Calc Code Window (Created)').first().json.tzOffset) + '&alias=' + encodeURIComponent($('Calc Code Window (Created)').first().json.person_name || 'Showing') }}",
+        "options": {}
+      },
+      "id": "f32a7b54-d57d-44be-b111-a3531309e26f"
+    },
+    {
+      "name": "Build SMS (Created)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3100,
+        100
+      ],
+      "parameters": {
+        "jsCode": "\nfunction fmtShowingSlot(showingTimeISO) {\n  const start = new Date(showingTimeISO);\n  const end   = new Date(start.getTime() + 15 * 60 * 1000);\n  const timeFmt = new Intl.DateTimeFormat('en-US', {\n    timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true\n  });\n  const dateFmt = new Intl.DateTimeFormat('en-US', {\n    timeZone: 'America/New_York', month: 'short', day: 'numeric', year: 'numeric'\n  });\n  return 'Valid from ' + timeFmt.format(start) + ' through ' + timeFmt.format(end) + ', ' + dateFmt.format(start);\n}\n\nfunction fmtTime(iso) {\n  try {\n    return new Intl.DateTimeFormat('en-US', {\n      timeZone: 'America/New_York',\n      weekday: 'short', month: 'short', day: 'numeric',\n      hour: 'numeric', minute: '2-digit', hour12: true\n    }).format(new Date(iso));\n  } catch(e) { return iso; }\n}\n\nconst row      = $('Build Showing Row').first().json;\nconst codeData = $('Populife - Generate Code (Created)').first().json;\nconst settings = {};\n$('Read Settings (Code Gen)').all().forEach(i => {\n  if (i.json.key && i.json.value) settings[i.json.key] = i.json.value;\n});\n\nconst code       = codeData.data?.keyboardPwd ?? '';\nconst codeId     = String(codeData.data?.keyboardPwdId ?? '');\nconst template   = settings.access_code_sms_template ?? 'Your access code for {{address}} is: {{code}}';\nconst fromNumber = settings.from_number ?? '';\n\nconst validWindow = fmtShowingSlot(row.showing_time);\nconst windowNode  = $('Calc Code Window (Created)').first().json;\n\nconst message = template\n  .replace('{{first_name}}',   row.person_name?.split(' ')[0] ?? '')\n  .replace('{{name}}',         row.person_name ?? '')\n  .replace('{{address}}',      row.property_address ?? row.property_key ?? '')\n  .replace('{{date}}',         fmtTime(row.showing_time))\n  .replace('{{code}}',         code)\n  .replace('{{valid_window}}', validWindow)\n  .replace('{{start}}',        windowNode.startDate ?? '')\n  .replace('{{end}}',          windowNode.endDate ?? '');\n\nreturn [{ json: {\n  ...row,\n  code, codeId, message,\n  from_number: fromNumber,\n  phone: row.person_phone,\n  sent_at: new Date().toISOString(),\n} }];\n"
+      },
+      "id": "e59660d9-574f-4934-88bc-e497c48f88dc"
+    },
+    {
+      "name": "Send Access Code SMS (Created)",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        3320,
+        100
+      ],
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      },
+      "parameters": {
+        "from": "={{ $json.from_number }}",
+        "to": "={{ $json.phone }}",
+        "message": "={{ $json.message }}",
+        "options": {}
+      },
+      "id": "e65cccf2-f165-4e40-8f3c-b77070b5b7d4"
+    },
+    {
+      "name": "Update Showings (Code Sent - Created)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3540,
+        100
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Showings",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "booking_uid": "={{ $('Build SMS (Created)').first().json.booking_uid }}",
+            "status": "code_sent",
+            "access_code": "={{ $('Build SMS (Created)').first().json.code }}",
+            "access_code_id": "={{ String($('Build SMS (Created)').first().json.codeId) }}",
+            "code_sent_at": "={{ $('Build SMS (Created)').first().json.sent_at }}",
+            "updated_at": "={{ new Date().toISOString() }}"
+          },
+          "matchingColumns": [
+            "booking_uid"
+          ],
+          "schema": [
+            {
+              "id": "booking_uid",
+              "displayName": "booking_uid",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_key",
+              "displayName": "property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_address",
+              "displayName": "property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_name",
+              "displayName": "person_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_email",
+              "displayName": "person_email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_phone",
+              "displayName": "person_phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "showing_time",
+              "displayName": "showing_time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "populife_lock_id",
+              "displayName": "populife_lock_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "access_code",
+              "displayName": "access_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "access_code_id",
+              "displayName": "access_code_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "code_sent_at",
+              "displayName": "code_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "id": "07c9c247-52b7-409d-b44d-8e1b79f944e5",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "name": "FUB - Note Code Sent (Created)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3760,
+        100
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ (() => { const pid = Number($('Build Showing Row').first().json.personId || 0); if (!pid) return JSON.stringify({ body: 'no personId', personId: 0 }); return JSON.stringify({ personId: pid, body: 'Access code sent: ' + $('Populife - Generate Code (Created)').first().json.data.keyboardPwd + ' for showing at ' + $('Build Showing Row').first().json.property_address + ' on ' + new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date($('Build Showing Row').first().json.showing_time)) }); })() }}",
+        "options": {}
+      },
+      "id": "700499f9-aba4-4548-a58b-64610197a894",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Parse Reschedule",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        420
+      ],
+      "parameters": {
+        "jsCode": "\nconst payload = $input.first().json.body ?? $input.first().json;\nconst booking = payload.payload ?? payload;\n\nconst originalUid = booking.rescheduleUid ?? booking.uid ?? '';\nconst newUid      = booking.uid ?? '';\nconst startTime   = booking.startTime ?? '';\nconst attendee    = (booking.attendees ?? [])[0] ?? {};\nconst phone       = attendee.phoneNumber ?? '';\n\nif (!originalUid) throw new Error('Rescheduled booking UID missing');\nif (!startTime)   throw new Error('Rescheduled booking startTime missing');\n\nreturn [{ json: { uid: originalUid, newUid, newStartTime: startTime, phone } }];\n"
+      },
+      "id": "e9611c1e-6323-4136-9879-c5807f493317"
+    },
+    {
+      "name": "Read Showings (Reschedule)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        680,
+        420
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Showings",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "f0a8c8a7-f870-4331-82e7-243b5218b02e",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "name": "Find Showing (Reschedule)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        420
+      ],
+      "parameters": {
+        "jsCode": "\nconst parse = $('Parse Reschedule').first().json;\nconst originalUid = parse.uid;\nconst newUid      = parse.newUid;\nconst phone       = String(parse.phone ?? '').replace(/\\D/g, '');\n\nconst rows = $input.all().map(i => i.json);\n\n// Normalize phone helper\nconst norm = p => String(p ?? '').replace(/\\D/g, '');\n\n// 1. Try match by originalUid (rescheduleUid)\nlet row = rows.find(r => r.booking_uid === originalUid);\n\n// 2. Try newUid (in case previous update already changed it)\nif (!row) row = rows.find(r => r.booking_uid === newUid);\n\n// 3. Fallback: match by phone + active status (scheduled/code_sent)\nif (!row && phone) {\n  row = rows.find(r =>\n    norm(r.person_phone) === phone &&\n    (r.status === 'scheduled' || r.status === 'code_sent')\n  );\n}\n\nif (!row) return [{ json: { skipped: true, uid: originalUid } }];\n\nreturn [{ json: {\n  uid: originalUid,\n  rowIndex:         Number(row.row_number),\n  access_code_id:   row.access_code_id ?? '',\n  populifeLockId:   row.populife_lock_id ?? '',\n  property_key:     row.property_key ?? '',\n  person_id:        row.person_id ?? '',\n  person_name:      row.person_name ?? '',\n  person_phone:     row.person_phone ?? '',\n  property_address: row.property_address ?? '',\n  found: true,\n  matchedBookingUid: row.booking_uid,\n} }];\n"
+      },
+      "id": "b9b90211-bbd4-4108-a069-9271bbf3c738"
+    },
+    {
+      "name": "Has Existing Code? (Reschedule)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1120,
+        420
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ String($json.access_code_id ?? '') }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ]
+        },
+        "combinator": "and",
+        "options": {}
+      },
+      "id": "c29958ad-389e-4fd4-87f6-6817b699f10b"
+    },
+    {
+      "name": "Read Settings (Delete Old Code)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1340,
+        340
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Settings",
+          "mode": "name"
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "id": "d6b199e1-463d-491d-8c67-081f8ca0f778",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "name": "Populife - Get Token (Delete)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        340
+      ],
+      "parameters": {
+        "url": "={{ (() => { const s={}; $('Read Settings (Delete Old Code)').all().forEach(i=>{if(i.json.key)s[i.json.key]=i.json.value}); return 'https://open.populife.co/api/auth/access_token/get?appKey=' + s.populife_app_key + '&appSecret=' + s.populife_app_secret; })() }}",
+        "options": {}
+      },
+      "id": "35f8d0ac-ba80-4ebc-a330-cb0f9339c957",
+      "executeOnce": true
+    },
+    {
+      "name": "Populife - Delete Old Code",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1780,
+        340
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://open.populife.co/api/password/delete",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/x-www-form-urlencoded;charset=utf-8"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "form",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "appKey",
+              "value": "={{ (() => { const s={}; $('Read Settings (Delete Old Code)').all().forEach(i=>{if(i.json.key)s[i.json.key]=i.json.value}); return s.populife_app_key; })() }}"
+            },
+            {
+              "name": "accessToken",
+              "value": "={{ $('Populife - Get Token (Delete)').first().json.data.accessToken }}"
+            },
+            {
+              "name": "lockId",
+              "value": "={{ $('Find Showing (Reschedule)').first().json.populifeLockId }}"
+            },
+            {
+              "name": "keyboardPwdId",
+              "value": "={{ $('Find Showing (Reschedule)').first().json.access_code_id }}"
+            }
+          ]
+        },
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          }
+        },
+        "continueOnFail": true
+      },
+      "id": "846231f2-f3d4-4ed9-9d0c-e1abf97666be",
+      "executeOnce": true
+    },
+    {
+      "name": "Merge (Reschedule)",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        2000,
+        420
+      ],
+      "parameters": {
+        "mode": "append"
+      },
+      "id": "fd1aa93e-d86a-49b1-9ee8-e6626c4a49b8"
+    },
+    {
+      "name": "Update Showings Row (Reschedule)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2220,
+        420
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Showings",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "booking_uid"
+          ],
+          "value": {
+            "booking_uid": "={{ $('Find Showing (Reschedule)').first().json.matchedBookingUid }}",
+            "showing_time": "={{ $('Parse Reschedule').first().json.newStartTime }}",
+            "status": "scheduled",
+            "access_code": "",
+            "access_code_id": "",
+            "code_sent_at": "",
+            "updated_at": "={{ new Date().toISOString() }}"
+          },
+          "schema": [
+            {
+              "id": "booking_uid",
+              "displayName": "booking_uid",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_key",
+              "displayName": "property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_address",
+              "displayName": "property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_name",
+              "displayName": "person_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_email",
+              "displayName": "person_email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_phone",
+              "displayName": "person_phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "showing_time",
+              "displayName": "showing_time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "access_code",
+              "displayName": "access_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "access_code_id",
+              "displayName": "access_code_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "code_sent_at",
+              "displayName": "code_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "populife_lock_id",
+              "displayName": "populife_lock_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        }
+      },
+      "id": "89873928-47c4-45b3-9729-17e4347c977c",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "name": "FUB - Note Rescheduled",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2440,
+        420
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ (() => {\n  const pid = Number($('Find Showing (Reschedule)').first().json.person_id || 0);\n  if (!pid) return JSON.stringify({ body: 'no personId', personId: 0 });\n  return JSON.stringify({\n    personId: pid,\n    body: 'Showing rescheduled to: ' + new Intl.DateTimeFormat('en-US', {\n      timeZone: 'America/New_York', weekday: 'short', month: 'short',\n      day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true\n    }).format(new Date($('Parse Reschedule').first().json.newStartTime))\n    + ' at ' + ($('Find Showing (Reschedule)').first().json.property_address ?? '')\n  });\n})() }}",
+        "options": {},
+        "continueOnFail": true
+      },
+      "id": "a2654547-1d45-4b3a-a415-5dfac4974e33",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Parse Cancellation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        620
+      ],
+      "parameters": {
+        "jsCode": "\nconst payload = $input.first().json.body ?? $input.first().json;\nconst booking = payload.payload ?? payload;\nconst uid = booking.uid ?? '';\nconst attendee = (booking.attendees ?? [])[0] ?? {};\nconst phone = attendee.phoneNumber ?? '';\nif (!uid) throw new Error('Cancelled booking UID missing');\nreturn [{ json: { uid, phone } }];\n"
+      },
+      "id": "8ff2f9fc-d96b-4f27-9821-fc5a0849abc6"
+    },
+    {
+      "name": "Read Showings (Cancel)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        680,
+        620
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Showings",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "36059a15-fb7e-4c38-a46d-f3243a90b8ea",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "name": "Find Showing (Cancel)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        620
+      ],
+      "parameters": {
+        "jsCode": "\nconst parse = $('Parse Cancellation').first().json;\nconst uid   = parse.uid;\nconst phone = String(parse.phone ?? '').replace(/\\D/g, '');\n\nconst rows = $input.all().map(i => i.json);\nconst norm = p => String(p ?? '').replace(/\\D/g, '');\n\nlet row = rows.find(r => r.booking_uid === uid);\n\n// Fallback: match by phone + active status\nif (!row && phone) {\n  row = rows.find(r =>\n    norm(r.person_phone) === phone &&\n    (r.status === 'scheduled' || r.status === 'code_sent')\n  );\n}\n\nif (!row) return [{ json: { skipped: true, uid } }];\n\nreturn [{ json: {\n  uid,\n  rowIndex:         Number(row.row_number),\n  access_code_id:   row.access_code_id ?? '',\n  populifeLockId:   row.populife_lock_id ?? '',\n  person_id:        row.person_id ?? '',\n  person_email:     row.person_email ?? '',\n  property_address: row.property_address ?? '',\n  found: true,\n  matchedBookingUid: row.booking_uid,\n} }];\n"
+      },
+      "id": "3756c717-540a-4441-a5a2-b9015c3fea5f"
+    },
+    {
+      "name": "Has Code? (Cancel)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1120,
+        620
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ String($json.access_code_id ?? '') }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ]
+        },
+        "combinator": "and",
+        "options": {}
+      },
+      "id": "7ad74417-812f-499c-b1f2-6718b2737833"
+    },
+    {
+      "name": "Read Settings (Cancel Delete)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1340,
+        540
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Settings",
+          "mode": "name"
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "id": "92edb9a5-ee0d-4b4a-b566-b31f9036a572",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "name": "Populife - Get Token (Cancel)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        540
+      ],
+      "parameters": {
+        "url": "={{ (() => { const s={}; $('Read Settings (Cancel Delete)').all().forEach(i=>{if(i.json.key)s[i.json.key]=i.json.value}); return 'https://open.populife.co/api/auth/access_token/get?appKey=' + s.populife_app_key + '&appSecret=' + s.populife_app_secret; })() }}",
+        "options": {}
+      },
+      "id": "3b369ccb-61ec-43a9-9fed-f404bdc6f5ae",
+      "executeOnce": true
+    },
+    {
+      "name": "Populife - Delete Code (Cancel)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1780,
+        540
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://open.populife.co/api/password/delete",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/x-www-form-urlencoded;charset=utf-8"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "form",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "appKey",
+              "value": "={{ (() => { const s={}; $('Read Settings (Cancel Delete)').all().forEach(i=>{if(i.json.key)s[i.json.key]=i.json.value}); return s.populife_app_key; })() }}"
+            },
+            {
+              "name": "accessToken",
+              "value": "={{ $('Populife - Get Token (Cancel)').first().json.data.accessToken }}"
+            },
+            {
+              "name": "lockId",
+              "value": "={{ $('Find Showing (Cancel)').first().json.populifeLockId }}"
+            },
+            {
+              "name": "keyboardPwdId",
+              "value": "={{ $('Find Showing (Cancel)').first().json.access_code_id }}"
+            }
+          ]
+        },
+        "options": {},
+        "continueOnFail": true
+      },
+      "id": "3d2f2a4a-2d2c-4ecc-a345-85bc792e8ecd",
+      "executeOnce": true
+    },
+    {
+      "name": "Merge (Cancel)",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        2000,
+        620
+      ],
+      "parameters": {
+        "mode": "append"
+      },
+      "id": "63d88f15-7d66-4fcb-96f0-6b4b583a92ac"
+    },
+    {
+      "name": "Update Showings Row (Cancelled)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2220,
+        620
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Showings",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "booking_uid": "={{ $('Find Showing (Cancel)').first().json.matchedBookingUid }}",
+            "status": "cancelled",
+            "updated_at": "={{ new Date().toISOString() }}"
+          },
+          "matchingColumns": [
+            "booking_uid"
+          ],
+          "schema": [
+            {
+              "id": "booking_uid",
+              "displayName": "booking_uid",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_key",
+              "displayName": "property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_address",
+              "displayName": "property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_name",
+              "displayName": "person_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_email",
+              "displayName": "person_email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_phone",
+              "displayName": "person_phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "showing_time",
+              "displayName": "showing_time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "populife_lock_id",
+              "displayName": "populife_lock_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "access_code",
+              "displayName": "access_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "access_code_id",
+              "displayName": "access_code_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "code_sent_at",
+              "displayName": "code_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "34be06d7-7a89-4d6d-ab6c-bd4c791c2520",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "name": "FUB - Note Cancelled",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2440,
+        620
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ (() => {\n  const pid = Number($('Find Showing (Cancel)').first().json.person_id || 0);\n  if (!pid) return JSON.stringify({ body: 'no personId', personId: 0 });\n  return JSON.stringify({\n    personId: pid,\n    body: 'Showing cancelled at ' + ($('Find Showing (Cancel)').first().json.property_address ?? '')\n  });\n})() }}",
+        "options": {},
+        "continueOnFail": true
+      },
+      "id": "13bdd685-bb93-4de1-af25-7d93289350ee",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "FUB - Update Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        180
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ 'https://api.followupboss.com/v1/people/' + $('Build Showing Row').first().json.personId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ emails: [{ value: $('Build Showing Row').first().json.person_email, type: 'other', isPrimary: 1 }] }) }}",
+        "options": {},
+        "executeOnce": false
+      },
+      "id": "fd2dab03-2ac2-4b4b-8036-85927a93209b"
+    },
+    {
+      "id": "uid-swap-reschedule",
+      "name": "Update Booking UID (Reschedule)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2440,
+        420
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Showings",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "showing_time"
+          ],
+          "value": {
+            "showing_time": "={{ $('Parse Reschedule').first().json.newStartTime }}",
+            "booking_uid": "={{ $('Parse Reschedule').first().json.newUid }}"
+          },
+          "schema": [
+            {
+              "id": "booking_uid",
+              "displayName": "booking_uid",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "showing_time",
+              "displayName": "showing_time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "authentication": "serviceAccount"
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "id": "6daeebe2-7483-4eb1-9271-e75389e27fff",
+      "name": "Trigger Immediate Dispatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2660,
+        420
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://automation.rentingfreedom.com/webhook/immediate-dispatch-showings",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({source: 'reschedule', booking_uid: $('Parse Reschedule').first().json.newUid}) }}",
+        "options": {
+          "timeout": 5000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "id": "a1c73200-c7fe-4461-bd1c-e30891295b60",
+      "name": "Read Settings (Cancel SMS)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2440,
+        620
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Settings",
+          "mode": "name"
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 8000
+    },
+    {
+      "id": "2b2be69b-50e6-44a7-afc5-d17ddb5ac51f",
+      "name": "Build Cancel SMS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2660,
+        620
+      ],
+      "parameters": {
+        "jsCode": "\nfunction fmtTime(iso) {\n  try {\n    return new Intl.DateTimeFormat('en-US', {\n      timeZone: 'America/New_York',\n      weekday: 'short', month: 'short', day: 'numeric',\n      hour: 'numeric', minute: '2-digit', hour12: true\n    }).format(new Date(iso));\n  } catch(e) { return iso; }\n}\n\n// Look up the row we were cancelling to get person_phone + showing_time\nconst rowsRead = $('Read Showings (Cancel)').all().map(i => i.json);\nconst found    = $('Find Showing (Cancel)').first().json;\nconst uid      = found.matchedBookingUid || found.uid;\nconst row      = rowsRead.find(r => r.booking_uid === uid) || {};\n\nconst phone   = row.person_phone;\nconst address = row.property_address || row.property_key || 'the property';\nconst showing = row.showing_time;\n\nconst settings = {};\n$('Read Settings (Cancel SMS)').all().forEach(i => {\n  if (i.json.key && i.json.value) settings[i.json.key] = i.json.value;\n});\nconst template   = settings.cancellation_sms_template ?? 'Your showing for {{address}} on {{date}} has been cancelled.';\nconst fromNumber = settings.from_number ?? '';\n\nif (!phone) return [{ json: { skipped: true, reason: 'no_phone' } }];\n\n// ── ACCESS_GATE_MARKER: test gate ──────────────────────────────────────────────\n// Same stamped column the dispatch cron reads.\nif (String(row.is_test ?? '').trim().toLowerCase() !== 'true') {\n  return [{ json: { skipped: true, reason: 'not_test_mode' } }];\n}\n\nconst message = template\n  .replace('{{first_name}}',   row.person_name?.split(' ')[0] ?? '')\n  .replace('{{name}}',         row.person_name ?? '')\n  .replace('{{address}}',      address)\n  .replace('{{date}}',         fmtTime(showing));\n\nreturn [{ json: {\n  skipped: false,\n  phone,\n  from_number: fromNumber,\n  message,\n  sent_at: new Date().toISOString(),\n  booking_uid: uid,\n} }];\n"
+      }
+    },
+    {
+      "id": "a0737337-b828-4822-bcf4-5957f9bd51c7",
+      "name": "Should Send Cancel SMS?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        620
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ String($json.skipped ?? '') }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ]
+        },
+        "combinator": "and",
+        "options": {}
+      }
+    },
+    {
+      "id": "2d086233-d165-40ff-9ae0-b269db61067c",
+      "name": "Send Cancellation SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        3060,
+        620
+      ],
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      },
+      "parameters": {
+        "from": "={{ $json.from_number }}",
+        "to": "={{ $json.phone }}",
+        "message": "={{ $json.message }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Cal.com Webhook": {
+      "main": [
+        [
+          {
+            "node": "Route by Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Event": {
+      "main": [
+        [
+          {
+            "node": "Parse Created Booking",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse Reschedule",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse Cancellation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Created Booking": {
+      "main": [
+        [
+          {
+            "node": "Read Properties",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Properties": {
+      "main": [
+        [
+          {
+            "node": "Find Property",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Property": {
+      "main": [
+        [
+          {
+            "node": "FUB - Search by Phone",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Showing Row": {
+      "main": [
+        [
+          {
+            "node": "FUB - Update Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append to Showings": {
+      "main": [
+        [
+          {
+            "node": "FUB - Note Showing Scheduled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Note Showing Scheduled": {
+      "main": [
+        [
+          {
+            "node": "Immediate? (Created)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Immediate? (Created)": {
+      "main": [
+        [
+          {
+            "node": "Read Settings (Code Gen)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Read Settings (Code Gen)": {
+      "main": [
+        [
+          {
+            "node": "Calc Code Window (Created)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calc Code Window (Created)": {
+      "main": [
+        [
+          {
+            "node": "Populife - Get Token (Created)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Populife - Get Token (Created)": {
+      "main": [
+        [
+          {
+            "node": "Populife - Generate Code (Created)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Populife - Generate Code (Created)": {
+      "main": [
+        [
+          {
+            "node": "Build SMS (Created)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build SMS (Created)": {
+      "main": [
+        [
+          {
+            "node": "Send Access Code SMS (Created)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Access Code SMS (Created)": {
+      "main": [
+        [
+          {
+            "node": "Update Showings (Code Sent - Created)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Showings (Code Sent - Created)": {
+      "main": [
+        [
+          {
+            "node": "FUB - Note Code Sent (Created)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Reschedule": {
+      "main": [
+        [
+          {
+            "node": "Read Showings (Reschedule)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Showings (Reschedule)": {
+      "main": [
+        [
+          {
+            "node": "Find Showing (Reschedule)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Showing (Reschedule)": {
+      "main": [
+        [
+          {
+            "node": "Has Existing Code? (Reschedule)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Existing Code? (Reschedule)": {
+      "main": [
+        [
+          {
+            "node": "Read Settings (Delete Old Code)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge (Reschedule)",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Read Settings (Delete Old Code)": {
+      "main": [
+        [
+          {
+            "node": "Populife - Get Token (Delete)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Populife - Get Token (Delete)": {
+      "main": [
+        [
+          {
+            "node": "Populife - Delete Old Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Populife - Delete Old Code": {
+      "main": [
+        [
+          {
+            "node": "Merge (Reschedule)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge (Reschedule)": {
+      "main": [
+        [
+          {
+            "node": "Update Showings Row (Reschedule)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Showings Row (Reschedule)": {
+      "main": [
+        [
+          {
+            "node": "Update Booking UID (Reschedule)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Cancellation": {
+      "main": [
+        [
+          {
+            "node": "Read Showings (Cancel)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Showings (Cancel)": {
+      "main": [
+        [
+          {
+            "node": "Find Showing (Cancel)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Showing (Cancel)": {
+      "main": [
+        [
+          {
+            "node": "Has Code? (Cancel)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Code? (Cancel)": {
+      "main": [
+        [
+          {
+            "node": "Read Settings (Cancel Delete)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge (Cancel)",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Read Settings (Cancel Delete)": {
+      "main": [
+        [
+          {
+            "node": "Populife - Get Token (Cancel)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Populife - Get Token (Cancel)": {
+      "main": [
+        [
+          {
+            "node": "Populife - Delete Code (Cancel)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Populife - Delete Code (Cancel)": {
+      "main": [
+        [
+          {
+            "node": "Merge (Cancel)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge (Cancel)": {
+      "main": [
+        [
+          {
+            "node": "Update Showings Row (Cancelled)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Showings Row (Cancelled)": {
+      "main": [
+        [
+          {
+            "node": "Read Settings (Cancel SMS)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Update Email": {
+      "main": [
+        [
+          {
+            "node": "Append to Showings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Search by Phone": {
+      "main": [
+        [
+          {
+            "node": "Build Showing Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Booking UID (Reschedule)": {
+      "main": [
+        [
+          {
+            "node": "Trigger Immediate Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Immediate Dispatch": {
+      "main": [
+        [
+          {
+            "node": "FUB - Note Rescheduled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Settings (Cancel SMS)": {
+      "main": [
+        [
+          {
+            "node": "Build Cancel SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Cancel SMS": {
+      "main": [
+        [
+          {
+            "node": "Should Send Cancel SMS?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Send Cancel SMS?": {
+      "main": [
+        [
+          {
+            "node": "Send Cancellation SMS",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FUB - Note Cancelled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Cancellation SMS": {
+      "main": [
+        [
+          {
+            "node": "FUB - Note Cancelled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": {},
+  "versionId": "9633b0b6-bd0d-41f1-948f-525e85a594a6",
+  "activeVersionId": "9633b0b6-bd0d-41f1-948f-525e85a594a6",
+  "versionCounter": 29,
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-07-09T13:04:35.401Z",
+      "createdAt": "2026-07-09T13:04:35.401Z",
+      "role": "workflow:owner",
+      "workflowId": "gR6FWXMcc08ps8LT",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-07-31T01:52:09.175Z",
+    "createdAt": "2026-07-31T01:52:09.175Z",
+    "versionId": "9633b0b6-bd0d-41f1-948f-525e85a594a6",
+    "workflowId": "gR6FWXMcc08ps8LT",
+    "nodes": [
+      {
+        "name": "Cal.com Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          300
+        ],
+        "webhookId": "f36633d2-73af-4b35-98f5-fe35f32dd861",
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "calcom-booking",
+          "responseMode": "onReceived",
+          "options": {
+            "responseCode": 200
+          },
+          "responseData": "noData"
+        },
+        "id": "f34f41ac-9b50-4b4b-95e7-97388d054996"
+      },
+      {
+        "name": "Respond 200",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.1,
+        "position": [
+          220,
+          160
+        ],
+        "parameters": {
+          "respondWith": "text",
+          "responseBody": "OK",
+          "options": {
+            "responseCode": 200
+          }
+        },
+        "id": "1ff5a65f-72c2-49da-9fd9-8015f2a649ee"
+      },
+      {
+        "name": "Route by Event",
+        "type": "n8n-nodes-base.switch",
+        "typeVersion": 3.2,
+        "position": [
+          220,
+          300
+        ],
+        "parameters": {
+          "mode": "rules",
+          "rules": {
+            "values": [
+              {
+                "outputKey": "created",
+                "conditions": {
+                  "options": {
+                    "caseSensitive": true
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ ($json.body ?? $json).triggerEvent }}",
+                      "rightValue": "BOOKING_CREATED",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "outputKey": "rescheduled",
+                "conditions": {
+                  "options": {
+                    "caseSensitive": true
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ ($json.body ?? $json).triggerEvent }}",
+                      "rightValue": "BOOKING_RESCHEDULED",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "outputKey": "cancelled",
+                "conditions": {
+                  "options": {
+                    "caseSensitive": true
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ ($json.body ?? $json).triggerEvent }}",
+                      "rightValue": "BOOKING_CANCELLED",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "options": {
+            "fallbackOutput": "none"
+          }
+        },
+        "id": "28360c82-8202-4746-8bb0-126f73dd0b5a"
+      },
+      {
+        "name": "Parse Created Booking",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          460,
+          180
+        ],
+        "parameters": {
+          "jsCode": "\nconst payload = $input.first().json.body ?? $input.first().json;\nconst booking = payload.payload ?? payload;\n\nconst uid         = booking.uid ?? booking.bookingId ?? '';\nconst startTime   = booking.startTime ?? '';\nconst propertyKey = (booking.type ?? '').toLowerCase().trim();\n\nconst attendees     = booking.attendees ?? [];\nconst primary       = attendees[0] ?? {};\nconst attendeeEmail = primary.email ?? booking.responses?.email?.value ?? '';\nconst attendeeName  = primary.name  ?? booking.responses?.name?.value  ?? '';\n\nconst meta      = booking.metadata ?? {};\nconst personId  = String(meta.fub_person_id ?? '');\nconst metaPhone = meta.phone ?? '';\nconst formPhone = booking.responses?.attendeePhoneNumber?.value\n  ?? booking.responses?.phone?.value ?? '';\nconst attendeePhone = metaPhone || formPhone;\n\nif (!uid)         throw new Error('Cal.com booking UID missing');\nif (!propertyKey) throw new Error('Cal.com event type missing');\nif (!startTime)   throw new Error('Cal.com startTime missing');\n\nreturn [{ json: { uid, startTime, propertyKey, attendeeEmail, attendeeName, attendeePhone, personId } }];\n"
+        },
+        "id": "d642905a-2a6b-41cb-9419-674658634035"
+      },
+      {
+        "name": "Read Properties",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          680,
+          180
+        ],
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Properties",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "id": "d6dec995-8014-46bb-9398-7301174bc88b",
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "name": "Find Property",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          900,
+          180
+        ],
+        "parameters": {
+          "jsCode": "\nconst booking   = $('Parse Created Booking').first().json;\nconst allRows   = $input.all().map(i => i.json);\nconst propKey   = booking.propertyKey;\n\nconst prop = allRows.find(r => (r.property_key ?? '').trim() === propKey.trim());\nif (!prop) throw new Error(`Property not found for key: ${propKey}`);\n\nconst lockId = String(prop.populife_lock_id ?? '').trim();\nif (!lockId) throw new Error(`No Populife lock ID on property ${propKey} — assign a lockbox first`);\n\nreturn [{ json: {\n  propertyKey:     prop.property_key,\n  propertyAddress: prop.street_address ?? propKey,\n  populifeLockId:  lockId,\n} }];\n"
+        },
+        "id": "adc72678-75f1-49e8-9c13-5464b6d81ff0"
+      },
+      {
+        "name": "FUB - Search by Phone",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1120,
+          180
+        ],
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        },
+        "parameters": {
+          "url": "={{ (() => { const raw = $('Parse Created Booking').first().json.attendeePhone; const digits = (raw || '').replace(/\\D/g,''); return 'https://api.followupboss.com/v1/people?phone=' + encodeURIComponent(digits) + '&limit=1'; })() }}",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "options": {
+            "redirect": {
+              "redirect": {
+                "followRedirects": true
+              }
+            }
+          },
+          "continueOnFail": true
+        },
+        "id": "0af4c8a4-2130-4fda-947e-9c19099e4b9b"
+      },
+      {
+        "name": "Build Showing Row",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1340,
+          180
+        ],
+        "parameters": {
+          "jsCode": "\nconst booking  = $('Parse Created Booking').first().json;\nconst prop     = $('Find Property').first().json;\nconst fubResp  = $('FUB - Search by Phone').first().json;\n\nconst fubPerson = (fubResp.people ?? [])[0] ?? {};\nconst personId  = booking.personId || (fubPerson.id ? String(fubPerson.id) : '');\n\nconst fubPhone = (fubPerson.phones ?? [])[0]?.value ?? '';\nconst rawPhone = booking.attendeePhone || fubPhone;\nconst digits   = rawPhone.replace(/\\D/g, '');\nconst phone    = digits.length === 10 ? `+1${digits}` : digits ? `+${digits}` : '';\n\nconst now = new Date();\nconst showingTime = new Date(booking.startTime);\nconst isImmediate = (showingTime - now) < 60 * 60 * 1000;\n\n// ── ACCESS_GATE_MARKER: test gate ──────────────────────────────────────────────\n// The FUB person's firstName, NOT booking.attendeeName. The cal.com booking\n// carries whatever name the tester typed; the FUB lead is the thing the rest\n// of the system gates on. Stamped into the row so the 5-minute cron (which\n// has no FUB person) can read the verdict without an extra API call.\n// Empty fubPerson (phone not found in FUB) => not a test => blocked. Safe.\nconst isTestLead = String(fubPerson.firstName ?? '').trim().split(/\\s+/)[0] === 'Test';\n\nconst row = {\n  booking_uid:      booking.uid,\n  property_key:     prop.propertyKey,\n  property_address: prop.propertyAddress,\n  person_id:        personId,\n  person_name:      booking.attendeeName,\n  person_email:     booking.attendeeEmail,\n  person_phone:     phone,\n  showing_time:     booking.startTime,\n  status:           'scheduled',\n  populife_lock_id: prop.populifeLockId,\n  access_code:      '',\n  access_code_id:   '',\n  code_sent_at:     '',\n  created_at:       now.toISOString(),\n  updated_at:       now.toISOString(),\n  is_test:          isTestLead ? 'true' : 'false', // ACCESS_GATE_MARKER\n};\n\nreturn [{ json: { ...row, isImmediate, isTestLead, personId, populifeLockId: prop.populifeLockId } }];\n"
+        },
+        "id": "d40e2fb4-077f-4a02-80f0-9fc71bc1f79b"
+      },
+      {
+        "name": "Append to Showings",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          1780,
+          180
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "parameters": {
+          "operation": "append",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Showings",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "booking_uid": "={{ $('Build Showing Row').first().json.booking_uid }}",
+              "property_key": "={{ $('Build Showing Row').first().json.property_key }}",
+              "property_address": "={{ $('Build Showing Row').first().json.property_address }}",
+              "person_id": "={{ $('Build Showing Row').first().json.person_id }}",
+              "person_name": "={{ $('Build Showing Row').first().json.person_name }}",
+              "person_email": "={{ $('Build Showing Row').first().json.person_email }}",
+              "person_phone": "={{ $('Build Showing Row').first().json.person_phone }}",
+              "showing_time": "={{ $('Build Showing Row').first().json.showing_time }}",
+              "status": "={{ $('Build Showing Row').first().json.status }}",
+              "populife_lock_id": "={{ $('Build Showing Row').first().json.populife_lock_id }}",
+              "access_code": "={{ $('Build Showing Row').first().json.access_code }}",
+              "access_code_id": "={{ $('Build Showing Row').first().json.access_code_id }}",
+              "code_sent_at": "={{ $('Build Showing Row').first().json.code_sent_at }}",
+              "created_at": "={{ $('Build Showing Row').first().json.created_at }}",
+              "updated_at": "={{ $('Build Showing Row').first().json.updated_at }}",
+              "is_test": "={{ $json.is_test }}"
+            },
+            "schema": [
+              {
+                "id": "booking_uid",
+                "displayName": "booking_uid",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_key",
+                "displayName": "property_key",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_address",
+                "displayName": "property_address",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_id",
+                "displayName": "person_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_name",
+                "displayName": "person_name",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_email",
+                "displayName": "person_email",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_phone",
+                "displayName": "person_phone",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "showing_time",
+                "displayName": "showing_time",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "status",
+                "displayName": "status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "access_code",
+                "displayName": "access_code",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "access_code_id",
+                "displayName": "access_code_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "code_sent_at",
+                "displayName": "code_sent_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "created_at",
+                "displayName": "created_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "updated_at",
+                "displayName": "updated_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "populife_lock_id",
+                "displayName": "populife_lock_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "is_test",
+                "displayName": "is_test",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true,
+                "removed": false
+              }
+            ]
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "id": "8f8903c3-10a9-4f35-9d62-f111024f22f4",
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "name": "FUB - Note Showing Scheduled",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1780,
+          180
+        ],
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        },
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.followupboss.com/v1/notes",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ (() => { const pid = Number($('Build Showing Row').first().json.personId || 0); if (!pid) return JSON.stringify({ body: 'no personId', personId: 0 }); return JSON.stringify({ personId: pid, body: 'Showing scheduled: ' + new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date($('Build Showing Row').first().json.showing_time)) + ' at ' + $('Build Showing Row').first().json.property_address }); })() }}",
+          "options": {}
+        },
+        "id": "5623cd49-5003-4a90-a697-df31eacce33a",
+        "onError": "continueRegularOutput"
+      },
+      {
+        "name": "Immediate? (Created)",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          2000,
+          180
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $('Build Showing Row').first().json.isImmediate }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true"
+                }
+              },
+              {
+                "id": "access-gate-test-lead",
+                "leftValue": "={{ $('Build Showing Row').first().json.isTestLead }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "c8b6bd81-deeb-4e13-be84-f5a6d74601c4"
+      },
+      {
+        "name": "Read Settings (Code Gen)",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          2220,
+          100
+        ],
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Settings",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "id": "8b208e44-bb6a-4c10-b4db-9dff54d8c4f2",
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "name": "Calc Code Window (Created)",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2440,
+          100
+        ],
+        "parameters": {
+          "jsCode": "\nfunction calcWindow(showingTimeISO, availableBeforeMinutes) {\n  const dt = new Date(showingTimeISO);\n  const pad = n => String(n).padStart(2, '0');\n\n  // Shift start back by available_before_minutes, then floor to hour\n  const effectiveStart = new Date(dt.getTime() - availableBeforeMinutes * 60 * 1000);\n  const startUtc = new Date(effectiveStart);\n  startUtc.setUTCMinutes(0, 0, 0);\n\n  // End is always the showing's own hour + 1\n  const showingFloor = new Date(dt);\n  showingFloor.setUTCMinutes(0, 0, 0);\n  const endUtc = new Date(showingFloor.getTime() + 3600 * 1000);\n\n  const fmt = d => `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:00`;\n  return { startDate: fmt(startUtc), endDate: fmt(endUtc), tzOffset: '0' };\n}\n\nconst row = $('Build Showing Row').first().json;\nconst settings = {};\n$('Read Settings (Code Gen)').all().forEach(i => {\n  if (i.json.key && i.json.value) settings[i.json.key] = i.json.value;\n});\n\nconst appKey    = settings.populife_app_key ?? '';\nconst appSecret = settings.populife_app_secret ?? '';\nif (!appKey || !appSecret) throw new Error('Populife credentials missing from Settings sheet');\n\nconst availableBeforeMinutes = parseInt(settings.available_before_minutes || '0');\nconst { startDate, endDate, tzOffset } = calcWindow(row.showing_time, availableBeforeMinutes);\n\nreturn [{ json: {\n  ...row,\n  appKey, appSecret,\n  startDate, endDate, tzOffset,\n  populifeLockId: row.populifeLockId,\n} }];\n"
+        },
+        "id": "ccdc14fa-0a44-4174-9653-19b855146727"
+      },
+      {
+        "name": "Populife - Get Token (Created)",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2660,
+          100
+        ],
+        "parameters": {
+          "url": "={{ 'https://open.populife.co/api/auth/access_token/get?appKey=' + $json.appKey + '&appSecret=' + $json.appSecret }}",
+          "options": {}
+        },
+        "id": "5ba3c5e0-8bdf-4fee-bfc9-7957e93a89da"
+      },
+      {
+        "name": "Populife - Generate Code (Created)",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2880,
+          100
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://open.populife.co/api/password/generate/deadline",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/x-www-form-urlencoded;charset=utf-8"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "string",
+          "body": "={{ 'appKey=' + encodeURIComponent($('Calc Code Window (Created)').first().json.appKey) + '&accessToken=' + encodeURIComponent($('Populife - Get Token (Created)').first().json.data.accessToken) + '&lockId=' + encodeURIComponent($('Calc Code Window (Created)').first().json.populifeLockId) + '&startDate=' + encodeURIComponent($('Calc Code Window (Created)').first().json.startDate) + '&endDate=' + encodeURIComponent($('Calc Code Window (Created)').first().json.endDate) + '&timeZone=' + encodeURIComponent($('Calc Code Window (Created)').first().json.tzOffset) + '&alias=' + encodeURIComponent($('Calc Code Window (Created)').first().json.person_name || 'Showing') }}",
+          "options": {}
+        },
+        "id": "f32a7b54-d57d-44be-b111-a3531309e26f"
+      },
+      {
+        "name": "Build SMS (Created)",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          3100,
+          100
+        ],
+        "parameters": {
+          "jsCode": "\nfunction fmtShowingSlot(showingTimeISO) {\n  const start = new Date(showingTimeISO);\n  const end   = new Date(start.getTime() + 15 * 60 * 1000);\n  const timeFmt = new Intl.DateTimeFormat('en-US', {\n    timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true\n  });\n  const dateFmt = new Intl.DateTimeFormat('en-US', {\n    timeZone: 'America/New_York', month: 'short', day: 'numeric', year: 'numeric'\n  });\n  return 'Valid from ' + timeFmt.format(start) + ' through ' + timeFmt.format(end) + ', ' + dateFmt.format(start);\n}\n\nfunction fmtTime(iso) {\n  try {\n    return new Intl.DateTimeFormat('en-US', {\n      timeZone: 'America/New_York',\n      weekday: 'short', month: 'short', day: 'numeric',\n      hour: 'numeric', minute: '2-digit', hour12: true\n    }).format(new Date(iso));\n  } catch(e) { return iso; }\n}\n\nconst row      = $('Build Showing Row').first().json;\nconst codeData = $('Populife - Generate Code (Created)').first().json;\nconst settings = {};\n$('Read Settings (Code Gen)').all().forEach(i => {\n  if (i.json.key && i.json.value) settings[i.json.key] = i.json.value;\n});\n\nconst code       = codeData.data?.keyboardPwd ?? '';\nconst codeId     = String(codeData.data?.keyboardPwdId ?? '');\nconst template   = settings.access_code_sms_template ?? 'Your access code for {{address}} is: {{code}}';\nconst fromNumber = settings.from_number ?? '';\n\nconst validWindow = fmtShowingSlot(row.showing_time);\nconst windowNode  = $('Calc Code Window (Created)').first().json;\n\nconst message = template\n  .replace('{{first_name}}',   row.person_name?.split(' ')[0] ?? '')\n  .replace('{{name}}',         row.person_name ?? '')\n  .replace('{{address}}',      row.property_address ?? row.property_key ?? '')\n  .replace('{{date}}',         fmtTime(row.showing_time))\n  .replace('{{code}}',         code)\n  .replace('{{valid_window}}', validWindow)\n  .replace('{{start}}',        windowNode.startDate ?? '')\n  .replace('{{end}}',          windowNode.endDate ?? '');\n\nreturn [{ json: {\n  ...row,\n  code, codeId, message,\n  from_number: fromNumber,\n  phone: row.person_phone,\n  sent_at: new Date().toISOString(),\n} }];\n"
+        },
+        "id": "e59660d9-574f-4934-88bc-e497c48f88dc"
+      },
+      {
+        "name": "Send Access Code SMS (Created)",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          3320,
+          100
+        ],
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        },
+        "parameters": {
+          "from": "={{ $json.from_number }}",
+          "to": "={{ $json.phone }}",
+          "message": "={{ $json.message }}",
+          "options": {}
+        },
+        "id": "e65cccf2-f165-4e40-8f3c-b77070b5b7d4"
+      },
+      {
+        "name": "Update Showings (Code Sent - Created)",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          3540,
+          100
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "parameters": {
+          "operation": "update",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Showings",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "booking_uid": "={{ $('Build SMS (Created)').first().json.booking_uid }}",
+              "status": "code_sent",
+              "access_code": "={{ $('Build SMS (Created)').first().json.code }}",
+              "access_code_id": "={{ String($('Build SMS (Created)').first().json.codeId) }}",
+              "code_sent_at": "={{ $('Build SMS (Created)').first().json.sent_at }}",
+              "updated_at": "={{ new Date().toISOString() }}"
+            },
+            "matchingColumns": [
+              "booking_uid"
+            ],
+            "schema": [
+              {
+                "id": "booking_uid",
+                "displayName": "booking_uid",
+                "required": false,
+                "defaultMatch": true,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_key",
+                "displayName": "property_key",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_address",
+                "displayName": "property_address",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_id",
+                "displayName": "person_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_name",
+                "displayName": "person_name",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_email",
+                "displayName": "person_email",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_phone",
+                "displayName": "person_phone",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "showing_time",
+                "displayName": "showing_time",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "status",
+                "displayName": "status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "populife_lock_id",
+                "displayName": "populife_lock_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "access_code",
+                "displayName": "access_code",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "access_code_id",
+                "displayName": "access_code_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "code_sent_at",
+                "displayName": "code_sent_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "created_at",
+                "displayName": "created_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "updated_at",
+                "displayName": "updated_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ]
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "id": "07c9c247-52b7-409d-b44d-8e1b79f944e5",
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "name": "FUB - Note Code Sent (Created)",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          3760,
+          100
+        ],
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        },
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.followupboss.com/v1/notes",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ (() => { const pid = Number($('Build Showing Row').first().json.personId || 0); if (!pid) return JSON.stringify({ body: 'no personId', personId: 0 }); return JSON.stringify({ personId: pid, body: 'Access code sent: ' + $('Populife - Generate Code (Created)').first().json.data.keyboardPwd + ' for showing at ' + $('Build Showing Row').first().json.property_address + ' on ' + new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date($('Build Showing Row').first().json.showing_time)) }); })() }}",
+          "options": {}
+        },
+        "id": "700499f9-aba4-4548-a58b-64610197a894",
+        "onError": "continueRegularOutput"
+      },
+      {
+        "name": "Parse Reschedule",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          460,
+          420
+        ],
+        "parameters": {
+          "jsCode": "\nconst payload = $input.first().json.body ?? $input.first().json;\nconst booking = payload.payload ?? payload;\n\nconst originalUid = booking.rescheduleUid ?? booking.uid ?? '';\nconst newUid      = booking.uid ?? '';\nconst startTime   = booking.startTime ?? '';\nconst attendee    = (booking.attendees ?? [])[0] ?? {};\nconst phone       = attendee.phoneNumber ?? '';\n\nif (!originalUid) throw new Error('Rescheduled booking UID missing');\nif (!startTime)   throw new Error('Rescheduled booking startTime missing');\n\nreturn [{ json: { uid: originalUid, newUid, newStartTime: startTime, phone } }];\n"
+        },
+        "id": "e9611c1e-6323-4136-9879-c5807f493317"
+      },
+      {
+        "name": "Read Showings (Reschedule)",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          680,
+          420
+        ],
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Showings",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "id": "f0a8c8a7-f870-4331-82e7-243b5218b02e",
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "name": "Find Showing (Reschedule)",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          900,
+          420
+        ],
+        "parameters": {
+          "jsCode": "\nconst parse = $('Parse Reschedule').first().json;\nconst originalUid = parse.uid;\nconst newUid      = parse.newUid;\nconst phone       = String(parse.phone ?? '').replace(/\\D/g, '');\n\nconst rows = $input.all().map(i => i.json);\n\n// Normalize phone helper\nconst norm = p => String(p ?? '').replace(/\\D/g, '');\n\n// 1. Try match by originalUid (rescheduleUid)\nlet row = rows.find(r => r.booking_uid === originalUid);\n\n// 2. Try newUid (in case previous update already changed it)\nif (!row) row = rows.find(r => r.booking_uid === newUid);\n\n// 3. Fallback: match by phone + active status (scheduled/code_sent)\nif (!row && phone) {\n  row = rows.find(r =>\n    norm(r.person_phone) === phone &&\n    (r.status === 'scheduled' || r.status === 'code_sent')\n  );\n}\n\nif (!row) return [{ json: { skipped: true, uid: originalUid } }];\n\nreturn [{ json: {\n  uid: originalUid,\n  rowIndex:         Number(row.row_number),\n  access_code_id:   row.access_code_id ?? '',\n  populifeLockId:   row.populife_lock_id ?? '',\n  property_key:     row.property_key ?? '',\n  person_id:        row.person_id ?? '',\n  person_name:      row.person_name ?? '',\n  person_phone:     row.person_phone ?? '',\n  property_address: row.property_address ?? '',\n  found: true,\n  matchedBookingUid: row.booking_uid,\n} }];\n"
+        },
+        "id": "b9b90211-bbd4-4108-a069-9271bbf3c738"
+      },
+      {
+        "name": "Has Existing Code? (Reschedule)",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          1120,
+          420
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ String($json.access_code_id ?? '') }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "string",
+                  "operation": "notEquals"
+                }
+              }
+            ]
+          },
+          "combinator": "and",
+          "options": {}
+        },
+        "id": "c29958ad-389e-4fd4-87f6-6817b699f10b"
+      },
+      {
+        "name": "Read Settings (Delete Old Code)",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          1340,
+          340
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Settings",
+            "mode": "name"
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "id": "d6b199e1-463d-491d-8c67-081f8ca0f778",
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "name": "Populife - Get Token (Delete)",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1560,
+          340
+        ],
+        "parameters": {
+          "url": "={{ (() => { const s={}; $('Read Settings (Delete Old Code)').all().forEach(i=>{if(i.json.key)s[i.json.key]=i.json.value}); return 'https://open.populife.co/api/auth/access_token/get?appKey=' + s.populife_app_key + '&appSecret=' + s.populife_app_secret; })() }}",
+          "options": {}
+        },
+        "id": "35f8d0ac-ba80-4ebc-a330-cb0f9339c957",
+        "executeOnce": true
+      },
+      {
+        "name": "Populife - Delete Old Code",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1780,
+          340
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://open.populife.co/api/password/delete",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/x-www-form-urlencoded;charset=utf-8"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "form",
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "appKey",
+                "value": "={{ (() => { const s={}; $('Read Settings (Delete Old Code)').all().forEach(i=>{if(i.json.key)s[i.json.key]=i.json.value}); return s.populife_app_key; })() }}"
+              },
+              {
+                "name": "accessToken",
+                "value": "={{ $('Populife - Get Token (Delete)').first().json.data.accessToken }}"
+              },
+              {
+                "name": "lockId",
+                "value": "={{ $('Find Showing (Reschedule)').first().json.populifeLockId }}"
+              },
+              {
+                "name": "keyboardPwdId",
+                "value": "={{ $('Find Showing (Reschedule)').first().json.access_code_id }}"
+              }
+            ]
+          },
+          "options": {
+            "redirect": {
+              "redirect": {
+                "followRedirects": false
+              }
+            }
+          },
+          "continueOnFail": true
+        },
+        "id": "846231f2-f3d4-4ed9-9d0c-e1abf97666be",
+        "executeOnce": true
+      },
+      {
+        "name": "Merge (Reschedule)",
+        "type": "n8n-nodes-base.merge",
+        "typeVersion": 3,
+        "position": [
+          2000,
+          420
+        ],
+        "parameters": {
+          "mode": "append"
+        },
+        "id": "fd1aa93e-d86a-49b1-9ee8-e6626c4a49b8"
+      },
+      {
+        "name": "Update Showings Row (Reschedule)",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          2220,
+          420
+        ],
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "parameters": {
+          "operation": "update",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Showings",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "matchingColumns": [
+              "booking_uid"
+            ],
+            "value": {
+              "booking_uid": "={{ $('Find Showing (Reschedule)').first().json.matchedBookingUid }}",
+              "showing_time": "={{ $('Parse Reschedule').first().json.newStartTime }}",
+              "status": "scheduled",
+              "access_code": "",
+              "access_code_id": "",
+              "code_sent_at": "",
+              "updated_at": "={{ new Date().toISOString() }}"
+            },
+            "schema": [
+              {
+                "id": "booking_uid",
+                "displayName": "booking_uid",
+                "required": false,
+                "defaultMatch": true,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_key",
+                "displayName": "property_key",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_address",
+                "displayName": "property_address",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_id",
+                "displayName": "person_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_name",
+                "displayName": "person_name",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_email",
+                "displayName": "person_email",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_phone",
+                "displayName": "person_phone",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "showing_time",
+                "displayName": "showing_time",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "status",
+                "displayName": "status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "access_code",
+                "displayName": "access_code",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "access_code_id",
+                "displayName": "access_code_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "code_sent_at",
+                "displayName": "code_sent_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "populife_lock_id",
+                "displayName": "populife_lock_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "updated_at",
+                "displayName": "updated_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ]
+          }
+        },
+        "id": "89873928-47c4-45b3-9729-17e4347c977c",
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "name": "FUB - Note Rescheduled",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2440,
+          420
+        ],
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        },
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.followupboss.com/v1/notes",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ (() => {\n  const pid = Number($('Find Showing (Reschedule)').first().json.person_id || 0);\n  if (!pid) return JSON.stringify({ body: 'no personId', personId: 0 });\n  return JSON.stringify({\n    personId: pid,\n    body: 'Showing rescheduled to: ' + new Intl.DateTimeFormat('en-US', {\n      timeZone: 'America/New_York', weekday: 'short', month: 'short',\n      day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true\n    }).format(new Date($('Parse Reschedule').first().json.newStartTime))\n    + ' at ' + ($('Find Showing (Reschedule)').first().json.property_address ?? '')\n  });\n})() }}",
+          "options": {},
+          "continueOnFail": true
+        },
+        "id": "a2654547-1d45-4b3a-a415-5dfac4974e33",
+        "onError": "continueRegularOutput"
+      },
+      {
+        "name": "Parse Cancellation",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          460,
+          620
+        ],
+        "parameters": {
+          "jsCode": "\nconst payload = $input.first().json.body ?? $input.first().json;\nconst booking = payload.payload ?? payload;\nconst uid = booking.uid ?? '';\nconst attendee = (booking.attendees ?? [])[0] ?? {};\nconst phone = attendee.phoneNumber ?? '';\nif (!uid) throw new Error('Cancelled booking UID missing');\nreturn [{ json: { uid, phone } }];\n"
+        },
+        "id": "8ff2f9fc-d96b-4f27-9821-fc5a0849abc6"
+      },
+      {
+        "name": "Read Showings (Cancel)",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          680,
+          620
+        ],
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Showings",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "id": "36059a15-fb7e-4c38-a46d-f3243a90b8ea",
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "name": "Find Showing (Cancel)",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          900,
+          620
+        ],
+        "parameters": {
+          "jsCode": "\nconst parse = $('Parse Cancellation').first().json;\nconst uid   = parse.uid;\nconst phone = String(parse.phone ?? '').replace(/\\D/g, '');\n\nconst rows = $input.all().map(i => i.json);\nconst norm = p => String(p ?? '').replace(/\\D/g, '');\n\nlet row = rows.find(r => r.booking_uid === uid);\n\n// Fallback: match by phone + active status\nif (!row && phone) {\n  row = rows.find(r =>\n    norm(r.person_phone) === phone &&\n    (r.status === 'scheduled' || r.status === 'code_sent')\n  );\n}\n\nif (!row) return [{ json: { skipped: true, uid } }];\n\nreturn [{ json: {\n  uid,\n  rowIndex:         Number(row.row_number),\n  access_code_id:   row.access_code_id ?? '',\n  populifeLockId:   row.populife_lock_id ?? '',\n  person_id:        row.person_id ?? '',\n  person_email:     row.person_email ?? '',\n  property_address: row.property_address ?? '',\n  found: true,\n  matchedBookingUid: row.booking_uid,\n} }];\n"
+        },
+        "id": "3756c717-540a-4441-a5a2-b9015c3fea5f"
+      },
+      {
+        "name": "Has Code? (Cancel)",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          1120,
+          620
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ String($json.access_code_id ?? '') }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "string",
+                  "operation": "notEquals"
+                }
+              }
+            ]
+          },
+          "combinator": "and",
+          "options": {}
+        },
+        "id": "7ad74417-812f-499c-b1f2-6718b2737833"
+      },
+      {
+        "name": "Read Settings (Cancel Delete)",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          1340,
+          540
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Settings",
+            "mode": "name"
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "id": "92edb9a5-ee0d-4b4a-b566-b31f9036a572",
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "name": "Populife - Get Token (Cancel)",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1560,
+          540
+        ],
+        "parameters": {
+          "url": "={{ (() => { const s={}; $('Read Settings (Cancel Delete)').all().forEach(i=>{if(i.json.key)s[i.json.key]=i.json.value}); return 'https://open.populife.co/api/auth/access_token/get?appKey=' + s.populife_app_key + '&appSecret=' + s.populife_app_secret; })() }}",
+          "options": {}
+        },
+        "id": "3b369ccb-61ec-43a9-9fed-f404bdc6f5ae",
+        "executeOnce": true
+      },
+      {
+        "name": "Populife - Delete Code (Cancel)",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1780,
+          540
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://open.populife.co/api/password/delete",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/x-www-form-urlencoded;charset=utf-8"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "form",
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "appKey",
+                "value": "={{ (() => { const s={}; $('Read Settings (Cancel Delete)').all().forEach(i=>{if(i.json.key)s[i.json.key]=i.json.value}); return s.populife_app_key; })() }}"
+              },
+              {
+                "name": "accessToken",
+                "value": "={{ $('Populife - Get Token (Cancel)').first().json.data.accessToken }}"
+              },
+              {
+                "name": "lockId",
+                "value": "={{ $('Find Showing (Cancel)').first().json.populifeLockId }}"
+              },
+              {
+                "name": "keyboardPwdId",
+                "value": "={{ $('Find Showing (Cancel)').first().json.access_code_id }}"
+              }
+            ]
+          },
+          "options": {},
+          "continueOnFail": true
+        },
+        "id": "3d2f2a4a-2d2c-4ecc-a345-85bc792e8ecd",
+        "executeOnce": true
+      },
+      {
+        "name": "Merge (Cancel)",
+        "type": "n8n-nodes-base.merge",
+        "typeVersion": 3,
+        "position": [
+          2000,
+          620
+        ],
+        "parameters": {
+          "mode": "append"
+        },
+        "id": "63d88f15-7d66-4fcb-96f0-6b4b583a92ac"
+      },
+      {
+        "name": "Update Showings Row (Cancelled)",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          2220,
+          620
+        ],
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "parameters": {
+          "operation": "update",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Showings",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "booking_uid": "={{ $('Find Showing (Cancel)').first().json.matchedBookingUid }}",
+              "status": "cancelled",
+              "updated_at": "={{ new Date().toISOString() }}"
+            },
+            "matchingColumns": [
+              "booking_uid"
+            ],
+            "schema": [
+              {
+                "id": "booking_uid",
+                "displayName": "booking_uid",
+                "required": false,
+                "defaultMatch": true,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_key",
+                "displayName": "property_key",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_address",
+                "displayName": "property_address",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_id",
+                "displayName": "person_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_name",
+                "displayName": "person_name",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_email",
+                "displayName": "person_email",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_phone",
+                "displayName": "person_phone",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "showing_time",
+                "displayName": "showing_time",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "status",
+                "displayName": "status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "populife_lock_id",
+                "displayName": "populife_lock_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "access_code",
+                "displayName": "access_code",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "access_code_id",
+                "displayName": "access_code_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "code_sent_at",
+                "displayName": "code_sent_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "created_at",
+                "displayName": "created_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "updated_at",
+                "displayName": "updated_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "34be06d7-7a89-4d6d-ab6c-bd4c791c2520",
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "name": "FUB - Note Cancelled",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2440,
+          620
+        ],
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        },
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.followupboss.com/v1/notes",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ (() => {\n  const pid = Number($('Find Showing (Cancel)').first().json.person_id || 0);\n  if (!pid) return JSON.stringify({ body: 'no personId', personId: 0 });\n  return JSON.stringify({\n    personId: pid,\n    body: 'Showing cancelled at ' + ($('Find Showing (Cancel)').first().json.property_address ?? '')\n  });\n})() }}",
+          "options": {},
+          "continueOnFail": true
+        },
+        "id": "13bdd685-bb93-4de1-af25-7d93289350ee",
+        "onError": "continueRegularOutput"
+      },
+      {
+        "name": "FUB - Update Email",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1560,
+          180
+        ],
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        },
+        "onError": "continueRegularOutput",
+        "parameters": {
+          "method": "PUT",
+          "url": "={{ 'https://api.followupboss.com/v1/people/' + $('Build Showing Row').first().json.personId }}",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ emails: [{ value: $('Build Showing Row').first().json.person_email, type: 'other', isPrimary: 1 }] }) }}",
+          "options": {},
+          "executeOnce": false
+        },
+        "id": "fd2dab03-2ac2-4b4b-8036-85927a93209b"
+      },
+      {
+        "id": "uid-swap-reschedule",
+        "name": "Update Booking UID (Reschedule)",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          2440,
+          420
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "parameters": {
+          "operation": "update",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Showings",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "matchingColumns": [
+              "showing_time"
+            ],
+            "value": {
+              "showing_time": "={{ $('Parse Reschedule').first().json.newStartTime }}",
+              "booking_uid": "={{ $('Parse Reschedule').first().json.newUid }}"
+            },
+            "schema": [
+              {
+                "id": "booking_uid",
+                "displayName": "booking_uid",
+                "required": false,
+                "defaultMatch": true,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "showing_time",
+                "displayName": "showing_time",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "status",
+                "displayName": "status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ]
+          },
+          "authentication": "serviceAccount"
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "id": "6daeebe2-7483-4eb1-9271-e75389e27fff",
+        "name": "Trigger Immediate Dispatch",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2660,
+          420
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://automation.rentingfreedom.com/webhook/immediate-dispatch-showings",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({source: 'reschedule', booking_uid: $('Parse Reschedule').first().json.newUid}) }}",
+          "options": {
+            "timeout": 5000,
+            "response": {
+              "response": {
+                "neverError": true
+              }
+            }
+          }
+        },
+        "continueOnFail": true
+      },
+      {
+        "id": "a1c73200-c7fe-4461-bd1c-e30891295b60",
+        "name": "Read Settings (Cancel SMS)",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          2440,
+          620
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Settings",
+            "mode": "name"
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 8000
+      },
+      {
+        "id": "2b2be69b-50e6-44a7-afc5-d17ddb5ac51f",
+        "name": "Build Cancel SMS",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2660,
+          620
+        ],
+        "parameters": {
+          "jsCode": "\nfunction fmtTime(iso) {\n  try {\n    return new Intl.DateTimeFormat('en-US', {\n      timeZone: 'America/New_York',\n      weekday: 'short', month: 'short', day: 'numeric',\n      hour: 'numeric', minute: '2-digit', hour12: true\n    }).format(new Date(iso));\n  } catch(e) { return iso; }\n}\n\n// Look up the row we were cancelling to get person_phone + showing_time\nconst rowsRead = $('Read Showings (Cancel)').all().map(i => i.json);\nconst found    = $('Find Showing (Cancel)').first().json;\nconst uid      = found.matchedBookingUid || found.uid;\nconst row      = rowsRead.find(r => r.booking_uid === uid) || {};\n\nconst phone   = row.person_phone;\nconst address = row.property_address || row.property_key || 'the property';\nconst showing = row.showing_time;\n\nconst settings = {};\n$('Read Settings (Cancel SMS)').all().forEach(i => {\n  if (i.json.key && i.json.value) settings[i.json.key] = i.json.value;\n});\nconst template   = settings.cancellation_sms_template ?? 'Your showing for {{address}} on {{date}} has been cancelled.';\nconst fromNumber = settings.from_number ?? '';\n\nif (!phone) return [{ json: { skipped: true, reason: 'no_phone' } }];\n\n// ── ACCESS_GATE_MARKER: test gate ──────────────────────────────────────────────\n// Same stamped column the dispatch cron reads.\nif (String(row.is_test ?? '').trim().toLowerCase() !== 'true') {\n  return [{ json: { skipped: true, reason: 'not_test_mode' } }];\n}\n\nconst message = template\n  .replace('{{first_name}}',   row.person_name?.split(' ')[0] ?? '')\n  .replace('{{name}}',         row.person_name ?? '')\n  .replace('{{address}}',      address)\n  .replace('{{date}}',         fmtTime(showing));\n\nreturn [{ json: {\n  skipped: false,\n  phone,\n  from_number: fromNumber,\n  message,\n  sent_at: new Date().toISOString(),\n  booking_uid: uid,\n} }];\n"
+        }
+      },
+      {
+        "id": "a0737337-b828-4822-bcf4-5957f9bd51c7",
+        "name": "Should Send Cancel SMS?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          2860,
+          620
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ String($json.skipped ?? '') }}",
+                "rightValue": "true",
+                "operator": {
+                  "type": "string",
+                  "operation": "notEquals"
+                }
+              }
+            ]
+          },
+          "combinator": "and",
+          "options": {}
+        }
+      },
+      {
+        "id": "2d086233-d165-40ff-9ae0-b269db61067c",
+        "name": "Send Cancellation SMS",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          3060,
+          620
+        ],
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        },
+        "parameters": {
+          "from": "={{ $json.from_number }}",
+          "to": "={{ $json.phone }}",
+          "message": "={{ $json.message }}",
+          "options": {}
+        }
+      }
+    ],
+    "connections": {
+      "Cal.com Webhook": {
+        "main": [
+          [
+            {
+              "node": "Route by Event",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Route by Event": {
+        "main": [
+          [
+            {
+              "node": "Parse Created Booking",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Parse Reschedule",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Parse Cancellation",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse Created Booking": {
+        "main": [
+          [
+            {
+              "node": "Read Properties",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Properties": {
+        "main": [
+          [
+            {
+              "node": "Find Property",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Find Property": {
+        "main": [
+          [
+            {
+              "node": "FUB - Search by Phone",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Showing Row": {
+        "main": [
+          [
+            {
+              "node": "FUB - Update Email",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Append to Showings": {
+        "main": [
+          [
+            {
+              "node": "FUB - Note Showing Scheduled",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Note Showing Scheduled": {
+        "main": [
+          [
+            {
+              "node": "Immediate? (Created)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Immediate? (Created)": {
+        "main": [
+          [
+            {
+              "node": "Read Settings (Code Gen)",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      },
+      "Read Settings (Code Gen)": {
+        "main": [
+          [
+            {
+              "node": "Calc Code Window (Created)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Calc Code Window (Created)": {
+        "main": [
+          [
+            {
+              "node": "Populife - Get Token (Created)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Populife - Get Token (Created)": {
+        "main": [
+          [
+            {
+              "node": "Populife - Generate Code (Created)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Populife - Generate Code (Created)": {
+        "main": [
+          [
+            {
+              "node": "Build SMS (Created)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build SMS (Created)": {
+        "main": [
+          [
+            {
+              "node": "Send Access Code SMS (Created)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Send Access Code SMS (Created)": {
+        "main": [
+          [
+            {
+              "node": "Update Showings (Code Sent - Created)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Update Showings (Code Sent - Created)": {
+        "main": [
+          [
+            {
+              "node": "FUB - Note Code Sent (Created)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse Reschedule": {
+        "main": [
+          [
+            {
+              "node": "Read Showings (Reschedule)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Showings (Reschedule)": {
+        "main": [
+          [
+            {
+              "node": "Find Showing (Reschedule)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Find Showing (Reschedule)": {
+        "main": [
+          [
+            {
+              "node": "Has Existing Code? (Reschedule)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Has Existing Code? (Reschedule)": {
+        "main": [
+          [
+            {
+              "node": "Read Settings (Delete Old Code)",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Merge (Reschedule)",
+              "type": "main",
+              "index": 1
+            }
+          ]
+        ]
+      },
+      "Read Settings (Delete Old Code)": {
+        "main": [
+          [
+            {
+              "node": "Populife - Get Token (Delete)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Populife - Get Token (Delete)": {
+        "main": [
+          [
+            {
+              "node": "Populife - Delete Old Code",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Populife - Delete Old Code": {
+        "main": [
+          [
+            {
+              "node": "Merge (Reschedule)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Merge (Reschedule)": {
+        "main": [
+          [
+            {
+              "node": "Update Showings Row (Reschedule)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Update Showings Row (Reschedule)": {
+        "main": [
+          [
+            {
+              "node": "Update Booking UID (Reschedule)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse Cancellation": {
+        "main": [
+          [
+            {
+              "node": "Read Showings (Cancel)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Showings (Cancel)": {
+        "main": [
+          [
+            {
+              "node": "Find Showing (Cancel)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Find Showing (Cancel)": {
+        "main": [
+          [
+            {
+              "node": "Has Code? (Cancel)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Has Code? (Cancel)": {
+        "main": [
+          [
+            {
+              "node": "Read Settings (Cancel Delete)",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Merge (Cancel)",
+              "type": "main",
+              "index": 1
+            }
+          ]
+        ]
+      },
+      "Read Settings (Cancel Delete)": {
+        "main": [
+          [
+            {
+              "node": "Populife - Get Token (Cancel)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Populife - Get Token (Cancel)": {
+        "main": [
+          [
+            {
+              "node": "Populife - Delete Code (Cancel)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Populife - Delete Code (Cancel)": {
+        "main": [
+          [
+            {
+              "node": "Merge (Cancel)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Merge (Cancel)": {
+        "main": [
+          [
+            {
+              "node": "Update Showings Row (Cancelled)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Update Showings Row (Cancelled)": {
+        "main": [
+          [
+            {
+              "node": "Read Settings (Cancel SMS)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Update Email": {
+        "main": [
+          [
+            {
+              "node": "Append to Showings",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Search by Phone": {
+        "main": [
+          [
+            {
+              "node": "Build Showing Row",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Update Booking UID (Reschedule)": {
+        "main": [
+          [
+            {
+              "node": "Trigger Immediate Dispatch",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Trigger Immediate Dispatch": {
+        "main": [
+          [
+            {
+              "node": "FUB - Note Rescheduled",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Settings (Cancel SMS)": {
+        "main": [
+          [
+            {
+              "node": "Build Cancel SMS",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Cancel SMS": {
+        "main": [
+          [
+            {
+              "node": "Should Send Cancel SMS?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Should Send Cancel SMS?": {
+        "main": [
+          [
+            {
+              "node": "Send Cancellation SMS",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "FUB - Note Cancelled",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Send Cancellation SMS": {
+        "main": [
+          [
+            {
+              "node": "FUB - Note Cancelled",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Justin Artis",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-07-31T01:52:09.207Z",
+        "id": 250,
+        "workflowId": "gR6FWXMcc08ps8LT",
+        "versionId": "9633b0b6-bd0d-41f1-948f-525e85a594a6",
+        "event": "deactivated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      },
+      {
+        "createdAt": "2026-07-31T01:52:09.223Z",
+        "id": 251,
+        "workflowId": "gR6FWXMcc08ps8LT",
+        "versionId": "9633b0b6-bd0d-41f1-948f-525e85a594a6",
+        "event": "activated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    ]
+  }
+}
