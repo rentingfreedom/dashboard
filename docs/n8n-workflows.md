@@ -60,6 +60,67 @@ status of everything below that can be checked programmatically.
    nothing until the rows exist. (`2019 Codorus Ln #1` is deliberately
    excluded — leave it.) See "Addresses in Zillow but not in Properties".
 
+### Launch tooling (built 2026-08-07, NOT yet run)
+
+Two scripts prepared while the system is still fully gated, so launch is a
+reviewed command rather than a live editing session.
+
+```bash
+node scripts/launch-backlog-check.mjs                              # read-only
+node scripts/n8n-lift-test-gates.mjs                               # dry run
+node scripts/n8n-lift-test-gates.mjs --apply --confirm-live        # THE change
+node scripts/n8n-lift-test-gates.mjs --revert --apply              # undo
+```
+
+**`launch-backlog-check.mjs`** — answers "what fires the instant the gates
+come off?" Run it *before* lifting anything. It exists because the
+record-but-don't-send design is only provably safe for the Inquiries tab
+(the sweep selects `link_sent === "false"`, and suppressed rows are written
+`skipped_*`). The two tabs whose crons select on **time** rather than a
+sent-flag were never checked: `Cal Bookings` post-event follow-ups have no
+upper bound by design, so old real bookings could in principle fire
+follow-ups on the first tick after lifting.
+
+Result 2026-08-07 — **clean, but re-run before launch**: 20 Cal Bookings rows
+(1 non-test, 0 past with unsent follow-ups), 2 Showings rows (0 real and
+still scheduled), 39 Inquiries rows (3 read as `false`, **0 of them
+deliverable** — no match / no cal_link).
+
+> Gotcha 14 bit this script during its own development: Sheets stores the
+> string `"false"` as boolean `FALSE`, so a case-sensitive count reported 0
+> sweepable rows while the sweep — which lowercases before comparing — would
+> have matched all 3. It now normalises case exactly as the sweep does.
+> Under-reporting is the dangerous direction here.
+
+**`n8n-lift-test-gates.mjs`** — lifts 6 of the gates across 5 workflows plus
+the sweep. Refuses `--apply` unless `--confirm-live` is also passed: every
+other script here is reversible, and this one's side effects are real SMS and
+email, which are not. It deliberately does **not** touch the 4 Booking
+Handler / Access Dispatch gates (those belong to
+`n8n-add-access-test-gate.mjs --revert`), Settings, workflow activation, or
+the legacy workflow's gate. It prints those as a checklist on completion.
+
+**Two judgment calls baked in — both would be easy to get wrong:**
+
+1. **Identity Gate**: the `not_test_mode` early return is deleted, but
+   `isTestMode` is deliberately still **computed**. Setting `isTestMode =
+   true` looks equivalent and is not — `Check Guards` later has
+   `if (!isTestMode && alreadySent) return fail("already_sent")`, a dedup
+   *bypass* so the test contact can be re-run. Forcing it true makes that
+   bypass permanent for everyone, so a real lead could get repeat
+   verification SMS forever. Deleting only the early return gives real leads
+   proper dedup and keeps the test contact's bypass.
+2. **Cal.com**: `isTestBooking()` and the `is_test` column are left intact.
+   Making `isTestBooking()` return true would stamp every real booking
+   `is_test=true`, destroying the column's meaning and the audit trail.
+   Instead the *send* conditions stop consulting it (`testGateOpen = true`;
+   the Cron drops `|| !isTest`).
+
+The sweep's gate is a **node**, not code, so it is bypassed by rewiring
+`Wait For All → Check & Build Message` directly and leaving the IF
+disconnected on the canvas — rather than faking its condition into always
+passing, which would leave a node whose name lies about what it does.
+
 ### Decisions still open
 
 5. **Retire the two legacy workflows?** `Ih8zMmNeUwKvITGf` and
