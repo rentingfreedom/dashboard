@@ -123,6 +123,42 @@ export async function updateSpecificColumns(
   });
 }
 
+/**
+ * Write a single named column across MANY rows in one Sheets request.
+ *
+ * updateSpecificColumns covers "many columns, one row"; this is the transpose,
+ * and exists so a multi-row action costs one API call rather than one per row —
+ * the Sheets per-minute quota is shared project-wide and has caused real
+ * failures elsewhere in this system.
+ *
+ * Every other cell, including formula/computed columns, is left untouched.
+ */
+export async function updateColumnAcrossRows(
+  tabName: string,
+  column: string,
+  updates: { rowIndex: number; value: string }[],
+  headers: string[]
+): Promise<void> {
+  const colIdx = headers.indexOf(column);
+  if (colIdx === -1) throw new Error(`Column "${column}" not found on the ${tabName} tab.`);
+  if (updates.length === 0) return;
+
+  const sheets = getSheetsClient();
+  const spreadsheetId = getSpreadsheetId();
+  const letter = columnToLetter(colIdx + 1);
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      valueInputOption: "RAW",
+      data: updates.map(({ rowIndex, value }) => ({
+        range: `${tabName}!${letter}${rowIndex}`,
+        values: [[value]],
+      })),
+    },
+  });
+}
+
 /** List all sheet/tab names in the spreadsheet */
 export async function listSheetNames(): Promise<string[]> {
   const sheets = getSheetsClient();

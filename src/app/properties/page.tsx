@@ -175,7 +175,14 @@ export default function PropertiesPage() {
           <ErrorState message={error} onRetry={() => load()} />
         ) : (
           <>
-            {recon && <DoorLoopReconPanel report={recon} onDismiss={() => setRecon(null)} />}
+            {recon && (
+              <DoorLoopReconPanel
+                report={recon}
+                onDismiss={() => setRecon(null)}
+                onReportChange={setRecon}
+                onPropertiesChanged={() => load(true)}
+              />
+            )}
             <StatCards properties={properties} />
             <PropertiesTable
               properties={properties}

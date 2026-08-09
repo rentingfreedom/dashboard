@@ -2,6 +2,7 @@ import {
   readSheet,
   appendRow,
   updateSpecificColumns,
+  updateColumnAcrossRows,
   rowsToObjects,
 } from "./sheets-client";
 import type {
@@ -159,6 +160,65 @@ export async function createProperty(
     ...safeUpdates,
     _rowIndex: String(newRowIndex),
   });
+}
+
+/**
+ * Write `doorloop_property_id` on one row, and nothing else.
+ *
+ * `doorloop_property_id` is deliberately NOT in SAFE_COLUMNS: it is DoorLoop's
+ * link, and keeping it out means an ordinary property edit can never clobber it
+ * by accident. That guarantee is worth preserving, so this does not relax
+ * SAFE_COLUMNS or route through updateProperty(). It is a separate, single-column
+ * write — the same thing scripts/doorloop-match.mjs does — reachable only from
+ * the admin-only DoorLoop link/add routes.
+ *
+ * Addressed by row index rather than property_key on purpose: the caller may
+ * have just appended the row, and `property_key` is produced by a sheet spill
+ * formula that has not necessarily evaluated yet.
+ */
+export interface DoorLoopLinkWrite {
+  /** 1-based sheet row index. */
+  rowIndex: number;
+  unitId: string;
+  /** Only for the audit trail — never used to locate the row. */
+  propertyKey: string;
+}
+
+export async function setDoorLoopUnitIds(
+  writes: DoorLoopLinkWrite[],
+  actor: string,
+  notes: string
+): Promise<void> {
+  if (writes.length === 0) return;
+
+  const rows = await readSheet(TAB);
+  const { headers } = rowsToObjects(rows);
+  if (!headers.includes("doorloop_property_id")) {
+    throw new Error("Properties tab has no doorloop_property_id column.");
+  }
+
+  await updateColumnAcrossRows(
+    TAB,
+    "doorloop_property_id",
+    writes.map((w) => ({ rowIndex: w.rowIndex, value: w.unitId })),
+    headers
+  );
+
+  const timestamp = new Date().toISOString();
+  for (const w of writes) {
+    await writeAuditLog({
+      timestamp,
+      actor,
+      action: "property.doorloop_linked",
+      entity_type: "property",
+      entity_id: w.propertyKey,
+      property_key: w.propertyKey,
+      before_json: "",
+      after_json: JSON.stringify({ doorloop_property_id: w.unitId, row: w.rowIndex }),
+      source: "dashboard",
+      notes,
+    });
+  }
 }
 
 export async function updateProperty(
