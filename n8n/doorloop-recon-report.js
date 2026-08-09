@@ -10,9 +10,21 @@
 // re-run the builder with --apply.
 //
 // MATCHER PARITY: normAddr / coreAddr / SUFFIXES / EXCLUDED_PROPERTY_NAMES /
-// findUntrustworthyUnits are ported VERBATIM from scripts/doorloop-match.mjs.
-// If that file's matching rules change, change them here too, or this report
-// will disagree with the matcher about what counts as linked.
+// findUntrustworthyUnits are ported VERBATIM from
+// src/lib/doorloop/address-matcher.mjs. If that file's matching rules change,
+// change them here too, or this report will disagree with the matcher about what
+// counts as linked.
+//
+// There are TWO implementations of these rules, not three:
+//
+//     scripts/doorloop-match.mjs (CLI) ─┐
+//                                       ├─→ src/lib/doorloop/address-matcher.mjs
+//     the dashboard's Link button ──────┘        (one shared implementation)
+//
+//     this file ──→ manually-synced twin, because an n8n Code node cannot
+//                   import from the repo at all.
+//
+// So this is the only copy that has to be kept in step by hand.
 
 // Only the dashboard's "Sync now" button consumes this. On the hourly schedule
 // run there is nobody to hand it to, so building it would be invisible work —

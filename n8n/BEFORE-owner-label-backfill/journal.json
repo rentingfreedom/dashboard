@@ -1,0 +1,372 @@
+{
+  "written_at": "2026-08-09T21:26:45.266Z",
+  "column": "owner_label",
+  "changes": [
+    {
+      "rowIndex": 2,
+      "addr": "102 Braeford",
+      "before": "102 Braeford Ct",
+      "after": "Glennalyn Ajero"
+    },
+    {
+      "rowIndex": 3,
+      "addr": "1033 Old Cypress Run",
+      "before": "1033 Old Cypress Run",
+      "after": "Ryan Grafman"
+    },
+    {
+      "rowIndex": 4,
+      "addr": "1039 Old Cypress Run",
+      "before": "1039 Old Cypress Run",
+      "after": "Olivia Shapiro"
+    },
+    {
+      "rowIndex": 5,
+      "addr": "104 Sweet Cherry Ln",
+      "before": "104 Sweet Cherry ln",
+      "after": "Haden Lively Cookson"
+    },
+    {
+      "rowIndex": 6,
+      "addr": "106 Rahway Road",
+      "before": "106 Rahway Rd",
+      "after": "Nigel Armstrong"
+    },
+    {
+      "rowIndex": 7,
+      "addr": "108 Laurels Curve",
+      "before": "108 Laurels Curve",
+      "after": "Zeke Durham"
+    },
+    {
+      "rowIndex": 8,
+      "addr": "111 Blossom Wood Lane",
+      "before": "111 Blossom Wood Ln",
+      "after": "Samantha Aldridge"
+    },
+    {
+      "rowIndex": 9,
+      "addr": "1173 Camden Street",
+      "before": "1173 Camden St",
+      "after": "Anthony Drew"
+    },
+    {
+      "rowIndex": 10,
+      "addr": "121 Marinella dr",
+      "before": "121 Marinella Dr",
+      "after": "Zackery Ketchum"
+    },
+    {
+      "rowIndex": 11,
+      "addr": "121 Rockingham Way",
+      "before": "121 Rockingham Way",
+      "after": "Brian Goodrich"
+    },
+    {
+      "rowIndex": 12,
+      "addr": "1216 Eastwood Avenue",
+      "before": "1216 Eastwood Ave",
+      "after": "Robert Williams"
+    },
+    {
+      "rowIndex": 13,
+      "addr": "127 Vinca dr",
+      "before": "127 Vinca Dr",
+      "after": "Lonnell Williams"
+    },
+    {
+      "rowIndex": 16,
+      "addr": "1282 Maryland Drive",
+      "before": "1282 Maryland Dr",
+      "after": "Ahmed Alford"
+    },
+    {
+      "rowIndex": 17,
+      "addr": "129 Nolin Road",
+      "before": "129 Nolin Rd",
+      "after": "Garret Brandreth"
+    },
+    {
+      "rowIndex": 18,
+      "addr": "1314 Cooper Store Road",
+      "before": "1314 Cooper Store Rd",
+      "after": "Matthew Harrington"
+    },
+    {
+      "rowIndex": 19,
+      "addr": "137 Trailview ln",
+      "before": "137 Trailview Ln",
+      "after": "Letticia Damian"
+    },
+    {
+      "rowIndex": 20,
+      "addr": "146 Woodbrook way",
+      "before": "146 Woodbrook Way",
+      "after": "Magnus Cummings"
+    },
+    {
+      "rowIndex": 21,
+      "addr": "149 Morning View Way",
+      "before": "149 Morning View Way",
+      "after": "Jefferey Yu"
+    },
+    {
+      "rowIndex": 22,
+      "addr": "153 Hawthorne Landing Drive",
+      "before": "153 Hawthorne Landing Dr",
+      "after": "Cael Rankin"
+    },
+    {
+      "rowIndex": 23,
+      "addr": "188 Woodward Road",
+      "before": "188 Woodward Rd",
+      "after": "Johanna Rodzinka"
+    },
+    {
+      "rowIndex": 24,
+      "addr": "203 Topsaw Lane",
+      "before": "203 Topsaw Ln",
+      "after": "Carly Caquelin"
+    },
+    {
+      "rowIndex": 25,
+      "addr": "213 Rubles Lane",
+      "before": "213 Rubles Ln",
+      "after": "MIchael Bronder"
+    },
+    {
+      "rowIndex": 26,
+      "addr": "218 Sweet Cherry ln",
+      "before": "218 Sweet Cherry Ln",
+      "after": "Xinbo Wang"
+    },
+    {
+      "rowIndex": 27,
+      "addr": "219 Ashford",
+      "before": "219 Ashford cir",
+      "after": "Elisabeth Moraski"
+    },
+    {
+      "rowIndex": 28,
+      "addr": "219 Cypress Preserve Blvd",
+      "before": "219 Cypress Preserve Blvd",
+      "after": "Javier Eres"
+    },
+    {
+      "rowIndex": 29,
+      "addr": "22 Stanhope rd",
+      "before": "22 Stanhope Rd",
+      "after": "AWBR LLC"
+    },
+    {
+      "rowIndex": 30,
+      "addr": "225 Sugarhouse ct",
+      "before": "225 Sugarhouse ct",
+      "after": "Byce Gollata"
+    },
+    {
+      "rowIndex": 31,
+      "addr": "230 Cameron Street",
+      "before": "230 Cameron St",
+      "after": "Sean Bernstel"
+    },
+    {
+      "rowIndex": 32,
+      "addr": "231 Sweet Cherry Lane",
+      "before": "231 Sweet Cherry Ln",
+      "after": "Spencer Dickensheets"
+    },
+    {
+      "rowIndex": 33,
+      "addr": "252 Hyrne Drive",
+      "before": "252 Hyrne Dr",
+      "after": "Liam Schwarz"
+    },
+    {
+      "rowIndex": 34,
+      "addr": "272 Clayburne",
+      "before": "272 Clayburne Dr",
+      "after": "Kory Garren"
+    },
+    {
+      "rowIndex": 35,
+      "addr": "309 Farrell Street",
+      "before": "309 Farrell Street",
+      "after": "Savannah Sellers"
+    },
+    {
+      "rowIndex": 36,
+      "addr": "313 Oakbend Street",
+      "before": "313 Oakbend St",
+      "after": "Ashish Venmuddula"
+    },
+    {
+      "rowIndex": 37,
+      "addr": "342 Silverdrop Street",
+      "before": "342 Silverdrop St",
+      "after": "Daniel Sin Zuniga"
+    },
+    {
+      "rowIndex": 38,
+      "addr": "349 Drayton Place Dr",
+      "before": "349 Drayton Place",
+      "after": "Mauricio Rodriguez"
+    },
+    {
+      "rowIndex": 39,
+      "addr": "403 Eva Street",
+      "before": "403 Eva St",
+      "after": "Paul Dickson Pesquera"
+    },
+    {
+      "rowIndex": 40,
+      "addr": "422 Omaha dr",
+      "before": "422 Omaha dr",
+      "after": "Blake Papet"
+    },
+    {
+      "rowIndex": 43,
+      "addr": "432 War Admiral Lane",
+      "before": "432 War Admiral Lane",
+      "after": "Wyatt Montemorra"
+    },
+    {
+      "rowIndex": 44,
+      "addr": "4732 Lewis and Clark",
+      "before": "4732 Lewis and Clark Trl",
+      "after": "Jesse Connell"
+    },
+    {
+      "rowIndex": 45,
+      "addr": "510 Lateleaf Drive",
+      "before": "510 Lateleaf Dr",
+      "after": "Collin Campbell"
+    },
+    {
+      "rowIndex": 46,
+      "addr": "520 Crossland Drive",
+      "before": "520 Crossland Dr",
+      "after": "Will Hernandez"
+    },
+    {
+      "rowIndex": 47,
+      "addr": "715 Mcroy",
+      "before": "715 McRoy St",
+      "after": "Colleen Greer"
+    },
+    {
+      "rowIndex": 48,
+      "addr": "7523 Hawks Circle",
+      "before": "7523 Hawks Cir",
+      "after": "Orlando Reyes"
+    },
+    {
+      "rowIndex": 50,
+      "addr": "770 Trotters Lane",
+      "before": "770 Trotters Ln",
+      "after": "Jeremy Vega"
+    },
+    {
+      "rowIndex": 51,
+      "addr": "801 Recess Point Drive",
+      "before": "801 Recess Point Dr",
+      "after": "Brienna Voss"
+    },
+    {
+      "rowIndex": 52,
+      "addr": "8353 Childs Cove",
+      "before": "8353 Childs Cv",
+      "after": "John Ditommaso"
+    },
+    {
+      "rowIndex": 53,
+      "addr": "8584 Cislo Court",
+      "before": "8584 Cislo ct",
+      "after": "Jonathan Hill"
+    },
+    {
+      "rowIndex": 54,
+      "addr": "8859 Shovelnose Court",
+      "before": "8859 Shovelnose Ct",
+      "after": "Christian Kehr"
+    },
+    {
+      "rowIndex": 55,
+      "addr": "9611 Roseberry",
+      "before": "9611 Roseberry st",
+      "after": "Vince Freschi"
+    },
+    {
+      "rowIndex": 56,
+      "addr": "130 Sandtrap Road",
+      "before": "Dalton's Portfolio",
+      "after": "Dalton Oberle"
+    },
+    {
+      "rowIndex": 58,
+      "addr": "36 Peppertree Lane",
+      "before": "Hayden’s Portfolio",
+      "after": "Hayden Albert"
+    },
+    {
+      "rowIndex": 59,
+      "addr": "42 Peppertree Lane",
+      "before": "Hayden’s Portfolio",
+      "after": "AK Capital"
+    },
+    {
+      "rowIndex": 60,
+      "addr": "100 English rd",
+      "before": "Hayden’s Portfolio",
+      "after": "Hayden Albert"
+    },
+    {
+      "rowIndex": 63,
+      "addr": "296 Blue Haw Drive",
+      "before": "296 Blue Haw Dr",
+      "after": "Gregory Quinn"
+    },
+    {
+      "rowIndex": 64,
+      "addr": "12 Lighthouse Drive",
+      "before": "12 Lighthouse Dr",
+      "after": "Gabriel Fornes"
+    },
+    {
+      "rowIndex": 65,
+      "addr": "103 Cardinal Flower Court",
+      "before": "103 Cardinal Flower Ct",
+      "after": "Hayden Boone"
+    },
+    {
+      "rowIndex": 66,
+      "addr": "165 River Hill Road",
+      "before": "165 River Hill Rd",
+      "after": "Tyler Travaglino"
+    },
+    {
+      "rowIndex": 67,
+      "addr": "214 Devonshire Drive",
+      "before": "214 Devonshire Dr",
+      "after": "Brandon Cramer"
+    },
+    {
+      "rowIndex": 68,
+      "addr": "5464 Crown Avenue",
+      "before": "5464 Crown Ave",
+      "after": "Rachelle Wells"
+    },
+    {
+      "rowIndex": 69,
+      "addr": "109 Larkspur Drive",
+      "before": "109 Larkspur Dr",
+      "after": "Vincent Roland"
+    },
+    {
+      "rowIndex": 70,
+      "addr": "129 Towering Pine Drive",
+      "before": "129 Towering Pine Dr",
+      "after": "Shawn Davis"
+    }
+  ]
+}
