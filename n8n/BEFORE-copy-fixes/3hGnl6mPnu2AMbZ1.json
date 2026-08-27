@@ -1,0 +1,1263 @@
+{
+  "updatedAt": "2026-08-07T09:51:54.110Z",
+  "createdAt": "2026-07-29T21:24:10.491Z",
+  "id": "3hGnl6mPnu2AMbZ1",
+  "name": "RentingFreedom Production - Cal.com Reminder System - Cron Poll",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "23730bd9-acc0-41ae-8768-d0228c23e35c"
+    },
+    {
+      "name": "Read Settings (Cron)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Settings",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "36a8e80e-6497-4e07-9129-f3481fd9a315",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "name": "Read Cal Bookings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        440,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true,
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Cal Bookings",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "d295cae7-7bed-4838-8a98-9fe79d6486d1",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "name": "Find Due Notifications",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst CB_COLS = [\"booking_uid\",\"cal_event_type_id\",\"event_category\",\"property_address\",\"invitee_name\",\"invitee_first_name\",\"invitee_email\",\"invitee_phone\",\"host_name\",\"host_email\",\"start_time\",\"end_time\",\"status\",\"is_test\",\"created_at\",\"updated_at\",\"confirmation_sent\",\"confirmation_sent_at\",\"cancellation_sent\",\"cancellation_sent_at\",\"nicole_immediate_sent\",\"nicole_immediate_sent_at\",\"nicole_2h_sent\",\"nicole_2h_sent_at\",\"reminder_24h_email_sent\",\"reminder_24h_email_sent_at\",\"reminder_24h_sms_sent\",\"reminder_24h_sms_sent_at\",\"reminder_2h_email_sent\",\"reminder_2h_email_sent_at\",\"reminder_2h_sms_sent\",\"reminder_2h_sms_sent_at\",\"reconfirm_token\",\"reconfirm_email_sent\",\"reconfirm_email_sent_at\",\"reconfirm_sms_sent\",\"reconfirm_sms_sent_at\",\"confirmed\",\"confirmed_at\",\"host_sms_1h_sent\",\"host_sms_1h_sent_at\",\"followup_sent\",\"followup_sent_at\",\"followup_1day_email_sent\",\"followup_1day_email_sent_at\",\"followup_1day_sms_sent\",\"followup_1day_sms_sent_at\",\"followup_2day_email_sent\",\"followup_2day_email_sent_at\",\"followup_2day_sms_sent\",\"followup_2day_sms_sent_at\",\"followup_3day_email_sent\",\"followup_3day_email_sent_at\",\"followup_3day_sms_sent\",\"followup_3day_sms_sent_at\",\"followup_7day_email_sent\",\"followup_7day_email_sent_at\",\"followup_7day_sms_sent\",\"followup_7day_sms_sent_at\",\"location\",\"description\",\"notes\"];\nfunction colLetter(idx) {\n  idx += 1; let s = '';\n  while (idx > 0) { const r = (idx - 1) % 26; s = String.fromCharCode(65 + r) + s; idx = Math.floor((idx - 1) / 26); }\n  return s;\n}\nfunction colFor(name) {\n  const idx = CB_COLS.indexOf(name);\n  if (idx === -1) throw new Error('Unknown Cal Bookings column: ' + name);\n  return colLetter(idx);\n}\nfunction fmtDate(iso) {\n  try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'long', day: 'numeric', year: 'numeric' }).format(new Date(iso)); }\n  catch (e) { return iso; }\n}\nfunction fmtTime(iso) {\n  try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date(iso)); }\n  catch (e) { return iso; }\n}\nfunction eventNameFor(category, propertyAddress) {\n  if (category === 'walkthrough') return 'Property Walk Through';\n  if (category === 'consult') return '45 Minute Initial Consult';\n  return (propertyAddress || 'Property') + ' Walk-Through';\n}\n\nconst settings = {};\n$('Read Settings (Cron)').all().forEach(i => { if (i.json.key) settings[i.json.key] = i.json.value; });\nconst globalEnabled = String(settings.cal_reminders_enabled ?? 'true').trim().toLowerCase() === 'true';\n\n// anchor 'start': fires offsetHours BEFORE start_time, skipped once the event\n// has already started (a late \"reminder\" for something already underway is\n// worse than a missed one). anchor 'end': fires offsetHours AFTER end_time,\n// no upper bound — a missed cron cycle still catches up later rather than\n// silently dropping the send (matches the spec's \"fires unconditionally on\n// schedule\" for the delayed follow-ups).\nconst RULES = [\n  { key: 'reminder_24h_email', channel: 'email', categories: ['walkthrough', 'consult', 'showing'], anchor: 'start', offsetSetting: 'cal_reminder_24h_offset_hours', sentCol: 'reminder_24h_email_sent', atCol: 'reminder_24h_email_sent_at' },\n  { key: 'reminder_24h_sms', channel: 'sms', categories: ['consult', 'showing'], anchor: 'start', offsetSetting: 'cal_reminder_24h_offset_hours', sentCol: 'reminder_24h_sms_sent', atCol: 'reminder_24h_sms_sent_at' },\n  { key: 'reminder_2h_email', channel: 'email', categories: ['walkthrough', 'consult', 'showing'], anchor: 'start', offsetSetting: 'cal_reminder_2h_offset_hours', sentCol: 'reminder_2h_email_sent', atCol: 'reminder_2h_email_sent_at' },\n  { key: 'reminder_2h_sms', channel: 'sms', categories: ['consult', 'showing'], anchor: 'start', offsetSetting: 'cal_reminder_2h_offset_hours', sentCol: 'reminder_2h_sms_sent', atCol: 'reminder_2h_sms_sent_at' },\n  { key: 'nicole_2h', channel: 'email', categories: ['walkthrough'], anchor: 'start', offsetSetting: 'cal_reminder_2h_offset_hours', sentCol: 'nicole_2h_sent', atCol: 'nicole_2h_sent_at' },\n  { key: 'reconfirm_email', channel: 'email', categories: ['walkthrough', 'consult'], anchor: 'start', offsetSetting: 'cal_reconfirm_offset_hours', sentCol: 'reconfirm_email_sent', atCol: 'reconfirm_email_sent_at' },\n  { key: 'reconfirm_sms', channel: 'sms', categories: ['consult'], anchor: 'start', offsetSetting: 'cal_reconfirm_offset_hours', sentCol: 'reconfirm_sms_sent', atCol: 'reconfirm_sms_sent_at' },\n  { key: 'reconfirm_sms', channel: 'sms', categories: ['showing'], anchor: 'start', offsetSetting: 'cal_showing_reconfirm_offset_hours', sentCol: 'reconfirm_sms_sent', atCol: 'reconfirm_sms_sent_at' },\n  { key: 'host_sms_1h', channel: 'sms', categories: ['consult'], anchor: 'start', offsetSetting: 'cal_host_sms_offset_hours', sentCol: 'host_sms_1h_sent', atCol: 'host_sms_1h_sent_at' },\n  { key: 'followup', channel: 'email', categories: ['walkthrough', 'consult', 'showing'], anchor: 'end', offsetHours: 0, sentCol: 'followup_sent', atCol: 'followup_sent_at' },\n  { key: 'followup_1day_email', channel: 'email', categories: ['showing'], anchor: 'end', offsetHours: 24, sentCol: 'followup_1day_email_sent', atCol: 'followup_1day_email_sent_at' },\n  { key: 'followup_1day_sms', channel: 'sms', categories: ['showing'], anchor: 'end', offsetHours: 24, sentCol: 'followup_1day_sms_sent', atCol: 'followup_1day_sms_sent_at' },\n  { key: 'followup_2day_email', channel: 'email', categories: ['showing'], anchor: 'end', offsetHours: 48, sentCol: 'followup_2day_email_sent', atCol: 'followup_2day_email_sent_at' },\n  { key: 'followup_2day_sms', channel: 'sms', categories: ['showing'], anchor: 'end', offsetHours: 48, sentCol: 'followup_2day_sms_sent', atCol: 'followup_2day_sms_sent_at' },\n  { key: 'followup_3day_email', channel: 'email', categories: ['showing', 'consult'], anchor: 'end', offsetHours: 72, sentCol: 'followup_3day_email_sent', atCol: 'followup_3day_email_sent_at' },\n  { key: 'followup_3day_sms', channel: 'sms', categories: ['showing', 'consult'], anchor: 'end', offsetHours: 72, sentCol: 'followup_3day_sms_sent', atCol: 'followup_3day_sms_sent_at' },\n  { key: 'followup_7day_email', channel: 'email', categories: ['consult'], anchor: 'end', offsetHours: 168, sentCol: 'followup_7day_email_sent', atCol: 'followup_7day_email_sent_at' },\n  { key: 'followup_7day_sms', channel: 'sms', categories: ['consult'], anchor: 'end', offsetHours: 168, sentCol: 'followup_7day_sms_sent', atCol: 'followup_7day_sms_sent_at' },\n];\n\nconst now = Date.now();\nconst rows = $input.all().map(i => i.json);\nconst due = [];\n\nfor (const row of rows) {\n  if (!row.booking_uid || !row.row_number) continue;\n  if (String(row.status ?? '').trim().toLowerCase() === 'cancelled') continue;\n  const category = String(row.event_category ?? '').trim();\n  const catEnabled = String(settings['cal_' + category + '_enabled'] ?? 'true').trim().toLowerCase() === 'true';\n  const isTest = String(row.is_test ?? '').trim().toLowerCase() === 'true';\n  if (!globalEnabled || !catEnabled || !isTest) continue; // test gate — see file header\n\n  const startMs = new Date(row.start_time).getTime();\n  const endMs = new Date(row.end_time || row.start_time).getTime();\n  if (!Number.isFinite(startMs)) continue;\n\n  // ── LATE_REMINDER_MARKER ─────────────────────────────────────────────────────────\n  // When this booking's time was last set. updated_at (not created_at) so a\n  // reschedule re-anchors it; the cron's Mark Step Sent does not touch it.\n  // If neither timestamp parses we leave bookedMs non-finite, which disables\n  // the guard below and restores the pre-guard behaviour.\n  const createdMs_ = new Date(row.created_at).getTime();\n  const updatedMs_ = new Date(row.updated_at).getTime();\n  const bookedMs = Math.max(\n    Number.isFinite(createdMs_) ? createdMs_ : -Infinity,\n    Number.isFinite(updatedMs_) ? updatedMs_ : -Infinity\n  );\n\n  for (const rule of RULES) {\n    if (!rule.categories.includes(category)) continue;\n    // ── CRON_SEND_ISOLATION_MARKER ──────────────────────────────────────────────────────────\n    // 'failed' is written by Mark Step Failed when a send permanently fails\n    // (e.g. malformed phone/email) — treated as resolved so the step stops\n    // re-queuing every cron tick instead of crash-looping forever.\n    const sentColValue = String(row[rule.sentCol] ?? '').trim().toLowerCase();\n    const alreadySent = sentColValue === 'true' || sentColValue === 'failed';\n    if (alreadySent) continue;\n\n    let due_ = false;\n    if (rule.anchor === 'start') {\n      const offsetHours = Number(settings[rule.offsetSetting] ?? 0);\n      const targetMs = startMs - offsetHours * 3600000;\n      // ── LATE_REMINDER_MARKER ───────────────────────────────────────────────────\n      // The booking was made after this reminder was due, so it was never a\n      // real advance reminder — the guest already got the confirmation. Skip\n      // permanently (both operands are fixed) rather than firing it late.\n      if (Number.isFinite(bookedMs) && bookedMs > targetMs) {\n        console.log('[late-reminder-guard] skip ' + rule.key + ' for ' + row.booking_uid +\n          ' — booked ' + new Date(bookedMs).toISOString() +\n          ' after target ' + new Date(targetMs).toISOString());\n        continue;\n      }\n      due_ = now >= targetMs && now < startMs;\n    } else {\n      const targetMs = endMs + (rule.offsetHours ?? 0) * 3600000;\n      due_ = now >= targetMs;\n    }\n    if (!due_) continue;\n\n    due.push({\n      row_number: row.row_number, booking_uid: row.booking_uid, category,\n      step_key: rule.key, channel: rule.channel,\n      sentColLetter: colFor(rule.sentCol), atColLetter: colFor(rule.atCol),\n      invitee_name: row.invitee_name, invitee_first_name: row.invitee_first_name,\n      invitee_email: row.invitee_email, invitee_phone: row.invitee_phone,\n      host_name: row.host_name, host_email: row.host_email,\n      property_address: row.property_address, start_time: row.start_time, end_time: row.end_time,\n      location: row.location, description: row.description, notes: row.notes,\n      reconfirm_token: row.reconfirm_token,\n    });\n  }\n}\n\nif (due.length === 0) return [{ json: { hasDue: false } }];\nreturn due.map(d => ({ json: { ...d, hasDue: true } }));\n"
+      },
+      "id": "e051b496-aa2f-43ff-b18c-8abdc46f6eff"
+    },
+    {
+      "name": "Any Due?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.hasDue }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "cd929d8b-1c16-47a0-aa6c-f428a1e800d3"
+    },
+    {
+      "name": "Process One at a Time",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1100,
+        300
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "dc9bb3f8-3b6c-4257-9e1c-edaa2ed0977e"
+    },
+    {
+      "name": "Build Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        380
+      ],
+      "parameters": {
+        "jsCode": "\nconst CB_COLS = [\"booking_uid\",\"cal_event_type_id\",\"event_category\",\"property_address\",\"invitee_name\",\"invitee_first_name\",\"invitee_email\",\"invitee_phone\",\"host_name\",\"host_email\",\"start_time\",\"end_time\",\"status\",\"is_test\",\"created_at\",\"updated_at\",\"confirmation_sent\",\"confirmation_sent_at\",\"cancellation_sent\",\"cancellation_sent_at\",\"nicole_immediate_sent\",\"nicole_immediate_sent_at\",\"nicole_2h_sent\",\"nicole_2h_sent_at\",\"reminder_24h_email_sent\",\"reminder_24h_email_sent_at\",\"reminder_24h_sms_sent\",\"reminder_24h_sms_sent_at\",\"reminder_2h_email_sent\",\"reminder_2h_email_sent_at\",\"reminder_2h_sms_sent\",\"reminder_2h_sms_sent_at\",\"reconfirm_token\",\"reconfirm_email_sent\",\"reconfirm_email_sent_at\",\"reconfirm_sms_sent\",\"reconfirm_sms_sent_at\",\"confirmed\",\"confirmed_at\",\"host_sms_1h_sent\",\"host_sms_1h_sent_at\",\"followup_sent\",\"followup_sent_at\",\"followup_1day_email_sent\",\"followup_1day_email_sent_at\",\"followup_1day_sms_sent\",\"followup_1day_sms_sent_at\",\"followup_2day_email_sent\",\"followup_2day_email_sent_at\",\"followup_2day_sms_sent\",\"followup_2day_sms_sent_at\",\"followup_3day_email_sent\",\"followup_3day_email_sent_at\",\"followup_3day_sms_sent\",\"followup_3day_sms_sent_at\",\"followup_7day_email_sent\",\"followup_7day_email_sent_at\",\"followup_7day_sms_sent\",\"followup_7day_sms_sent_at\",\"location\",\"description\",\"notes\"];\nfunction colLetter(idx) {\n  idx += 1; let s = '';\n  while (idx > 0) { const r = (idx - 1) % 26; s = String.fromCharCode(65 + r) + s; idx = Math.floor((idx - 1) / 26); }\n  return s;\n}\nfunction colFor(name) {\n  const idx = CB_COLS.indexOf(name);\n  if (idx === -1) throw new Error('Unknown Cal Bookings column: ' + name);\n  return colLetter(idx);\n}\nfunction fmtDate(iso) {\n  try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'long', day: 'numeric', year: 'numeric' }).format(new Date(iso)); }\n  catch (e) { return iso; }\n}\nfunction fmtTime(iso) {\n  try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date(iso)); }\n  catch (e) { return iso; }\n}\nfunction eventNameFor(category, propertyAddress) {\n  if (category === 'walkthrough') return 'Property Walk Through';\n  if (category === 'consult') return '45 Minute Initial Consult';\n  return (propertyAddress || 'Property') + ' Walk-Through';\n}\n\nconst d = $json;\nconst settings = {};\n$('Read Settings (Cron)').all().forEach(i => { if (i.json.key) settings[i.json.key] = i.json.value; });\n\nconst fromNumber = settings.from_number ?? '';\nconst justinPhone = settings.cal_justin_phone ?? '';\nconst reviewLink = settings.cal_review_link ?? '';\nconst doorloopLink = settings.cal_doorloop_apply_link ?? '';\nconst welcomeLetter = settings.cal_welcome_letter_link ?? '';\nconst walkthroughUrl = settings.cal_property_walkthrough_url ?? '';\nconst reconfirmBase = settings.cal_reconfirm_base_url ?? '';\n\nconst eventName = eventNameFor(d.category, d.property_address);\nconst dateStr = fmtDate(d.start_time);\nconst timeStr = fmtTime(d.start_time);\nconst answer1 = d.property_address;\nconst reconfirmLink = reconfirmBase + '?token=' + encodeURIComponent(d.reconfirm_token || '');\nconst bookingManageLink = 'https://cal.com/booking/' + d.booking_uid;\n\nlet subject = '', message = '', to = '';\n\nif (d.channel === 'email') {\n  to = d.invitee_email;\n  const qa = [d.description, d.notes].filter(Boolean).join('<br>');\n  const locLine = d.location ? `Location: ${d.location}<br>` : '';\n\n  switch (d.step_key) {\n    case 'reminder_24h_email':\n    case 'reminder_2h_email':\n      subject = `Reminder: ${eventName} with ${d.host_name} at ${timeStr} on ${dateStr}`;\n      if (d.category === 'consult') {\n        message = `Hi ${d.invitee_name}, This is a friendly reminder that your ${eventName} with ${d.host_name} is at ${timeStr} on ${dateStr}. Review the Welcome Letter before your meeting. Click link below to access it. <a href=\"${welcomeLetter}\">Property Owner Welcome Letter</a>`;\n      } else {\n        message = `Hi ${d.invitee_name}, This is a friendly reminder that your ${eventName} with ${d.host_name} is at ${timeStr} on ${dateStr}. ${locLine}${qa}`;\n      }\n      break;\n    case 'nicole_2h':\n      subject = `Reminder: ${eventName} with ${d.invitee_name} at ${timeStr} on ${dateStr}`;\n      message = `Hi ${d.host_name}, This is a friendly reminder that your ${eventName} with ${d.invitee_name} is at ${timeStr} on ${dateStr}. Remember to Bring Lockbox to property! ${locLine}${qa}`;\n      to = settings.cal_nicole_email ?? '';\n      break;\n    case 'reconfirm_email':\n      subject = `Confirm that you'll be attending ${eventName} with ${d.host_name}`;\n      message = `Hi ${d.invitee_first_name}, Please confirm that you will be attending ${eventName} on ${dateStr} at ${timeStr}.<br><br>`\n        + `<a href=\"${reconfirmLink}\">Confirm my attendance</a><br><br>`\n        + `Need to cancel or reschedule instead? <a href=\"${bookingManageLink}\">Manage your booking</a>.<br><br>`\n        + `Warmly, ${d.host_name}`;\n      break;\n    case 'followup':\n      if (d.category === 'showing') {\n        subject = `${d.invitee_name} Thank you for your Time! Please leave your Feedback!`;\n        message = `Hi ${d.invitee_name}, Thank you for attending ${eventName} at ${timeStr} on ${dateStr}. Here is a link to apply for the property <a href=\"${doorloopLink}\">Apply Here</a>. You can also leave feedback on the property here. <a href=\"${reviewLink}\">Leave Feedback Here</a>`;\n      } else {\n        subject = 'Thank you for your time!';\n        if (d.category === 'consult') {\n          message = `Hi ${d.invitee_name}, Thank you for attending ${eventName} at ${timeStr} on ${dateStr}. I hope I was able to answer all of your questions. Like I mentioned the next step would be to schedule a property walk through using the following link <a href=\"${walkthroughUrl}\">Schedule Property Walkthrough</a>. If you have any additional questions please respond to this email. Here is a link to our review page. Please take a moment to rate how your experience was during our consultation today! <a href=\"${reviewLink}\">Please Leave a Review</a>`;\n        } else {\n          message = `Hi ${d.invitee_name}, Thank you for attending ${eventName} at ${timeStr} on ${dateStr}.<br><br>Here is a link to our review page. <a href=\"${reviewLink}\">Leave a Review</a> Please take a moment to rate how well we were able to help guide you through the decision making process of renting or selling your home.`;\n        }\n      }\n      break;\n    case 'followup_1day_email':\n    case 'followup_2day_email':\n      subject = `${d.invitee_first_name} are you still Interested in ${answer1}?`;\n      message = `Hi ${d.invitee_name}, Thank you for attending ${eventName} at ${timeStr} on ${dateStr}. Here is a link to apply to ${answer1} <a href=\"${doorloopLink}\">Apply Here</a>. You can also leave feedback on the property here. <a href=\"${reviewLink}\">Leave Feedback Here</a>`;\n      break;\n    case 'followup_3day_email':\n      if (d.category === 'showing') {\n        subject = `${d.invitee_first_name} are you still Interested in ${answer1}?`;\n        message = `Hi ${d.invitee_name}, Thank you for attending ${eventName} at ${timeStr} on ${dateStr}. Here is a link to apply to ${answer1} <a href=\"${doorloopLink}\">Apply Here</a>. You can also leave feedback on the property here. <a href=\"${reviewLink}\">Leave Feedback Here</a>`;\n      } else {\n        subject = 'Ready to Decide?';\n        message = `Hi ${d.invitee_first_name}, I am following up to see if you had any more questions or would like to move forward with us managing your home. Disregard this if you already reached back out, thanks!<br><br>The next step would be to schedule a property walk through using the following link <a href=\"${walkthroughUrl}\">Schedule Property Walkthrough</a>. If you have any additional questions please respond to this email.<br><br>Here is a link to our review page. Please take a moment to rate how your experience was during our consultation today! <a href=\"${reviewLink}\">Please Leave a Review</a><br><br>Best,<br>${d.host_name}`;\n      }\n      break;\n    case 'followup_7day_email':\n      subject = 'Ready to Decide?';\n      message = `Hi ${d.invitee_first_name}, I am following up to see if you had any more questions or would like to move forward with us managing your home. Disregard this if you already reached back out, thanks!<br><br>The next step would be to schedule a property walk through using the following link <a href=\"${walkthroughUrl}\">Schedule Property Walkthrough</a>. If you have any additional questions please respond to this email.<br><br>Here is a link to our review page. Please take a moment to rate how your experience was during our consultation today! <a href=\"${reviewLink}\">Please Leave a Review</a><br><br>Best,<br>${d.host_name}`;\n      break;\n    default:\n      throw new Error('No email copy defined for step_key ' + d.step_key);\n  }\n} else {\n  // sms\n  switch (d.step_key) {\n    case 'reminder_24h_sms':\n    case 'reminder_2h_sms':\n      to = d.invitee_phone;\n      message = `Reminder: ${eventName} with ${d.host_name} at ${timeStr} on ${dateStr}`;\n      break;\n    case 'reconfirm_sms':\n      to = d.invitee_phone;\n      message = `Hi ${d.invitee_first_name}, Please confirm that you will be attending ${eventName} on ${dateStr} at ${timeStr} To Confirm: ${reconfirmLink}`;\n      break;\n    case 'host_sms_1h':\n      to = justinPhone;\n      message = `Hi ${d.host_name}, Just a reminder that your meeting with ${d.invitee_name} for ${eventName} is ${dateStr} at ${timeStr}. - Renting Freedom`;\n      break;\n    case 'followup_1day_sms':\n    case 'followup_2day_sms':\n    case 'followup_3day_sms':\n      if (d.category === 'showing') {\n        to = d.invitee_phone;\n        message = `Hi ${d.invitee_first_name}, Are you still interested in ${answer1}? If so head over to www.rentingfreedom.com to apply. Thanks!`;\n      } else {\n        to = d.invitee_phone;\n        message = `Hi ${d.invitee_first_name}, If you want to move forward with us managing your home here is a link to schedule your property walk through ${walkthroughUrl}`;\n      }\n      break;\n    case 'followup_7day_sms':\n      to = d.invitee_phone;\n      message = `Hi ${d.invitee_first_name}, I am following up to see if you had any more questions or would like to move forward with us managing your home. Disregard this if you already reached back out, thanks!`;\n      break;\n    default:\n      throw new Error('No SMS copy defined for step_key ' + d.step_key);\n  }\n}\n\nconst range = \"'Cal Bookings'!\" + d.sentColLetter + d.row_number + \":\" + d.atColLetter + d.row_number;\n\nreturn [{ json: { ...d, subject, message, to, from_number: fromNumber, range } }];\n"
+      },
+      "id": "e6ee094f-d466-4c59-81df-257babb7111c"
+    },
+    {
+      "name": "Channel?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1540,
+        380
+      ],
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "outputKey": "email",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.channel }}",
+                    "rightValue": "email",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "outputKey": "sms",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.channel }}",
+                    "rightValue": "sms",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "none"
+        }
+      },
+      "id": "caa7fdcf-330c-4c79-8755-660e818686bb"
+    },
+    {
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1540,
+        220
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "8F2JkQuOKIKFO18Z",
+          "name": "Gmail account"
+        }
+      },
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.message }}",
+        "options": {}
+      },
+      "id": "eea4c6cf-0b85-458e-9d4b-5e0c7a6fc51c",
+      "webhookId": "3701652c-db46-4d12-8602-53505d5f3afe",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Send SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        400
+      ],
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      },
+      "parameters": {
+        "from": "={{ $json.from_number }}",
+        "to": "={{ $json.to }}",
+        "message": "={{ $json.message }}",
+        "options": {}
+      },
+      "id": "a474b405-d693-496b-8e03-764c663f67cd",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Mark Step Sent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        220
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw/values:batchUpdate",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { valueInputOption: 'RAW', data: [{ range: $('Build Message').item.json.range, values: [[true, new Date().toISOString()]] }] } }}",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "id": "a38d4090-8591-4473-9e2d-258129e09d5b"
+    },
+    {
+      "name": "Loop Back",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        300
+      ],
+      "parameters": {},
+      "id": "d3ae67c2-b32f-49b2-bbbf-68bf225e947a"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ !!$json.error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Send Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1760,
+        300
+      ],
+      "id": "cd2e2e54-ca6d-436c-98c3-4120c56962d5"
+    },
+    {
+      "parameters": {
+        "jsCode": "// CRON_SEND_ISOLATION_MARKER\n// Recovers the original per-step data by node name (not $json — on the\n// failure path $json is just { error }), same discipline as Mark Step Sent's\n// own $('Build Message').item.json.range reference.\nconst d = $('Build Message').item.json;\nconst err = $json.error;\nconst errMsg = (err && err.message) ? err.message : String(err ?? 'unknown error');\n\nconst settings = {};\n$('Read Settings (Cron)').all().forEach(i => { if (i.json.key) settings[i.json.key] = i.json.value; });\nconst alertPhone = settings.cal_send_failure_alert_phone || '';\n\nconsole.log('[cron-send-isolation] SEND FAILED — booking_uid=' + d.booking_uid + ' step=' + d.step_key +\n  ' channel=' + d.channel + ' to=\"' + d.to + '\": ' + errMsg +\n  '. Marking this step failed so it stops re-queuing every cron tick. Manual follow-up required.');\n\nconst alertMessage = 'RF ALERT: ' + d.step_key + ' (' + d.channel + ') failed to send for booking ' +\n  d.booking_uid + ' (' + (d.invitee_name || 'unknown') + ', ' + (d.property_address || '') + '). Reason: ' +\n  errMsg + '. This step will NOT retry automatically — check the recipient contact info in Cal Bookings and resend by hand if needed.';\n\nreturn [{ json: { ...d, errorMessage: errMsg, alertPhone, alertMessage } }];"
+      },
+      "name": "Build Send-Failure Record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        460
+      ],
+      "id": "f9242bbe-b34c-45e4-bc7d-3e085d1a8f8f"
+    },
+    {
+      "name": "Mark Step Failed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        460
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw/values:batchUpdate",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { valueInputOption: 'RAW', data: [{ range: $('Build Message').item.json.range, values: [['failed', new Date().toISOString()]] }] } }}",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "id": "8fbb01dd-621a-452a-9a9a-48373516431a"
+    },
+    {
+      "name": "Send Failure Alert",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        460
+      ],
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "from": "={{ $('Build Send-Failure Record').item.json.from_number }}",
+        "to": "={{ $('Build Send-Failure Record').item.json.alertPhone }}",
+        "message": "={{ $('Build Send-Failure Record').item.json.alertMessage }}",
+        "options": {}
+      },
+      "id": "79cc4cb7-5631-4eb7-b420-0d8c22aac04c"
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Read Settings (Cron)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Settings (Cron)": {
+      "main": [
+        [
+          {
+            "node": "Read Cal Bookings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Cal Bookings": {
+      "main": [
+        [
+          {
+            "node": "Find Due Notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Due Notifications": {
+      "main": [
+        [
+          {
+            "node": "Any Due?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Due?": {
+      "main": [
+        [
+          {
+            "node": "Process One at a Time",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Process One at a Time": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Build Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Message": {
+      "main": [
+        [
+          {
+            "node": "Channel?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Channel?": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send SMS",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Send Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send SMS": {
+      "main": [
+        [
+          {
+            "node": "Send Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Step Sent": {
+      "main": [
+        [
+          {
+            "node": "Loop Back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Back": {
+      "main": [
+        [
+          {
+            "node": "Process One at a Time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Failed?": {
+      "main": [
+        [
+          {
+            "node": "Build Send-Failure Record",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark Step Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Send-Failure Record": {
+      "main": [
+        [
+          {
+            "node": "Mark Step Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Step Failed": {
+      "main": [
+        [
+          {
+            "node": "Send Failure Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Failure Alert": {
+      "main": [
+        [
+          {
+            "node": "Loop Back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {
+    "node:Every 5 Minutes": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "935ab90c-2278-4aa4-b34f-005411a48947",
+  "activeVersionId": "935ab90c-2278-4aa4-b34f-005411a48947",
+  "versionCounter": 10,
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-07-29T21:24:10.491Z",
+      "createdAt": "2026-07-29T21:24:10.491Z",
+      "role": "workflow:owner",
+      "workflowId": "3hGnl6mPnu2AMbZ1",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-08-07T09:51:54.111Z",
+    "createdAt": "2026-08-07T09:51:54.111Z",
+    "versionId": "935ab90c-2278-4aa4-b34f-005411a48947",
+    "workflowId": "3hGnl6mPnu2AMbZ1",
+    "nodes": [
+      {
+        "name": "Every 5 Minutes",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          0,
+          300
+        ],
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "minutes",
+                "minutesInterval": 5
+              }
+            ]
+          }
+        },
+        "id": "23730bd9-acc0-41ae-8768-d0228c23e35c"
+      },
+      {
+        "name": "Read Settings (Cron)",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          220,
+          300
+        ],
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Settings",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "id": "36a8e80e-6497-4e07-9129-f3481fd9a315",
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000
+      },
+      {
+        "name": "Read Cal Bookings",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          440,
+          300
+        ],
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "executeOnce": true,
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Cal Bookings",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "id": "d295cae7-7bed-4838-8a98-9fe79d6486d1",
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000
+      },
+      {
+        "name": "Find Due Notifications",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          660,
+          300
+        ],
+        "parameters": {
+          "jsCode": "\nconst CB_COLS = [\"booking_uid\",\"cal_event_type_id\",\"event_category\",\"property_address\",\"invitee_name\",\"invitee_first_name\",\"invitee_email\",\"invitee_phone\",\"host_name\",\"host_email\",\"start_time\",\"end_time\",\"status\",\"is_test\",\"created_at\",\"updated_at\",\"confirmation_sent\",\"confirmation_sent_at\",\"cancellation_sent\",\"cancellation_sent_at\",\"nicole_immediate_sent\",\"nicole_immediate_sent_at\",\"nicole_2h_sent\",\"nicole_2h_sent_at\",\"reminder_24h_email_sent\",\"reminder_24h_email_sent_at\",\"reminder_24h_sms_sent\",\"reminder_24h_sms_sent_at\",\"reminder_2h_email_sent\",\"reminder_2h_email_sent_at\",\"reminder_2h_sms_sent\",\"reminder_2h_sms_sent_at\",\"reconfirm_token\",\"reconfirm_email_sent\",\"reconfirm_email_sent_at\",\"reconfirm_sms_sent\",\"reconfirm_sms_sent_at\",\"confirmed\",\"confirmed_at\",\"host_sms_1h_sent\",\"host_sms_1h_sent_at\",\"followup_sent\",\"followup_sent_at\",\"followup_1day_email_sent\",\"followup_1day_email_sent_at\",\"followup_1day_sms_sent\",\"followup_1day_sms_sent_at\",\"followup_2day_email_sent\",\"followup_2day_email_sent_at\",\"followup_2day_sms_sent\",\"followup_2day_sms_sent_at\",\"followup_3day_email_sent\",\"followup_3day_email_sent_at\",\"followup_3day_sms_sent\",\"followup_3day_sms_sent_at\",\"followup_7day_email_sent\",\"followup_7day_email_sent_at\",\"followup_7day_sms_sent\",\"followup_7day_sms_sent_at\",\"location\",\"description\",\"notes\"];\nfunction colLetter(idx) {\n  idx += 1; let s = '';\n  while (idx > 0) { const r = (idx - 1) % 26; s = String.fromCharCode(65 + r) + s; idx = Math.floor((idx - 1) / 26); }\n  return s;\n}\nfunction colFor(name) {\n  const idx = CB_COLS.indexOf(name);\n  if (idx === -1) throw new Error('Unknown Cal Bookings column: ' + name);\n  return colLetter(idx);\n}\nfunction fmtDate(iso) {\n  try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'long', day: 'numeric', year: 'numeric' }).format(new Date(iso)); }\n  catch (e) { return iso; }\n}\nfunction fmtTime(iso) {\n  try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date(iso)); }\n  catch (e) { return iso; }\n}\nfunction eventNameFor(category, propertyAddress) {\n  if (category === 'walkthrough') return 'Property Walk Through';\n  if (category === 'consult') return '45 Minute Initial Consult';\n  return (propertyAddress || 'Property') + ' Walk-Through';\n}\n\nconst settings = {};\n$('Read Settings (Cron)').all().forEach(i => { if (i.json.key) settings[i.json.key] = i.json.value; });\nconst globalEnabled = String(settings.cal_reminders_enabled ?? 'true').trim().toLowerCase() === 'true';\n\n// anchor 'start': fires offsetHours BEFORE start_time, skipped once the event\n// has already started (a late \"reminder\" for something already underway is\n// worse than a missed one). anchor 'end': fires offsetHours AFTER end_time,\n// no upper bound — a missed cron cycle still catches up later rather than\n// silently dropping the send (matches the spec's \"fires unconditionally on\n// schedule\" for the delayed follow-ups).\nconst RULES = [\n  { key: 'reminder_24h_email', channel: 'email', categories: ['walkthrough', 'consult', 'showing'], anchor: 'start', offsetSetting: 'cal_reminder_24h_offset_hours', sentCol: 'reminder_24h_email_sent', atCol: 'reminder_24h_email_sent_at' },\n  { key: 'reminder_24h_sms', channel: 'sms', categories: ['consult', 'showing'], anchor: 'start', offsetSetting: 'cal_reminder_24h_offset_hours', sentCol: 'reminder_24h_sms_sent', atCol: 'reminder_24h_sms_sent_at' },\n  { key: 'reminder_2h_email', channel: 'email', categories: ['walkthrough', 'consult', 'showing'], anchor: 'start', offsetSetting: 'cal_reminder_2h_offset_hours', sentCol: 'reminder_2h_email_sent', atCol: 'reminder_2h_email_sent_at' },\n  { key: 'reminder_2h_sms', channel: 'sms', categories: ['consult', 'showing'], anchor: 'start', offsetSetting: 'cal_reminder_2h_offset_hours', sentCol: 'reminder_2h_sms_sent', atCol: 'reminder_2h_sms_sent_at' },\n  { key: 'nicole_2h', channel: 'email', categories: ['walkthrough'], anchor: 'start', offsetSetting: 'cal_reminder_2h_offset_hours', sentCol: 'nicole_2h_sent', atCol: 'nicole_2h_sent_at' },\n  { key: 'reconfirm_email', channel: 'email', categories: ['walkthrough', 'consult'], anchor: 'start', offsetSetting: 'cal_reconfirm_offset_hours', sentCol: 'reconfirm_email_sent', atCol: 'reconfirm_email_sent_at' },\n  { key: 'reconfirm_sms', channel: 'sms', categories: ['consult'], anchor: 'start', offsetSetting: 'cal_reconfirm_offset_hours', sentCol: 'reconfirm_sms_sent', atCol: 'reconfirm_sms_sent_at' },\n  { key: 'reconfirm_sms', channel: 'sms', categories: ['showing'], anchor: 'start', offsetSetting: 'cal_showing_reconfirm_offset_hours', sentCol: 'reconfirm_sms_sent', atCol: 'reconfirm_sms_sent_at' },\n  { key: 'host_sms_1h', channel: 'sms', categories: ['consult'], anchor: 'start', offsetSetting: 'cal_host_sms_offset_hours', sentCol: 'host_sms_1h_sent', atCol: 'host_sms_1h_sent_at' },\n  { key: 'followup', channel: 'email', categories: ['walkthrough', 'consult', 'showing'], anchor: 'end', offsetHours: 0, sentCol: 'followup_sent', atCol: 'followup_sent_at' },\n  { key: 'followup_1day_email', channel: 'email', categories: ['showing'], anchor: 'end', offsetHours: 24, sentCol: 'followup_1day_email_sent', atCol: 'followup_1day_email_sent_at' },\n  { key: 'followup_1day_sms', channel: 'sms', categories: ['showing'], anchor: 'end', offsetHours: 24, sentCol: 'followup_1day_sms_sent', atCol: 'followup_1day_sms_sent_at' },\n  { key: 'followup_2day_email', channel: 'email', categories: ['showing'], anchor: 'end', offsetHours: 48, sentCol: 'followup_2day_email_sent', atCol: 'followup_2day_email_sent_at' },\n  { key: 'followup_2day_sms', channel: 'sms', categories: ['showing'], anchor: 'end', offsetHours: 48, sentCol: 'followup_2day_sms_sent', atCol: 'followup_2day_sms_sent_at' },\n  { key: 'followup_3day_email', channel: 'email', categories: ['showing', 'consult'], anchor: 'end', offsetHours: 72, sentCol: 'followup_3day_email_sent', atCol: 'followup_3day_email_sent_at' },\n  { key: 'followup_3day_sms', channel: 'sms', categories: ['showing', 'consult'], anchor: 'end', offsetHours: 72, sentCol: 'followup_3day_sms_sent', atCol: 'followup_3day_sms_sent_at' },\n  { key: 'followup_7day_email', channel: 'email', categories: ['consult'], anchor: 'end', offsetHours: 168, sentCol: 'followup_7day_email_sent', atCol: 'followup_7day_email_sent_at' },\n  { key: 'followup_7day_sms', channel: 'sms', categories: ['consult'], anchor: 'end', offsetHours: 168, sentCol: 'followup_7day_sms_sent', atCol: 'followup_7day_sms_sent_at' },\n];\n\nconst now = Date.now();\nconst rows = $input.all().map(i => i.json);\nconst due = [];\n\nfor (const row of rows) {\n  if (!row.booking_uid || !row.row_number) continue;\n  if (String(row.status ?? '').trim().toLowerCase() === 'cancelled') continue;\n  const category = String(row.event_category ?? '').trim();\n  const catEnabled = String(settings['cal_' + category + '_enabled'] ?? 'true').trim().toLowerCase() === 'true';\n  const isTest = String(row.is_test ?? '').trim().toLowerCase() === 'true';\n  if (!globalEnabled || !catEnabled || !isTest) continue; // test gate — see file header\n\n  const startMs = new Date(row.start_time).getTime();\n  const endMs = new Date(row.end_time || row.start_time).getTime();\n  if (!Number.isFinite(startMs)) continue;\n\n  // ── LATE_REMINDER_MARKER ─────────────────────────────────────────────────────────\n  // When this booking's time was last set. updated_at (not created_at) so a\n  // reschedule re-anchors it; the cron's Mark Step Sent does not touch it.\n  // If neither timestamp parses we leave bookedMs non-finite, which disables\n  // the guard below and restores the pre-guard behaviour.\n  const createdMs_ = new Date(row.created_at).getTime();\n  const updatedMs_ = new Date(row.updated_at).getTime();\n  const bookedMs = Math.max(\n    Number.isFinite(createdMs_) ? createdMs_ : -Infinity,\n    Number.isFinite(updatedMs_) ? updatedMs_ : -Infinity\n  );\n\n  for (const rule of RULES) {\n    if (!rule.categories.includes(category)) continue;\n    // ── CRON_SEND_ISOLATION_MARKER ──────────────────────────────────────────────────────────\n    // 'failed' is written by Mark Step Failed when a send permanently fails\n    // (e.g. malformed phone/email) — treated as resolved so the step stops\n    // re-queuing every cron tick instead of crash-looping forever.\n    const sentColValue = String(row[rule.sentCol] ?? '').trim().toLowerCase();\n    const alreadySent = sentColValue === 'true' || sentColValue === 'failed';\n    if (alreadySent) continue;\n\n    let due_ = false;\n    if (rule.anchor === 'start') {\n      const offsetHours = Number(settings[rule.offsetSetting] ?? 0);\n      const targetMs = startMs - offsetHours * 3600000;\n      // ── LATE_REMINDER_MARKER ───────────────────────────────────────────────────\n      // The booking was made after this reminder was due, so it was never a\n      // real advance reminder — the guest already got the confirmation. Skip\n      // permanently (both operands are fixed) rather than firing it late.\n      if (Number.isFinite(bookedMs) && bookedMs > targetMs) {\n        console.log('[late-reminder-guard] skip ' + rule.key + ' for ' + row.booking_uid +\n          ' — booked ' + new Date(bookedMs).toISOString() +\n          ' after target ' + new Date(targetMs).toISOString());\n        continue;\n      }\n      due_ = now >= targetMs && now < startMs;\n    } else {\n      const targetMs = endMs + (rule.offsetHours ?? 0) * 3600000;\n      due_ = now >= targetMs;\n    }\n    if (!due_) continue;\n\n    due.push({\n      row_number: row.row_number, booking_uid: row.booking_uid, category,\n      step_key: rule.key, channel: rule.channel,\n      sentColLetter: colFor(rule.sentCol), atColLetter: colFor(rule.atCol),\n      invitee_name: row.invitee_name, invitee_first_name: row.invitee_first_name,\n      invitee_email: row.invitee_email, invitee_phone: row.invitee_phone,\n      host_name: row.host_name, host_email: row.host_email,\n      property_address: row.property_address, start_time: row.start_time, end_time: row.end_time,\n      location: row.location, description: row.description, notes: row.notes,\n      reconfirm_token: row.reconfirm_token,\n    });\n  }\n}\n\nif (due.length === 0) return [{ json: { hasDue: false } }];\nreturn due.map(d => ({ json: { ...d, hasDue: true } }));\n"
+        },
+        "id": "e051b496-aa2f-43ff-b18c-8abdc46f6eff"
+      },
+      {
+        "name": "Any Due?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          880,
+          300
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "loose"
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.hasDue }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "cd929d8b-1c16-47a0-aa6c-f428a1e800d3"
+      },
+      {
+        "name": "Process One at a Time",
+        "type": "n8n-nodes-base.splitInBatches",
+        "typeVersion": 3,
+        "position": [
+          1100,
+          300
+        ],
+        "parameters": {
+          "batchSize": 1,
+          "options": {}
+        },
+        "id": "dc9bb3f8-3b6c-4257-9e1c-edaa2ed0977e"
+      },
+      {
+        "name": "Build Message",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1320,
+          380
+        ],
+        "parameters": {
+          "jsCode": "\nconst CB_COLS = [\"booking_uid\",\"cal_event_type_id\",\"event_category\",\"property_address\",\"invitee_name\",\"invitee_first_name\",\"invitee_email\",\"invitee_phone\",\"host_name\",\"host_email\",\"start_time\",\"end_time\",\"status\",\"is_test\",\"created_at\",\"updated_at\",\"confirmation_sent\",\"confirmation_sent_at\",\"cancellation_sent\",\"cancellation_sent_at\",\"nicole_immediate_sent\",\"nicole_immediate_sent_at\",\"nicole_2h_sent\",\"nicole_2h_sent_at\",\"reminder_24h_email_sent\",\"reminder_24h_email_sent_at\",\"reminder_24h_sms_sent\",\"reminder_24h_sms_sent_at\",\"reminder_2h_email_sent\",\"reminder_2h_email_sent_at\",\"reminder_2h_sms_sent\",\"reminder_2h_sms_sent_at\",\"reconfirm_token\",\"reconfirm_email_sent\",\"reconfirm_email_sent_at\",\"reconfirm_sms_sent\",\"reconfirm_sms_sent_at\",\"confirmed\",\"confirmed_at\",\"host_sms_1h_sent\",\"host_sms_1h_sent_at\",\"followup_sent\",\"followup_sent_at\",\"followup_1day_email_sent\",\"followup_1day_email_sent_at\",\"followup_1day_sms_sent\",\"followup_1day_sms_sent_at\",\"followup_2day_email_sent\",\"followup_2day_email_sent_at\",\"followup_2day_sms_sent\",\"followup_2day_sms_sent_at\",\"followup_3day_email_sent\",\"followup_3day_email_sent_at\",\"followup_3day_sms_sent\",\"followup_3day_sms_sent_at\",\"followup_7day_email_sent\",\"followup_7day_email_sent_at\",\"followup_7day_sms_sent\",\"followup_7day_sms_sent_at\",\"location\",\"description\",\"notes\"];\nfunction colLetter(idx) {\n  idx += 1; let s = '';\n  while (idx > 0) { const r = (idx - 1) % 26; s = String.fromCharCode(65 + r) + s; idx = Math.floor((idx - 1) / 26); }\n  return s;\n}\nfunction colFor(name) {\n  const idx = CB_COLS.indexOf(name);\n  if (idx === -1) throw new Error('Unknown Cal Bookings column: ' + name);\n  return colLetter(idx);\n}\nfunction fmtDate(iso) {\n  try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'long', day: 'numeric', year: 'numeric' }).format(new Date(iso)); }\n  catch (e) { return iso; }\n}\nfunction fmtTime(iso) {\n  try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date(iso)); }\n  catch (e) { return iso; }\n}\nfunction eventNameFor(category, propertyAddress) {\n  if (category === 'walkthrough') return 'Property Walk Through';\n  if (category === 'consult') return '45 Minute Initial Consult';\n  return (propertyAddress || 'Property') + ' Walk-Through';\n}\n\nconst d = $json;\nconst settings = {};\n$('Read Settings (Cron)').all().forEach(i => { if (i.json.key) settings[i.json.key] = i.json.value; });\n\nconst fromNumber = settings.from_number ?? '';\nconst justinPhone = settings.cal_justin_phone ?? '';\nconst reviewLink = settings.cal_review_link ?? '';\nconst doorloopLink = settings.cal_doorloop_apply_link ?? '';\nconst welcomeLetter = settings.cal_welcome_letter_link ?? '';\nconst walkthroughUrl = settings.cal_property_walkthrough_url ?? '';\nconst reconfirmBase = settings.cal_reconfirm_base_url ?? '';\n\nconst eventName = eventNameFor(d.category, d.property_address);\nconst dateStr = fmtDate(d.start_time);\nconst timeStr = fmtTime(d.start_time);\nconst answer1 = d.property_address;\nconst reconfirmLink = reconfirmBase + '?token=' + encodeURIComponent(d.reconfirm_token || '');\nconst bookingManageLink = 'https://cal.com/booking/' + d.booking_uid;\n\nlet subject = '', message = '', to = '';\n\nif (d.channel === 'email') {\n  to = d.invitee_email;\n  const qa = [d.description, d.notes].filter(Boolean).join('<br>');\n  const locLine = d.location ? `Location: ${d.location}<br>` : '';\n\n  switch (d.step_key) {\n    case 'reminder_24h_email':\n    case 'reminder_2h_email':\n      subject = `Reminder: ${eventName} with ${d.host_name} at ${timeStr} on ${dateStr}`;\n      if (d.category === 'consult') {\n        message = `Hi ${d.invitee_name}, This is a friendly reminder that your ${eventName} with ${d.host_name} is at ${timeStr} on ${dateStr}. Review the Welcome Letter before your meeting. Click link below to access it. <a href=\"${welcomeLetter}\">Property Owner Welcome Letter</a>`;\n      } else {\n        message = `Hi ${d.invitee_name}, This is a friendly reminder that your ${eventName} with ${d.host_name} is at ${timeStr} on ${dateStr}. ${locLine}${qa}`;\n      }\n      break;\n    case 'nicole_2h':\n      subject = `Reminder: ${eventName} with ${d.invitee_name} at ${timeStr} on ${dateStr}`;\n      message = `Hi ${d.host_name}, This is a friendly reminder that your ${eventName} with ${d.invitee_name} is at ${timeStr} on ${dateStr}. Remember to Bring Lockbox to property! ${locLine}${qa}`;\n      to = settings.cal_nicole_email ?? '';\n      break;\n    case 'reconfirm_email':\n      subject = `Confirm that you'll be attending ${eventName} with ${d.host_name}`;\n      message = `Hi ${d.invitee_first_name}, Please confirm that you will be attending ${eventName} on ${dateStr} at ${timeStr}.<br><br>`\n        + `<a href=\"${reconfirmLink}\">Confirm my attendance</a><br><br>`\n        + `Need to cancel or reschedule instead? <a href=\"${bookingManageLink}\">Manage your booking</a>.<br><br>`\n        + `Warmly, ${d.host_name}`;\n      break;\n    case 'followup':\n      if (d.category === 'showing') {\n        subject = `${d.invitee_name} Thank you for your Time! Please leave your Feedback!`;\n        message = `Hi ${d.invitee_name}, Thank you for attending ${eventName} at ${timeStr} on ${dateStr}. Here is a link to apply for the property <a href=\"${doorloopLink}\">Apply Here</a>. You can also leave feedback on the property here. <a href=\"${reviewLink}\">Leave Feedback Here</a>`;\n      } else {\n        subject = 'Thank you for your time!';\n        if (d.category === 'consult') {\n          message = `Hi ${d.invitee_name}, Thank you for attending ${eventName} at ${timeStr} on ${dateStr}. I hope I was able to answer all of your questions. Like I mentioned the next step would be to schedule a property walk through using the following link <a href=\"${walkthroughUrl}\">Schedule Property Walkthrough</a>. If you have any additional questions please respond to this email. Here is a link to our review page. Please take a moment to rate how your experience was during our consultation today! <a href=\"${reviewLink}\">Please Leave a Review</a>`;\n        } else {\n          message = `Hi ${d.invitee_name}, Thank you for attending ${eventName} at ${timeStr} on ${dateStr}.<br><br>Here is a link to our review page. <a href=\"${reviewLink}\">Leave a Review</a> Please take a moment to rate how well we were able to help guide you through the decision making process of renting or selling your home.`;\n        }\n      }\n      break;\n    case 'followup_1day_email':\n    case 'followup_2day_email':\n      subject = `${d.invitee_first_name} are you still Interested in ${answer1}?`;\n      message = `Hi ${d.invitee_name}, Thank you for attending ${eventName} at ${timeStr} on ${dateStr}. Here is a link to apply to ${answer1} <a href=\"${doorloopLink}\">Apply Here</a>. You can also leave feedback on the property here. <a href=\"${reviewLink}\">Leave Feedback Here</a>`;\n      break;\n    case 'followup_3day_email':\n      if (d.category === 'showing') {\n        subject = `${d.invitee_first_name} are you still Interested in ${answer1}?`;\n        message = `Hi ${d.invitee_name}, Thank you for attending ${eventName} at ${timeStr} on ${dateStr}. Here is a link to apply to ${answer1} <a href=\"${doorloopLink}\">Apply Here</a>. You can also leave feedback on the property here. <a href=\"${reviewLink}\">Leave Feedback Here</a>`;\n      } else {\n        subject = 'Ready to Decide?';\n        message = `Hi ${d.invitee_first_name}, I am following up to see if you had any more questions or would like to move forward with us managing your home. Disregard this if you already reached back out, thanks!<br><br>The next step would be to schedule a property walk through using the following link <a href=\"${walkthroughUrl}\">Schedule Property Walkthrough</a>. If you have any additional questions please respond to this email.<br><br>Here is a link to our review page. Please take a moment to rate how your experience was during our consultation today! <a href=\"${reviewLink}\">Please Leave a Review</a><br><br>Best,<br>${d.host_name}`;\n      }\n      break;\n    case 'followup_7day_email':\n      subject = 'Ready to Decide?';\n      message = `Hi ${d.invitee_first_name}, I am following up to see if you had any more questions or would like to move forward with us managing your home. Disregard this if you already reached back out, thanks!<br><br>The next step would be to schedule a property walk through using the following link <a href=\"${walkthroughUrl}\">Schedule Property Walkthrough</a>. If you have any additional questions please respond to this email.<br><br>Here is a link to our review page. Please take a moment to rate how your experience was during our consultation today! <a href=\"${reviewLink}\">Please Leave a Review</a><br><br>Best,<br>${d.host_name}`;\n      break;\n    default:\n      throw new Error('No email copy defined for step_key ' + d.step_key);\n  }\n} else {\n  // sms\n  switch (d.step_key) {\n    case 'reminder_24h_sms':\n    case 'reminder_2h_sms':\n      to = d.invitee_phone;\n      message = `Reminder: ${eventName} with ${d.host_name} at ${timeStr} on ${dateStr}`;\n      break;\n    case 'reconfirm_sms':\n      to = d.invitee_phone;\n      message = `Hi ${d.invitee_first_name}, Please confirm that you will be attending ${eventName} on ${dateStr} at ${timeStr} To Confirm: ${reconfirmLink}`;\n      break;\n    case 'host_sms_1h':\n      to = justinPhone;\n      message = `Hi ${d.host_name}, Just a reminder that your meeting with ${d.invitee_name} for ${eventName} is ${dateStr} at ${timeStr}. - Renting Freedom`;\n      break;\n    case 'followup_1day_sms':\n    case 'followup_2day_sms':\n    case 'followup_3day_sms':\n      if (d.category === 'showing') {\n        to = d.invitee_phone;\n        message = `Hi ${d.invitee_first_name}, Are you still interested in ${answer1}? If so head over to www.rentingfreedom.com to apply. Thanks!`;\n      } else {\n        to = d.invitee_phone;\n        message = `Hi ${d.invitee_first_name}, If you want to move forward with us managing your home here is a link to schedule your property walk through ${walkthroughUrl}`;\n      }\n      break;\n    case 'followup_7day_sms':\n      to = d.invitee_phone;\n      message = `Hi ${d.invitee_first_name}, I am following up to see if you had any more questions or would like to move forward with us managing your home. Disregard this if you already reached back out, thanks!`;\n      break;\n    default:\n      throw new Error('No SMS copy defined for step_key ' + d.step_key);\n  }\n}\n\nconst range = \"'Cal Bookings'!\" + d.sentColLetter + d.row_number + \":\" + d.atColLetter + d.row_number;\n\nreturn [{ json: { ...d, subject, message, to, from_number: fromNumber, range } }];\n"
+        },
+        "id": "e6ee094f-d466-4c59-81df-257babb7111c"
+      },
+      {
+        "name": "Channel?",
+        "type": "n8n-nodes-base.switch",
+        "typeVersion": 3,
+        "position": [
+          1540,
+          380
+        ],
+        "parameters": {
+          "mode": "rules",
+          "rules": {
+            "values": [
+              {
+                "outputKey": "email",
+                "conditions": {
+                  "options": {
+                    "caseSensitive": true
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.channel }}",
+                      "rightValue": "email",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "outputKey": "sms",
+                "conditions": {
+                  "options": {
+                    "caseSensitive": true
+                  },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.channel }}",
+                      "rightValue": "sms",
+                      "operator": {
+                        "type": "string",
+                        "operation": "equals"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "options": {
+            "fallbackOutput": "none"
+          }
+        },
+        "id": "caa7fdcf-330c-4c79-8755-660e818686bb"
+      },
+      {
+        "name": "Send Email",
+        "type": "n8n-nodes-base.gmail",
+        "typeVersion": 2.1,
+        "position": [
+          1540,
+          220
+        ],
+        "credentials": {
+          "gmailOAuth2": {
+            "id": "8F2JkQuOKIKFO18Z",
+            "name": "Gmail account"
+          }
+        },
+        "parameters": {
+          "resource": "message",
+          "operation": "send",
+          "sendTo": "={{ $json.to }}",
+          "subject": "={{ $json.subject }}",
+          "message": "={{ $json.message }}",
+          "options": {}
+        },
+        "id": "eea4c6cf-0b85-458e-9d4b-5e0c7a6fc51c",
+        "webhookId": "3701652c-db46-4d12-8602-53505d5f3afe",
+        "onError": "continueRegularOutput"
+      },
+      {
+        "name": "Send SMS",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          1540,
+          400
+        ],
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        },
+        "parameters": {
+          "from": "={{ $json.from_number }}",
+          "to": "={{ $json.to }}",
+          "message": "={{ $json.message }}",
+          "options": {}
+        },
+        "id": "a474b405-d693-496b-8e03-764c663f67cd",
+        "onError": "continueRegularOutput"
+      },
+      {
+        "name": "Mark Step Sent",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1980,
+          220
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "parameters": {
+          "method": "POST",
+          "url": "=https://sheets.googleapis.com/v4/spreadsheets/1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw/values:batchUpdate",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "googleApi",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ { valueInputOption: 'RAW', data: [{ range: $('Build Message').item.json.range, values: [[true, new Date().toISOString()]] }] } }}",
+          "options": {}
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000,
+        "id": "a38d4090-8591-4473-9e2d-258129e09d5b"
+      },
+      {
+        "name": "Loop Back",
+        "type": "n8n-nodes-base.noOp",
+        "typeVersion": 1,
+        "position": [
+          1980,
+          300
+        ],
+        "parameters": {},
+        "id": "d3ae67c2-b32f-49b2-bbbf-68bf225e947a"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "loose"
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ !!$json.error }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "name": "Send Failed?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          1760,
+          300
+        ],
+        "id": "cd2e2e54-ca6d-436c-98c3-4120c56962d5"
+      },
+      {
+        "parameters": {
+          "jsCode": "// CRON_SEND_ISOLATION_MARKER\n// Recovers the original per-step data by node name (not $json — on the\n// failure path $json is just { error }), same discipline as Mark Step Sent's\n// own $('Build Message').item.json.range reference.\nconst d = $('Build Message').item.json;\nconst err = $json.error;\nconst errMsg = (err && err.message) ? err.message : String(err ?? 'unknown error');\n\nconst settings = {};\n$('Read Settings (Cron)').all().forEach(i => { if (i.json.key) settings[i.json.key] = i.json.value; });\nconst alertPhone = settings.cal_send_failure_alert_phone || '';\n\nconsole.log('[cron-send-isolation] SEND FAILED — booking_uid=' + d.booking_uid + ' step=' + d.step_key +\n  ' channel=' + d.channel + ' to=\"' + d.to + '\": ' + errMsg +\n  '. Marking this step failed so it stops re-queuing every cron tick. Manual follow-up required.');\n\nconst alertMessage = 'RF ALERT: ' + d.step_key + ' (' + d.channel + ') failed to send for booking ' +\n  d.booking_uid + ' (' + (d.invitee_name || 'unknown') + ', ' + (d.property_address || '') + '). Reason: ' +\n  errMsg + '. This step will NOT retry automatically — check the recipient contact info in Cal Bookings and resend by hand if needed.';\n\nreturn [{ json: { ...d, errorMessage: errMsg, alertPhone, alertMessage } }];"
+        },
+        "name": "Build Send-Failure Record",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1980,
+          460
+        ],
+        "id": "f9242bbe-b34c-45e4-bc7d-3e085d1a8f8f"
+      },
+      {
+        "name": "Mark Step Failed",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2200,
+          460
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "parameters": {
+          "method": "POST",
+          "url": "=https://sheets.googleapis.com/v4/spreadsheets/1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw/values:batchUpdate",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "googleApi",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ { valueInputOption: 'RAW', data: [{ range: $('Build Message').item.json.range, values: [['failed', new Date().toISOString()]] }] } }}",
+          "options": {}
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000,
+        "id": "8fbb01dd-621a-452a-9a9a-48373516431a"
+      },
+      {
+        "name": "Send Failure Alert",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          2420,
+          460
+        ],
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        },
+        "onError": "continueRegularOutput",
+        "parameters": {
+          "from": "={{ $('Build Send-Failure Record').item.json.from_number }}",
+          "to": "={{ $('Build Send-Failure Record').item.json.alertPhone }}",
+          "message": "={{ $('Build Send-Failure Record').item.json.alertMessage }}",
+          "options": {}
+        },
+        "id": "79cc4cb7-5631-4eb7-b420-0d8c22aac04c"
+      }
+    ],
+    "connections": {
+      "Every 5 Minutes": {
+        "main": [
+          [
+            {
+              "node": "Read Settings (Cron)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Settings (Cron)": {
+        "main": [
+          [
+            {
+              "node": "Read Cal Bookings",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Cal Bookings": {
+        "main": [
+          [
+            {
+              "node": "Find Due Notifications",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Find Due Notifications": {
+        "main": [
+          [
+            {
+              "node": "Any Due?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Any Due?": {
+        "main": [
+          [
+            {
+              "node": "Process One at a Time",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      },
+      "Process One at a Time": {
+        "main": [
+          [],
+          [
+            {
+              "node": "Build Message",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Message": {
+        "main": [
+          [
+            {
+              "node": "Channel?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Channel?": {
+        "main": [
+          [
+            {
+              "node": "Send Email",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Send SMS",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      },
+      "Send Email": {
+        "main": [
+          [
+            {
+              "node": "Send Failed?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Send SMS": {
+        "main": [
+          [
+            {
+              "node": "Send Failed?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Mark Step Sent": {
+        "main": [
+          [
+            {
+              "node": "Loop Back",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Loop Back": {
+        "main": [
+          [
+            {
+              "node": "Process One at a Time",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Send Failed?": {
+        "main": [
+          [
+            {
+              "node": "Build Send-Failure Record",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Mark Step Sent",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Send-Failure Record": {
+        "main": [
+          [
+            {
+              "node": "Mark Step Failed",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Mark Step Failed": {
+        "main": [
+          [
+            {
+              "node": "Send Failure Alert",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Send Failure Alert": {
+        "main": [
+          [
+            {
+              "node": "Loop Back",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Justin Artis",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-08-07T09:51:54.132Z",
+        "id": 306,
+        "workflowId": "3hGnl6mPnu2AMbZ1",
+        "versionId": "935ab90c-2278-4aa4-b34f-005411a48947",
+        "event": "deactivated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      },
+      {
+        "createdAt": "2026-08-07T09:51:54.143Z",
+        "id": 307,
+        "workflowId": "3hGnl6mPnu2AMbZ1",
+        "versionId": "935ab90c-2278-4aa4-b34f-005411a48947",
+        "event": "activated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    ]
+  }
+}

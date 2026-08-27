@@ -21,7 +21,10 @@
  *     scripts/n8n-add-access-test-gate.mjs, which owns their backups —
  *     run `node scripts/n8n-add-access-test-gate.mjs --revert --apply`.
  *   · Settings changes (allowed_stages, the three alert phones).
- *   · Activating the Zillow workflow.
+ *   · The Zillow workflow's dedup/existing-match branch — activated
+ *     2026-08-07 with its gate deliberately left closed, but that branch has
+ *     never run through n8n's own execution engine. Exercise it live before
+ *     lifting this gate specifically.
  *   · The LEGACY peopleCreated gate — that workflow is inactive and slated
  *     for retirement; lifting its gate would be the wrong direction.
  *   All of these are printed as a checklist after a successful run.
@@ -179,7 +182,7 @@ const CODE_EDITS = {
       node: "Parse & Resolve Application",
       find: `const testGateOpen = isTestLead;`,
       replace: `const testGateOpen = true; // TEST GATE LIFTED (was: isTestLead)`,
-      note: "applications processed for real applicants (workflow still INACTIVE)",
+      note: "applications processed for real applicants (workflow active since 2026-08-07)",
     }],
   },
 };
@@ -295,9 +298,20 @@ console.log("        'Tenant Still Looking For Rental' FIRST or you lose the tes
 console.log("  3. Reassign all 3 alert phones off +18038047847:");
 console.log("       unmatched_inquiry_alert_phone, rental_application_alert_phone,");
 console.log("       cal_send_failure_alert_phone");
-console.log("  4. Add Properties rows: 522 Temple Rd, 296 Blue Haw Dr, 5464 Crown Ave");
-console.log("  5. Activate the Zillow workflow (X1lih7X05rpnTPmb) once its dedup");
-console.log("       branch has been exercised end to end");
+console.log("  4. (RESOLVED 2026-08-23 — no Properties rows to add. Blue Haw and");
+console.log("       Crown already exist spelled out; 522 Temple Rd is occupied to");
+console.log("       2028 and has never been inquired on. Adding any of them would");
+console.log("       duplicate a property and provision a second cal.com event type.)");
+console.log("  5. Zillow workflow (X1lih7X05rpnTPmb) activated 2026-08-07 — its");
+console.log("       dedup/existing-match branch still hasn't been exercised through");
+console.log("       n8n's own execution engine. Exercise it live before lifting this");
+console.log("       gate specifically (see docs/n8n-workflows.md, \"Test gate\" under");
+console.log("       \"Zillow Rental Application Flow\").");
 console.log("  6. Decide on retiring the two LEGACY cal-link workflows");
-console.log("\n  Then: node scripts/launch-audit.mjs   → expect hardGates=0 everywhere");
+console.log("\n  Then: node scripts/launch-audit.mjs");
+console.log("       → expect 13 residual gates, ALL flagged '✓ expected'. NOT zero.");
+console.log("       Zero is unreachable: both lift scripts leave their bypassed IF");
+console.log("       nodes on the canvas disconnected, and the audit classifies by");
+console.log("       node parameters rather than graph reachability. Check that the");
+console.log("       residual list matches the baseline, not that it is empty.");
 if (!APPLY) console.log("\nDry run — nothing changed. Re-run with --apply --confirm-live.");

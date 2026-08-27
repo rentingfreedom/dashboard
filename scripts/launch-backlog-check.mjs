@@ -62,7 +62,13 @@ const sheets = google.sheets({ version: "v4", auth });
 const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
 
 async function tab(name) {
-  const r = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${name}!A:AZ` });
+  // A:ZZ, not A:AZ. `Cal Bookings` is a superset schema and its later follow-up
+  // columns sit past AZ — followup_3day_sms_sent (BB), followup_7day_email_sent
+  // (BD), followup_7day_sms_sent (BF). Reading A:AZ silently truncated them, so
+  // this check reported 6 unsent follow-up steps on 2026-08-20 when there were
+  // really 9. It under-reported the backlog, which is the dangerous direction:
+  // the whole point of this script is to prove nothing unexpected fires.
+  const r = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${name}!A:ZZ` });
   const rows = r.data.values ?? [];
   const header = (rows[0] ?? []).map((h) => String(h).trim());
   return rows.slice(1).map((row) => Object.fromEntries(header.map((h, i) => [h, row[i] ?? ""])));

@@ -1,0 +1,219 @@
+#!/usr/bin/env node
+/**
+ * Live-ish verification of the Zillow Rental Application flow
+ * (X1lih7X05rpnTPmb), closing the gap flagged in docs/n8n-workflows.md
+ * since 2026-07-28: "the underlying API calls were confirmed by curl, but
+ * not yet exercised as n8n nodes together."
+ *
+ * The workflow's trigger (Gmail Trigger, poll-based) cannot be fired via
+ * n8n's public API (no /workflows/:id/run endpoint — confirmed 405), so
+ * this can't be a true "click Execute in the UI" test. Instead it:
+ *
+ *   1. Pulls the LIVE jsCode for "Parse & Resolve Application" and
+ *      "Check Existing Match" straight out of the current workflow.
+ *   2. Feeds it two synthetic Gmail-message-shaped inputs matching Zillow's
+ *      real email format exactly — one brand-new applicant name, one that
+ *      matches an existing FUB test person.
+ *   3. For the dedup step, calls the REAL FUB search endpoint (read-only
+ *      GET) with the exact URL/params "FUB - Search Existing Person" uses,
+ *      not a mock — so the actual live dedup behavior is exercised, not
+ *      reimplemented logic.
+ *   4. Cross-checks the IF-node wiring (Should Process? / Test Gate
+ *      Closed? / Existing Person Found? / Existing Person Trashed?)
+ *      directly from the live workflow JSON's connections graph.
+ *
+ * Sends no SMS, creates no FUB person, writes no Sheets row — read-only
+ * except for the FUB search GETs, which are non-destructive.
+ *
+ *   node scripts/zillow-flow-verify.mjs
+ */
+
+import { readFileSync, existsSync } from "fs";
+import { resolve, dirname } from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const envPath = resolve(__dirname, "../.env.local");
+const env = {};
+if (existsSync(envPath)) {
+  for (const line of readFileSync(envPath, "utf8").split("\n")) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const i = t.indexOf("=");
+    if (i === -1) continue;
+    const k = t.slice(0, i).trim();
+    const v = t.slice(i + 1).trim().replace(/^["']|["']$/g, "");
+    env[k] = v;
+    if (!process.env[k]) process.env[k] = v;
+  }
+}
+
+const N8N_KEY = env.N8N_API_KEY;
+const FUB_KEY = env.FUB_API_KEY;
+const WF_ID = "X1lih7X05rpnTPmb";
+
+async function getWorkflow(id) {
+  const r = await fetch(`https://automation.rentingfreedom.com/api/v1/workflows/${id}`, {
+    headers: { "X-N8N-API-KEY": N8N_KEY },
+  });
+  return r.json();
+}
+function codeOf(wf, nodeName) {
+  const n = wf.nodes.find((x) => x.name === nodeName);
+  if (!n) throw new Error(`node ${nodeName} not found`);
+  return n.parameters.jsCode;
+}
+function runParse(code, { emails, properties, settings, appRows }) {
+  const items = {
+    "Gmail Trigger": emails,
+    "Read Properties": properties,
+    "Read Settings": settings,
+    "Read Rental Applications": appRows,
+  };
+  const $items = (name) => (items[name] ?? []).map((json) => ({ json }));
+  const fn = new Function("$items", code);
+  return fn($items);
+}
+function runCheckExistingMatch(code, searchResult) {
+  const fn = new Function("$json", code);
+  return fn(searchResult);
+}
+async function fubSearch(name) {
+  const auth = Buffer.from(`${FUB_KEY}:`).toString("base64");
+  const url = `https://api.followupboss.com/v1/people?name=${encodeURIComponent(name)}&includeTrash=true&fields=allFields`;
+  const r = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
+  return r.json();
+}
+
+let failures = 0;
+const expect = (label, actual, want) => {
+  const ok = JSON.stringify(actual) === JSON.stringify(want);
+  console.log(`   ${ok ? "✓" : "✗"} ${label}: ${JSON.stringify(actual)}${ok ? "" : `  (expected ${JSON.stringify(want)})`}`);
+  if (!ok) failures++;
+};
+
+console.log("═".repeat(72));
+console.log("Zillow Rental Application → Create FUB Person — offline + live-search verify");
+console.log("═".repeat(72));
+
+const wf = await getWorkflow(WF_ID);
+console.log(`workflow active: ${wf.active}`);
+
+const parseCode = codeOf(wf, "Parse & Resolve Application");
+const checkCode = codeOf(wf, "Check Existing Match");
+
+const settingsRows = [
+  { key: "rental_application_stage", value: "Tenant Inquiry Lead (Do Not Contact)" },
+  { key: "rental_application_alert_phone", value: "+18038047847" },
+  { key: "from_number", value: "+18548886242" },
+];
+const properties = [{ street_address: "102 Braeford", property_key: "102-braeford" }];
+
+const makeEmail = (id, applicant, address) => ({
+  id,
+  subject: `You have a new rental application for ${address}!`,
+  // Applicant name starts its own line (a blank line after "Great news!") —
+  // the parser's regex requires a capital letter with no preceding "." or
+  // newline, and "Great news!" sharing a line with the name would otherwise
+  // get captured as part of the name.
+  textPlain: `Great news!\n\n${applicant} has completed their rental application for ${address}, including their credit and background check. Click below to review.\nhttps://www.zillow.com/rental-manager/applications/${id}-review`,
+  date: new Date().toISOString(),
+});
+
+// ─── Case A: brand-new applicant, no existing FUB match ─────────────────────
+console.log("\n" + "─".repeat(72));
+console.log("Case A — new applicant (no existing FUB match): \"Test ZillowFlowCheck\"");
+console.log("─".repeat(72));
+{
+  const email = makeEmail("test-msg-new-001", "Test ZillowFlowCheck", "102 Braeford");
+  const out = runParse(parseCode, { emails: [email], properties, settings: settingsRows, appRows: [] });
+  const j = out[0].json;
+  console.log("  Parse & Resolve Application:");
+  expect("skip", j.skip, false);
+  expect("applicant_name", j.applicant_name, "Test ZillowFlowCheck");
+  expect("property_address", j.property_address, "102 Braeford");
+  expect("match_status", j.match_status, "matched");
+  expect("is_test_lead", j.is_test_lead, true);
+  expect("test_gate_open", j.test_gate_open, true);
+  expect("review_link", j.review_link, "https://www.zillow.com/rental-manager/applications/test-msg-new-001-review");
+
+  console.log("\n  FUB - Search Existing Person (LIVE, read-only):");
+  const search = await fubSearch(j.applicant_name);
+  console.log(`   total results: ${search._metadata?.total ?? "?"}`);
+  const checkOut = runCheckExistingMatch(checkCode, search);
+  const cj = checkOut[0].json;
+  expect("existing_found", cj.existing_found, false);
+  console.log("  → would proceed to FUB - Create Person (new person, not yet executed by this script)");
+}
+
+// ─── Case B: applicant name matches an existing FUB test person ─────────────
+console.log("\n" + "─".repeat(72));
+console.log("Case B — existing match: \"Test RentalApplication\" (FUB person 2607)");
+console.log("─".repeat(72));
+{
+  const email = makeEmail("test-msg-existing-001", "Test RentalApplication", "102 Braeford");
+  const out = runParse(parseCode, { emails: [email], properties, settings: settingsRows, appRows: [] });
+  const j = out[0].json;
+  console.log("  Parse & Resolve Application:");
+  expect("skip", j.skip, false);
+  expect("applicant_name", j.applicant_name, "Test RentalApplication");
+  expect("test_gate_open", j.test_gate_open, true);
+
+  console.log("\n  FUB - Search Existing Person (LIVE, read-only):");
+  const search = await fubSearch(j.applicant_name);
+  console.log(`   total results: ${search._metadata?.total ?? "?"}`);
+  const checkOut = runCheckExistingMatch(checkCode, search);
+  const cj = checkOut[0].json;
+  expect("existing_found", cj.existing_found, true);
+  expect("existing_person_id", cj.existing_person_id, "2607");
+  expect("existing_trashed", cj.existing_trashed, false);
+  console.log("  → would proceed to FUB - Add Note To Existing + Send Existing-Match Alert (not yet executed by this script)");
+}
+
+// ─── Idempotency: a redelivered message_id must be skipped ──────────────────
+console.log("\n" + "─".repeat(72));
+console.log("Case C — duplicate message_id (redelivery) must be skipped, not re-processed");
+console.log("─".repeat(72));
+{
+  const email = makeEmail("test-msg-new-001", "Test ZillowFlowCheck", "102 Braeford");
+  const out = runParse(parseCode, {
+    emails: [email], properties, settings: settingsRows,
+    appRows: [{ message_id: "test-msg-new-001" }],
+  });
+  const j = out[0].json;
+  expect("skip", j.skip, true);
+  expect("reason", j.reason, "duplicate_message");
+}
+
+// ─── Case D: a real applicant name (not "Test ...") must hit the test-gate skip, not create anyone ──
+console.log("\n" + "─".repeat(72));
+console.log("Case D — non-test applicant name must NOT pass the test gate");
+console.log("─".repeat(72));
+{
+  const email = makeEmail("test-msg-real-001", "Jordan Realperson", "102 Braeford");
+  const out = runParse(parseCode, { emails: [email], properties, settings: settingsRows, appRows: [] });
+  const j = out[0].json;
+  expect("skip", j.skip, false);
+  expect("is_test_lead", j.is_test_lead, false);
+  expect("test_gate_open", j.test_gate_open, false);
+  console.log("  → would route to \"Test Gate Closed?\" → Append Test-Gate-Skipped Row (no FUB write, no SMS)");
+}
+
+// ─── Wiring: confirm the IF-node graph actually routes where the code assumes ──
+console.log("\n" + "─".repeat(72));
+console.log("Node-graph wiring (read directly from the live workflow JSON)");
+console.log("─".repeat(72));
+{
+  const conns = wf.connections;
+  const target = (nodeName, branch) => conns[nodeName]?.main?.[branch]?.[0]?.node ?? null;
+  expect("Should Process? [true] -> FUB - Search Existing Person", target("Should Process?", 0), "FUB - Search Existing Person");
+  expect("Test Gate Closed? [true] -> Append Test-Gate-Skipped Row", target("Test Gate Closed?", 0), "Append Test-Gate-Skipped Row");
+  expect("Existing Person Found? [true] -> Existing Person Trashed?", target("Existing Person Found?", 0), "Existing Person Trashed?");
+  expect("Existing Person Trashed? [true] -> Append Trash-Skipped Row", target("Existing Person Trashed?", 0), "Append Trash-Skipped Row");
+  expect("Existing Person Trashed? [false] -> FUB - Add Note To Existing", target("Existing Person Trashed?", 1), "FUB - Add Note To Existing");
+  expect("Existing Person Found? [false] -> FUB - Create Person", target("Existing Person Found?", 1), "FUB - Create Person");
+}
+
+console.log("\n" + "═".repeat(72));
+console.log(failures === 0 ? "✓ all assertions passed" : `✗ ${failures} assertion(s) failed`);
+process.exit(failures ? 1 : 0);

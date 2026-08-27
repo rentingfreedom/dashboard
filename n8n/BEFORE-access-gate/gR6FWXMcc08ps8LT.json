@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-07-31T01:50:10.565Z",
+  "updatedAt": "2026-08-07T09:51:53.910Z",
   "createdAt": "2026-07-09T13:04:35.401Z",
   "id": "gR6FWXMcc08ps8LT",
   "name": "RentingFreedom - Cal.com Booking Handler",
@@ -161,7 +161,7 @@
       "id": "d6dec995-8014-46bb-9398-7301174bc88b",
       "retryOnFail": true,
       "maxTries": 5,
-      "waitBetweenTries": 8000
+      "waitBetweenTries": 15000
     },
     {
       "name": "Find Property",
@@ -227,7 +227,7 @@
         180
       ],
       "parameters": {
-        "jsCode": "\nconst booking  = $('Parse Created Booking').first().json;\nconst prop     = $('Find Property').first().json;\nconst fubResp  = $('FUB - Search by Phone').first().json;\n\nconst fubPerson = (fubResp.people ?? [])[0] ?? {};\nconst personId  = booking.personId || (fubPerson.id ? String(fubPerson.id) : '');\n\nconst fubPhone = (fubPerson.phones ?? [])[0]?.value ?? '';\nconst rawPhone = booking.attendeePhone || fubPhone;\nconst digits   = rawPhone.replace(/\\D/g, '');\nconst phone    = digits.length === 10 ? `+1${digits}` : digits ? `+${digits}` : '';\n\nconst now = new Date();\nconst showingTime = new Date(booking.startTime);\nconst isImmediate = (showingTime - now) < 60 * 60 * 1000;\n\nconst row = {\n  booking_uid:      booking.uid,\n  property_key:     prop.propertyKey,\n  property_address: prop.propertyAddress,\n  person_id:        personId,\n  person_name:      booking.attendeeName,\n  person_email:     booking.attendeeEmail,\n  person_phone:     phone,\n  showing_time:     booking.startTime,\n  status:           'scheduled',\n  populife_lock_id: prop.populifeLockId,\n  access_code:      '',\n  access_code_id:   '',\n  code_sent_at:     '',\n  created_at:       now.toISOString(),\n  updated_at:       now.toISOString(),\n};\n\nreturn [{ json: { ...row, isImmediate, personId, populifeLockId: prop.populifeLockId } }];\n"
+        "jsCode": "\nconst booking  = $('Parse Created Booking').first().json;\nconst prop     = $('Find Property').first().json;\nconst fubResp  = $('FUB - Search by Phone').first().json;\n\nconst fubPerson = (fubResp.people ?? [])[0] ?? {};\nconst personId  = booking.personId || (fubPerson.id ? String(fubPerson.id) : '');\n\nconst fubPhone = (fubPerson.phones ?? [])[0]?.value ?? '';\nconst rawPhone = booking.attendeePhone || fubPhone;\nconst digits   = rawPhone.replace(/\\D/g, '');\nconst phone    = digits.length === 10 ? `+1${digits}` : digits ? `+${digits}` : '';\n\nconst now = new Date();\nconst showingTime = new Date(booking.startTime);\nconst isImmediate = (showingTime - now) < 60 * 60 * 1000;\n\n// ── ACCESS_GATE_MARKER: test gate ──────────────────────────────────────────────\n// The FUB person's firstName, NOT booking.attendeeName. The cal.com booking\n// carries whatever name the tester typed; the FUB lead is the thing the rest\n// of the system gates on. Stamped into the row so the 5-minute cron (which\n// has no FUB person) can read the verdict without an extra API call.\n// Empty fubPerson (phone not found in FUB) => not a test => blocked. Safe.\nconst isTestLead = String(fubPerson.firstName ?? '').trim().split(/\\s+/)[0] === 'Test';\n\nconst row = {\n  booking_uid:      booking.uid,\n  property_key:     prop.propertyKey,\n  property_address: prop.propertyAddress,\n  person_id:        personId,\n  person_name:      booking.attendeeName,\n  person_email:     booking.attendeeEmail,\n  person_phone:     phone,\n  showing_time:     booking.startTime,\n  status:           'scheduled',\n  populife_lock_id: prop.populifeLockId,\n  access_code:      '',\n  access_code_id:   '',\n  code_sent_at:     '',\n  created_at:       now.toISOString(),\n  updated_at:       now.toISOString(),\n  is_test:          isTestLead ? 'true' : 'false', // ACCESS_GATE_MARKER\n};\n\nreturn [{ json: { ...row, isImmediate, isTestLead, personId, populifeLockId: prop.populifeLockId } }];\n"
       },
       "id": "d40e2fb4-077f-4a02-80f0-9fc71bc1f79b"
     },
@@ -274,7 +274,8 @@
             "access_code_id": "={{ $('Build Showing Row').first().json.access_code_id }}",
             "code_sent_at": "={{ $('Build Showing Row').first().json.code_sent_at }}",
             "created_at": "={{ $('Build Showing Row').first().json.created_at }}",
-            "updated_at": "={{ $('Build Showing Row').first().json.updated_at }}"
+            "updated_at": "={{ $('Build Showing Row').first().json.updated_at }}",
+            "is_test": "={{ $json.is_test }}"
           },
           "schema": [
             {
@@ -411,6 +412,16 @@
               "display": true,
               "type": "string",
               "canBeUsedToMatch": true
+            },
+            {
+              "id": "is_test",
+              "displayName": "is_test",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
             }
           ]
         },
@@ -420,7 +431,7 @@
       "id": "8f8903c3-10a9-4f35-9d62-f111024f22f4",
       "retryOnFail": true,
       "maxTries": 5,
-      "waitBetweenTries": 8000
+      "waitBetweenTries": 15000
     },
     {
       "name": "FUB - Note Showing Scheduled",
@@ -487,6 +498,15 @@
                 "type": "boolean",
                 "operation": "true"
               }
+            },
+            {
+              "id": "access-gate-test-lead",
+              "leftValue": "={{ $('Build Showing Row').first().json.isTestLead }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
             }
           ],
           "combinator": "and"
@@ -525,7 +545,7 @@
       "id": "8b208e44-bb6a-4c10-b4db-9dff54d8c4f2",
       "retryOnFail": true,
       "maxTries": 5,
-      "waitBetweenTries": 8000
+      "waitBetweenTries": 15000
     },
     {
       "name": "Calc Code Window (Created)",
@@ -799,7 +819,7 @@
       "id": "07c9c247-52b7-409d-b44d-8e1b79f944e5",
       "retryOnFail": true,
       "maxTries": 5,
-      "waitBetweenTries": 8000
+      "waitBetweenTries": 15000
     },
     {
       "name": "FUB - Note Code Sent (Created)",
@@ -888,7 +908,7 @@
       "id": "f0a8c8a7-f870-4331-82e7-243b5218b02e",
       "retryOnFail": true,
       "maxTries": 5,
-      "waitBetweenTries": 8000
+      "waitBetweenTries": 15000
     },
     {
       "name": "Find Showing (Reschedule)",
@@ -963,7 +983,7 @@
       "id": "d6b199e1-463d-491d-8c67-081f8ca0f778",
       "retryOnFail": true,
       "maxTries": 5,
-      "waitBetweenTries": 8000
+      "waitBetweenTries": 15000
     },
     {
       "name": "Populife - Get Token (Delete)",
@@ -1220,7 +1240,7 @@
       "id": "89873928-47c4-45b3-9729-17e4347c977c",
       "retryOnFail": true,
       "maxTries": 5,
-      "waitBetweenTries": 8000
+      "waitBetweenTries": 15000
     },
     {
       "name": "FUB - Note Rescheduled",
@@ -1310,7 +1330,7 @@
       "id": "36059a15-fb7e-4c38-a46d-f3243a90b8ea",
       "retryOnFail": true,
       "maxTries": 5,
-      "waitBetweenTries": 8000
+      "waitBetweenTries": 15000
     },
     {
       "name": "Find Showing (Cancel)",
@@ -1385,7 +1405,7 @@
       "id": "92edb9a5-ee0d-4b4a-b566-b31f9036a572",
       "retryOnFail": true,
       "maxTries": 5,
-      "waitBetweenTries": 8000
+      "waitBetweenTries": 15000
     },
     {
       "name": "Populife - Get Token (Cancel)",
@@ -1642,7 +1662,7 @@
       "id": "34be06d7-7a89-4d6d-ab6c-bd4c791c2520",
       "retryOnFail": true,
       "maxTries": 5,
-      "waitBetweenTries": 8000
+      "waitBetweenTries": 15000
     },
     {
       "name": "FUB - Note Cancelled",
@@ -1804,7 +1824,7 @@
       },
       "retryOnFail": true,
       "maxTries": 5,
-      "waitBetweenTries": 8000
+      "waitBetweenTries": 15000
     },
     {
       "id": "6daeebe2-7483-4eb1-9271-e75389e27fff",
@@ -1863,7 +1883,7 @@
       },
       "retryOnFail": true,
       "maxTries": 5,
-      "waitBetweenTries": 8000
+      "waitBetweenTries": 15000
     },
     {
       "id": "2b2be69b-50e6-44a7-afc5-d17ddb5ac51f",
@@ -1875,7 +1895,7 @@
         620
       ],
       "parameters": {
-        "jsCode": "\nfunction fmtTime(iso) {\n  try {\n    return new Intl.DateTimeFormat('en-US', {\n      timeZone: 'America/New_York',\n      weekday: 'short', month: 'short', day: 'numeric',\n      hour: 'numeric', minute: '2-digit', hour12: true\n    }).format(new Date(iso));\n  } catch(e) { return iso; }\n}\n\n// Look up the row we were cancelling to get person_phone + showing_time\nconst rowsRead = $('Read Showings (Cancel)').all().map(i => i.json);\nconst found    = $('Find Showing (Cancel)').first().json;\nconst uid      = found.matchedBookingUid || found.uid;\nconst row      = rowsRead.find(r => r.booking_uid === uid) || {};\n\nconst phone   = row.person_phone;\nconst address = row.property_address || row.property_key || 'the property';\nconst showing = row.showing_time;\n\nconst settings = {};\n$('Read Settings (Cancel SMS)').all().forEach(i => {\n  if (i.json.key && i.json.value) settings[i.json.key] = i.json.value;\n});\nconst template   = settings.cancellation_sms_template ?? 'Your showing for {{address}} on {{date}} has been cancelled.';\nconst fromNumber = settings.from_number ?? '';\n\nif (!phone) return [{ json: { skipped: true, reason: 'no_phone' } }];\n\nconst message = template\n  .replace('{{first_name}}',   row.person_name?.split(' ')[0] ?? '')\n  .replace('{{name}}',         row.person_name ?? '')\n  .replace('{{address}}',      address)\n  .replace('{{date}}',         fmtTime(showing));\n\nreturn [{ json: {\n  skipped: false,\n  phone,\n  from_number: fromNumber,\n  message,\n  sent_at: new Date().toISOString(),\n  booking_uid: uid,\n} }];\n"
+        "jsCode": "\nfunction fmtTime(iso) {\n  try {\n    return new Intl.DateTimeFormat('en-US', {\n      timeZone: 'America/New_York',\n      weekday: 'short', month: 'short', day: 'numeric',\n      hour: 'numeric', minute: '2-digit', hour12: true\n    }).format(new Date(iso));\n  } catch(e) { return iso; }\n}\n\n// Look up the row we were cancelling to get person_phone + showing_time\nconst rowsRead = $('Read Showings (Cancel)').all().map(i => i.json);\nconst found    = $('Find Showing (Cancel)').first().json;\nconst uid      = found.matchedBookingUid || found.uid;\nconst row      = rowsRead.find(r => r.booking_uid === uid) || {};\n\nconst phone   = row.person_phone;\nconst address = row.property_address || row.property_key || 'the property';\nconst showing = row.showing_time;\n\nconst settings = {};\n$('Read Settings (Cancel SMS)').all().forEach(i => {\n  if (i.json.key && i.json.value) settings[i.json.key] = i.json.value;\n});\nconst template   = settings.cancellation_sms_template ?? 'Your showing for {{address}} on {{date}} has been cancelled.';\nconst fromNumber = settings.from_number ?? '';\n\nif (!phone) return [{ json: { skipped: true, reason: 'no_phone' } }];\n\n// ── ACCESS_GATE_MARKER: test gate ──────────────────────────────────────────────\n// Same stamped column the dispatch cron reads.\nif (String(row.is_test ?? '').trim().toLowerCase() !== 'true') {\n  return [{ json: { skipped: true, reason: 'not_test_mode' } }];\n}\n\nconst message = template\n  .replace('{{first_name}}',   row.person_name?.split(' ')[0] ?? '')\n  .replace('{{name}}',         row.person_name ?? '')\n  .replace('{{address}}',      address)\n  .replace('{{date}}',         fmtTime(showing));\n\nreturn [{ json: {\n  skipped: false,\n  phone,\n  from_number: fromNumber,\n  message,\n  sent_at: new Date().toISOString(),\n  booking_uid: uid,\n} }];\n"
       }
     },
     {
@@ -2437,9 +2457,9 @@
   "meta": null,
   "nodeGroups": [],
   "pinData": {},
-  "versionId": "4eceba8e-487b-44ed-8ca7-611f2b12b79a",
-  "activeVersionId": "4eceba8e-487b-44ed-8ca7-611f2b12b79a",
-  "versionCounter": 28,
+  "versionId": "179f007a-8066-47e3-ae4c-16bc3e6e3fc2",
+  "activeVersionId": "179f007a-8066-47e3-ae4c-16bc3e6e3fc2",
+  "versionCounter": 30,
   "triggerCount": 1,
   "sourceWorkflowId": null,
   "shared": [
@@ -2464,9 +2484,9 @@
   ],
   "tags": [],
   "activeVersion": {
-    "updatedAt": "2026-07-31T01:50:10.568Z",
-    "createdAt": "2026-07-31T01:50:10.568Z",
-    "versionId": "4eceba8e-487b-44ed-8ca7-611f2b12b79a",
+    "updatedAt": "2026-08-07T09:51:53.912Z",
+    "createdAt": "2026-08-07T09:51:53.912Z",
+    "versionId": "179f007a-8066-47e3-ae4c-16bc3e6e3fc2",
     "workflowId": "gR6FWXMcc08ps8LT",
     "nodes": [
       {
@@ -2623,7 +2643,7 @@
         "id": "d6dec995-8014-46bb-9398-7301174bc88b",
         "retryOnFail": true,
         "maxTries": 5,
-        "waitBetweenTries": 8000
+        "waitBetweenTries": 15000
       },
       {
         "name": "Find Property",
@@ -2689,7 +2709,7 @@
           180
         ],
         "parameters": {
-          "jsCode": "\nconst booking  = $('Parse Created Booking').first().json;\nconst prop     = $('Find Property').first().json;\nconst fubResp  = $('FUB - Search by Phone').first().json;\n\nconst fubPerson = (fubResp.people ?? [])[0] ?? {};\nconst personId  = booking.personId || (fubPerson.id ? String(fubPerson.id) : '');\n\nconst fubPhone = (fubPerson.phones ?? [])[0]?.value ?? '';\nconst rawPhone = booking.attendeePhone || fubPhone;\nconst digits   = rawPhone.replace(/\\D/g, '');\nconst phone    = digits.length === 10 ? `+1${digits}` : digits ? `+${digits}` : '';\n\nconst now = new Date();\nconst showingTime = new Date(booking.startTime);\nconst isImmediate = (showingTime - now) < 60 * 60 * 1000;\n\nconst row = {\n  booking_uid:      booking.uid,\n  property_key:     prop.propertyKey,\n  property_address: prop.propertyAddress,\n  person_id:        personId,\n  person_name:      booking.attendeeName,\n  person_email:     booking.attendeeEmail,\n  person_phone:     phone,\n  showing_time:     booking.startTime,\n  status:           'scheduled',\n  populife_lock_id: prop.populifeLockId,\n  access_code:      '',\n  access_code_id:   '',\n  code_sent_at:     '',\n  created_at:       now.toISOString(),\n  updated_at:       now.toISOString(),\n};\n\nreturn [{ json: { ...row, isImmediate, personId, populifeLockId: prop.populifeLockId } }];\n"
+          "jsCode": "\nconst booking  = $('Parse Created Booking').first().json;\nconst prop     = $('Find Property').first().json;\nconst fubResp  = $('FUB - Search by Phone').first().json;\n\nconst fubPerson = (fubResp.people ?? [])[0] ?? {};\nconst personId  = booking.personId || (fubPerson.id ? String(fubPerson.id) : '');\n\nconst fubPhone = (fubPerson.phones ?? [])[0]?.value ?? '';\nconst rawPhone = booking.attendeePhone || fubPhone;\nconst digits   = rawPhone.replace(/\\D/g, '');\nconst phone    = digits.length === 10 ? `+1${digits}` : digits ? `+${digits}` : '';\n\nconst now = new Date();\nconst showingTime = new Date(booking.startTime);\nconst isImmediate = (showingTime - now) < 60 * 60 * 1000;\n\n// ── ACCESS_GATE_MARKER: test gate ──────────────────────────────────────────────\n// The FUB person's firstName, NOT booking.attendeeName. The cal.com booking\n// carries whatever name the tester typed; the FUB lead is the thing the rest\n// of the system gates on. Stamped into the row so the 5-minute cron (which\n// has no FUB person) can read the verdict without an extra API call.\n// Empty fubPerson (phone not found in FUB) => not a test => blocked. Safe.\nconst isTestLead = String(fubPerson.firstName ?? '').trim().split(/\\s+/)[0] === 'Test';\n\nconst row = {\n  booking_uid:      booking.uid,\n  property_key:     prop.propertyKey,\n  property_address: prop.propertyAddress,\n  person_id:        personId,\n  person_name:      booking.attendeeName,\n  person_email:     booking.attendeeEmail,\n  person_phone:     phone,\n  showing_time:     booking.startTime,\n  status:           'scheduled',\n  populife_lock_id: prop.populifeLockId,\n  access_code:      '',\n  access_code_id:   '',\n  code_sent_at:     '',\n  created_at:       now.toISOString(),\n  updated_at:       now.toISOString(),\n  is_test:          isTestLead ? 'true' : 'false', // ACCESS_GATE_MARKER\n};\n\nreturn [{ json: { ...row, isImmediate, isTestLead, personId, populifeLockId: prop.populifeLockId } }];\n"
         },
         "id": "d40e2fb4-077f-4a02-80f0-9fc71bc1f79b"
       },
@@ -2736,7 +2756,8 @@
               "access_code_id": "={{ $('Build Showing Row').first().json.access_code_id }}",
               "code_sent_at": "={{ $('Build Showing Row').first().json.code_sent_at }}",
               "created_at": "={{ $('Build Showing Row').first().json.created_at }}",
-              "updated_at": "={{ $('Build Showing Row').first().json.updated_at }}"
+              "updated_at": "={{ $('Build Showing Row').first().json.updated_at }}",
+              "is_test": "={{ $json.is_test }}"
             },
             "schema": [
               {
@@ -2873,6 +2894,16 @@
                 "display": true,
                 "type": "string",
                 "canBeUsedToMatch": true
+              },
+              {
+                "id": "is_test",
+                "displayName": "is_test",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true,
+                "removed": false
               }
             ]
           },
@@ -2882,7 +2913,7 @@
         "id": "8f8903c3-10a9-4f35-9d62-f111024f22f4",
         "retryOnFail": true,
         "maxTries": 5,
-        "waitBetweenTries": 8000
+        "waitBetweenTries": 15000
       },
       {
         "name": "FUB - Note Showing Scheduled",
@@ -2949,6 +2980,15 @@
                   "type": "boolean",
                   "operation": "true"
                 }
+              },
+              {
+                "id": "access-gate-test-lead",
+                "leftValue": "={{ $('Build Showing Row').first().json.isTestLead }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true"
+                }
               }
             ],
             "combinator": "and"
@@ -2987,7 +3027,7 @@
         "id": "8b208e44-bb6a-4c10-b4db-9dff54d8c4f2",
         "retryOnFail": true,
         "maxTries": 5,
-        "waitBetweenTries": 8000
+        "waitBetweenTries": 15000
       },
       {
         "name": "Calc Code Window (Created)",
@@ -3261,7 +3301,7 @@
         "id": "07c9c247-52b7-409d-b44d-8e1b79f944e5",
         "retryOnFail": true,
         "maxTries": 5,
-        "waitBetweenTries": 8000
+        "waitBetweenTries": 15000
       },
       {
         "name": "FUB - Note Code Sent (Created)",
@@ -3350,7 +3390,7 @@
         "id": "f0a8c8a7-f870-4331-82e7-243b5218b02e",
         "retryOnFail": true,
         "maxTries": 5,
-        "waitBetweenTries": 8000
+        "waitBetweenTries": 15000
       },
       {
         "name": "Find Showing (Reschedule)",
@@ -3425,7 +3465,7 @@
         "id": "d6b199e1-463d-491d-8c67-081f8ca0f778",
         "retryOnFail": true,
         "maxTries": 5,
-        "waitBetweenTries": 8000
+        "waitBetweenTries": 15000
       },
       {
         "name": "Populife - Get Token (Delete)",
@@ -3682,7 +3722,7 @@
         "id": "89873928-47c4-45b3-9729-17e4347c977c",
         "retryOnFail": true,
         "maxTries": 5,
-        "waitBetweenTries": 8000
+        "waitBetweenTries": 15000
       },
       {
         "name": "FUB - Note Rescheduled",
@@ -3772,7 +3812,7 @@
         "id": "36059a15-fb7e-4c38-a46d-f3243a90b8ea",
         "retryOnFail": true,
         "maxTries": 5,
-        "waitBetweenTries": 8000
+        "waitBetweenTries": 15000
       },
       {
         "name": "Find Showing (Cancel)",
@@ -3847,7 +3887,7 @@
         "id": "92edb9a5-ee0d-4b4a-b566-b31f9036a572",
         "retryOnFail": true,
         "maxTries": 5,
-        "waitBetweenTries": 8000
+        "waitBetweenTries": 15000
       },
       {
         "name": "Populife - Get Token (Cancel)",
@@ -4104,7 +4144,7 @@
         "id": "34be06d7-7a89-4d6d-ab6c-bd4c791c2520",
         "retryOnFail": true,
         "maxTries": 5,
-        "waitBetweenTries": 8000
+        "waitBetweenTries": 15000
       },
       {
         "name": "FUB - Note Cancelled",
@@ -4266,7 +4306,7 @@
         },
         "retryOnFail": true,
         "maxTries": 5,
-        "waitBetweenTries": 8000
+        "waitBetweenTries": 15000
       },
       {
         "id": "6daeebe2-7483-4eb1-9271-e75389e27fff",
@@ -4325,7 +4365,7 @@
         },
         "retryOnFail": true,
         "maxTries": 5,
-        "waitBetweenTries": 8000
+        "waitBetweenTries": 15000
       },
       {
         "id": "2b2be69b-50e6-44a7-afc5-d17ddb5ac51f",
@@ -4337,7 +4377,7 @@
           620
         ],
         "parameters": {
-          "jsCode": "\nfunction fmtTime(iso) {\n  try {\n    return new Intl.DateTimeFormat('en-US', {\n      timeZone: 'America/New_York',\n      weekday: 'short', month: 'short', day: 'numeric',\n      hour: 'numeric', minute: '2-digit', hour12: true\n    }).format(new Date(iso));\n  } catch(e) { return iso; }\n}\n\n// Look up the row we were cancelling to get person_phone + showing_time\nconst rowsRead = $('Read Showings (Cancel)').all().map(i => i.json);\nconst found    = $('Find Showing (Cancel)').first().json;\nconst uid      = found.matchedBookingUid || found.uid;\nconst row      = rowsRead.find(r => r.booking_uid === uid) || {};\n\nconst phone   = row.person_phone;\nconst address = row.property_address || row.property_key || 'the property';\nconst showing = row.showing_time;\n\nconst settings = {};\n$('Read Settings (Cancel SMS)').all().forEach(i => {\n  if (i.json.key && i.json.value) settings[i.json.key] = i.json.value;\n});\nconst template   = settings.cancellation_sms_template ?? 'Your showing for {{address}} on {{date}} has been cancelled.';\nconst fromNumber = settings.from_number ?? '';\n\nif (!phone) return [{ json: { skipped: true, reason: 'no_phone' } }];\n\nconst message = template\n  .replace('{{first_name}}',   row.person_name?.split(' ')[0] ?? '')\n  .replace('{{name}}',         row.person_name ?? '')\n  .replace('{{address}}',      address)\n  .replace('{{date}}',         fmtTime(showing));\n\nreturn [{ json: {\n  skipped: false,\n  phone,\n  from_number: fromNumber,\n  message,\n  sent_at: new Date().toISOString(),\n  booking_uid: uid,\n} }];\n"
+          "jsCode": "\nfunction fmtTime(iso) {\n  try {\n    return new Intl.DateTimeFormat('en-US', {\n      timeZone: 'America/New_York',\n      weekday: 'short', month: 'short', day: 'numeric',\n      hour: 'numeric', minute: '2-digit', hour12: true\n    }).format(new Date(iso));\n  } catch(e) { return iso; }\n}\n\n// Look up the row we were cancelling to get person_phone + showing_time\nconst rowsRead = $('Read Showings (Cancel)').all().map(i => i.json);\nconst found    = $('Find Showing (Cancel)').first().json;\nconst uid      = found.matchedBookingUid || found.uid;\nconst row      = rowsRead.find(r => r.booking_uid === uid) || {};\n\nconst phone   = row.person_phone;\nconst address = row.property_address || row.property_key || 'the property';\nconst showing = row.showing_time;\n\nconst settings = {};\n$('Read Settings (Cancel SMS)').all().forEach(i => {\n  if (i.json.key && i.json.value) settings[i.json.key] = i.json.value;\n});\nconst template   = settings.cancellation_sms_template ?? 'Your showing for {{address}} on {{date}} has been cancelled.';\nconst fromNumber = settings.from_number ?? '';\n\nif (!phone) return [{ json: { skipped: true, reason: 'no_phone' } }];\n\n// ── ACCESS_GATE_MARKER: test gate ──────────────────────────────────────────────\n// Same stamped column the dispatch cron reads.\nif (String(row.is_test ?? '').trim().toLowerCase() !== 'true') {\n  return [{ json: { skipped: true, reason: 'not_test_mode' } }];\n}\n\nconst message = template\n  .replace('{{first_name}}',   row.person_name?.split(' ')[0] ?? '')\n  .replace('{{name}}',         row.person_name ?? '')\n  .replace('{{address}}',      address)\n  .replace('{{date}}',         fmtTime(showing));\n\nreturn [{ json: {\n  skipped: false,\n  phone,\n  from_number: fromNumber,\n  message,\n  sent_at: new Date().toISOString(),\n  booking_uid: uid,\n} }];\n"
         }
       },
       {
@@ -4899,18 +4939,18 @@
     "autosaved": false,
     "workflowPublishHistory": [
       {
-        "createdAt": "2026-07-31T01:50:10.607Z",
-        "id": 246,
+        "createdAt": "2026-08-07T09:51:53.947Z",
+        "id": 304,
         "workflowId": "gR6FWXMcc08ps8LT",
-        "versionId": "4eceba8e-487b-44ed-8ca7-611f2b12b79a",
+        "versionId": "179f007a-8066-47e3-ae4c-16bc3e6e3fc2",
         "event": "deactivated",
         "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
       },
       {
-        "createdAt": "2026-07-31T01:50:10.622Z",
-        "id": 247,
+        "createdAt": "2026-08-07T09:51:53.962Z",
+        "id": 305,
         "workflowId": "gR6FWXMcc08ps8LT",
-        "versionId": "4eceba8e-487b-44ed-8ca7-611f2b12b79a",
+        "versionId": "179f007a-8066-47e3-ae4c-16bc3e6e3fc2",
         "event": "activated",
         "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
       }

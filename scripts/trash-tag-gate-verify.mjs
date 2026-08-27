@@ -111,12 +111,19 @@ const POLICY_CASES = [
   { label: "Permanent Trash tag, stage drifted away",   tags: ["Permanent Trash"],                  trashDate: daysAgo(1),     stage: ALLOWED_STAGE,        want: "trash_permanent" },
   { label: "Denied Credit, 10d (within 365)",           tags: ["Denied Credit"],                    trashDate: daysAgo(10),    stage: "Cold Rental Lead 1 month Hold", want: "trash_denied_credit" },
   { label: "Denied Credit, 400d (past 365)",            tags: ["Denied Credit"],                    trashDate: daysAgo(400),   stage: ALLOWED_STAGE,        want: null },
-  { label: "Denied Credit + Temp Trash, 200d",          tags: ["Temporary Trash", "Denied Credit"], trashDate: daysAgo(200),   stage: ALLOWED_STAGE,        want: "trash_denied_credit" },
-  { label: "Denied Credit + Temp Trash, 400d",          tags: ["Temporary Trash", "Denied Credit"], trashDate: daysAgo(400),   stage: ALLOWED_STAGE,        want: null },
-  { label: "Temporary Trash, 10d (within 90)",          tags: ["Temporary Trash"],                  trashDate: daysAgo(10),    stage: "Trash",              want: "trash_temporary" },
-  { label: "Temporary Trash, 100d (past 90)",           tags: ["Temporary Trash"],                  trashDate: daysAgo(100),   stage: ALLOWED_STAGE,        want: null },
-  { label: "Temporary Trash, malformed date",           tags: ["Temporary Trash"],                  trashDate: "not-a-date",   stage: ALLOWED_STAGE,        want: null },
-  { label: "Temporary Trash, missing date",             tags: ["Temporary Trash"],                  trashDate: "",             stage: ALLOWED_STAGE,        want: null },
+  { label: "Denied Credit + Temp Trash, 200d",          tags: ["No Response Trash", "Denied Credit"], trashDate: daysAgo(200),   stage: ALLOWED_STAGE,        want: "trash_denied_credit" },
+  { label: "Denied Credit + Temp Trash, 400d",          tags: ["No Response Trash", "Denied Credit"], trashDate: daysAgo(400),   stage: ALLOWED_STAGE,        want: null },
+  { label: "No Response Trash, 10d (within 90)",          tags: ["No Response Trash"],                  trashDate: daysAgo(10),    stage: "Trash",              want: "trash_temporary" },
+  { label: "No Response Trash, 100d (past 90)",           tags: ["No Response Trash"],                  trashDate: daysAgo(100),   stage: ALLOWED_STAGE,        want: null },
+  // DATELESS_TRASH_TAG_MARKER (2026-08-26). These two used to expect `null`
+  // (not blocked), because a dateless tag computed Infinity days and read as
+  // EXPIRED. That was the live bug: the client applies the TAG first and moves
+  // the stage second, so every newly-tagged lead sat in that window and got an
+  // ID-verification SMS. Seven people hit it in one burst on 2026-08-26 and
+  // were saved only by a Sheets quota error. A tag seen with no date now means
+  // "trashed NOW", so it blocks under its own window.
+  { label: "No Response Trash, malformed date",           tags: ["No Response Trash"],                  trashDate: "not-a-date",   stage: ALLOWED_STAGE,        want: "trash_temporary" },
+  { label: "No Response Trash, missing date",             tags: ["No Response Trash"],                  trashDate: "",             stage: ALLOWED_STAGE,        want: "trash_temporary" },
   { label: "Untagged fallback, stage Trash",            tags: [],                                   trashDate: "",             stage: "Trash",              want: "trash_untagged_fallback" },
   { label: "Untagged fallback, Permanent Trash stage",  tags: [],                                   trashDate: "",             stage: "Permanent Trash",    want: "trash_untagged_fallback" },
   { label: "Untagged fallback, Cold Rental Hold stage", tags: [],                                   trashDate: "",             stage: "Cold Rental Lead 1 month Hold", want: "trash_untagged_fallback" },
@@ -126,13 +133,17 @@ const POLICY_CASES = [
   // through the else-if chain and were NOT blocked, because a matching tag
   // suppressed the stage fallback even when it produced no block of its own
   // — leaving a tagged person LESS protected than an untagged one.
-  { label: "Dateless Temp Trash + still in Trash stage", tags: ["Temporary Trash"],                 trashDate: "",             stage: "Trash",              want: "trash_untagged_fallback" },
-  { label: "Dateless Denied Credit + in Cold Hold",      tags: ["Denied Credit"],                   trashDate: "",             stage: "Cold Rental Lead 1 month Hold", want: "trash_untagged_fallback" },
-  { label: "EXPIRED Temp Trash + still in Trash stage",  tags: ["Temporary Trash"],                 trashDate: daysAgo(200),   stage: "Trash",              want: "trash_untagged_fallback" },
+  // These two are still BLOCKED — that is what the fall-through fix guaranteed
+  // and it still holds. Only the ATTRIBUTION moved: since DATELESS_TRASH_TAG_MARKER
+  // the tag itself produces the block, so the reason names the real tag instead
+  // of falling back to the stage. proceed:false is unchanged in both.
+  { label: "Dateless Temp Trash + still in Trash stage", tags: ["No Response Trash"],                 trashDate: "",             stage: "Trash",              want: "trash_temporary" },
+  { label: "Dateless Denied Credit + in Cold Hold",      tags: ["Denied Credit"],                   trashDate: "",             stage: "Cold Rental Lead 1 month Hold", want: "trash_denied_credit" },
+  { label: "EXPIRED Temp Trash + still in Trash stage",  tags: ["No Response Trash"],                 trashDate: daysAgo(200),   stage: "Trash",              want: "trash_untagged_fallback" },
   { label: "EXPIRED Denied Credit + still in Cold Hold", tags: ["Denied Credit"],                   trashDate: daysAgo(500),   stage: "Cold Rental Lead 1 month Hold", want: "trash_untagged_fallback" },
   // ...but an expired tag on someone who has genuinely LEFT the trash stages
   // must still be served. That is the reapply path and is deliberately intact.
-  { label: "EXPIRED Temp Trash, moved to tenant stage",  tags: ["Temporary Trash"],                 trashDate: daysAgo(200),   stage: ALLOWED_STAGE,        want: null },
+  { label: "EXPIRED Temp Trash, moved to tenant stage",  tags: ["No Response Trash"],                 trashDate: daysAgo(200),   stage: ALLOWED_STAGE,        want: null },
   { label: "EXPIRED Denied Credit, moved to tenant stg", tags: ["Denied Credit"],                   trashDate: daysAgo(500),   stage: ALLOWED_STAGE,        want: null },
 ];
 
@@ -187,11 +198,11 @@ console.log("\n  Real (non-Test) lead carrying a Permanent Trash tag");
   expect("needs_reapply_reroute absent", j.needs_reapply_reroute, undefined);
   expect("reapply_reroute_stage absent", j.reapply_reroute_stage, undefined);
 }
-console.log("\n  Real (non-Test) lead, drifted stage + in-window Temporary Trash tag");
+console.log("\n  Real (non-Test) lead, drifted stage + in-window No Response Trash tag");
 {
   const j = runGate(
     person(
-      { tags: ["Temporary Trash"], trashDate: daysAgo(10), stage: "Lead" },
+      { tags: ["No Response Trash"], trashDate: daysAgo(10), stage: "Lead" },
       { firstName: "Carol", name: "Carol Pritchett" }
     )
   );
@@ -200,17 +211,17 @@ console.log("\n  Real (non-Test) lead, drifted stage + in-window Temporary Trash
 }
 
 section("1c. Identity Gate · reapply-reroute fields (test leads only)");
-console.log("\n  Temp Trash tag 10d, stage drifted to 'Lead' -> reroute back to Trash");
+console.log("\n  No Response Trash tag 10d, stage drifted to 'Lead' -> reroute back to Cold Rental Lead 1 month Hold");
 {
-  const j = runGate(person({ tags: ["Temporary Trash"], trashDate: daysAgo(10), stage: "Lead" }));
+  const j = runGate(person({ tags: ["No Response Trash"], trashDate: daysAgo(10), stage: "Lead" }));
   expect("reason", j.reason, "trash_temporary");
   expect("needs_reapply_reroute", j.needs_reapply_reroute, true);
-  expect("reapply_reroute_stage", j.reapply_reroute_stage, "Trash");
+  expect("reapply_reroute_stage", j.reapply_reroute_stage, "Cold Rental Lead 1 month Hold");
   expect("preserved trash date is the ORIGINAL", j.reapply_preserved_trash_date.slice(0, 10), daysAgo(10).slice(0, 10));
 }
 console.log("\n  Already sitting in the correct stage -> no redundant PATCH");
 {
-  const j = runGate(person({ tags: ["Temporary Trash"], trashDate: daysAgo(10), stage: "Trash" }));
+  const j = runGate(person({ tags: ["No Response Trash"], trashDate: daysAgo(10), stage: "Cold Rental Lead 1 month Hold" }));
   expect("needs_reapply_reroute", j.needs_reapply_reroute, false);
 }
 console.log("\n  Untagged fallback -> no reroute target, must not PATCH");
@@ -229,14 +240,14 @@ console.log("\n  Denied Credit 10d, stage drifted -> reroute to Cold Rental Lead
 // ───────────────────────────────────────────────────────────────────────────
 section("1d. Identity Gate · expired-tag cleanup (TAG_EXPIRY_CLEANUP_MARKER)");
 const cleanupCases = [
-  ["Expired Temp Trash (200d) -> remove it",        { tags: ["Moncks Corner", "Temporary Trash"], trashDate: daysAgo(200), stage: ALLOWED_STAGE }, true,  ["Temporary Trash"], ["Moncks Corner"]],
+  ["Expired Temp Trash (200d) -> remove it",        { tags: ["Moncks Corner", "No Response Trash"], trashDate: daysAgo(200), stage: ALLOWED_STAGE }, true,  ["No Response Trash"], ["Moncks Corner"]],
   ["Expired Denied Credit (500d) -> remove it",     { tags: ["Denied Credit"], trashDate: daysAgo(500), stage: ALLOWED_STAGE },                    true,  ["Denied Credit"],   []],
-  ["In-window Temp Trash (10d) -> keep",            { tags: ["Temporary Trash"], trashDate: daysAgo(10), stage: ALLOWED_STAGE },                   false, [],                  null],
+  ["In-window Temp Trash (10d) -> keep",            { tags: ["No Response Trash"], trashDate: daysAgo(10), stage: ALLOWED_STAGE },                   false, [],                  null],
   ["In-window Denied Credit (100d) -> keep",        { tags: ["Denied Credit"], trashDate: daysAgo(100), stage: ALLOWED_STAGE },                    false, [],                  null],
   ["Permanent Trash NEVER removed (999d)",          { tags: ["Permanent Trash"], trashDate: daysAgo(999), stage: ALLOWED_STAGE },                  false, [],                  null],
-  ["Dateless tag left alone (no evidence)",         { tags: ["Temporary Trash"], trashDate: "", stage: ALLOWED_STAGE },                            false, [],                  null],
+  ["Dateless tag left alone (no evidence)",         { tags: ["No Response Trash"], trashDate: "", stage: ALLOWED_STAGE },                            false, [],                  null],
   ["Malformed date left alone",                     { tags: ["Denied Credit"], trashDate: "not-a-date", stage: ALLOWED_STAGE },                    false, [],                  null],
-  ["Both expired -> both removed, others kept",     { tags: ["Ladson", "Temporary Trash", "Denied Credit"], trashDate: daysAgo(900), stage: ALLOWED_STAGE }, true, ["Temporary Trash", "Denied Credit"], ["Ladson"]],
+  ["Both expired -> both removed, others kept",     { tags: ["Ladson", "No Response Trash", "Denied Credit"], trashDate: daysAgo(900), stage: ALLOWED_STAGE }, true, ["No Response Trash", "Denied Credit"], ["Ladson"]],
   ["Expired tag while still trash-blocked by stage",{ tags: ["Denied Credit"], trashDate: daysAgo(500), stage: "Cold Rental Lead 1 month Hold" },  true,  ["Denied Credit"],   []],
 ];
 for (const [label, p, wantCleanup, wantExpired, wantKept] of cleanupCases) {
@@ -248,7 +259,7 @@ for (const [label, p, wantCleanup, wantExpired, wantKept] of cleanupCases) {
 }
 console.log("\n  Real (non-Test) lead with an expired tag -> gated, no cleanup fields");
 {
-  const j = runGate(person({ tags: ["Temporary Trash"], trashDate: daysAgo(200), stage: ALLOWED_STAGE },
+  const j = runGate(person({ tags: ["No Response Trash"], trashDate: daysAgo(200), stage: ALLOWED_STAGE },
     { firstName: "Carol", name: "Carol Pritchett" }));
   expect("reason", j.reason, "not_test_mode");
   expect("needs_tag_cleanup absent", j.needs_tag_cleanup, undefined);
@@ -310,9 +321,43 @@ for (const c of POLICY_CASES) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-section("4. Legacy New Lead (Ih8zMmNeUwKvITGf) · Match & Resolve Cal Link");
+// Both legacy workflows are ARCHIVED in n8n as of the 2026-08-19 trash-tag
+// rename (n8n-fix-trash-tag-rename.mjs) -- PUT returns 400 "Cannot update an
+// archived workflow", so their code-nodes still read the OLD tag string
+// ("Temporary Trash"), not "No Response Trash". They cannot execute while
+// archived, so this is inert, not a live gap. LEGACY_POLICY_CASES swaps the
+// tag name back so these two sections test the code that's ACTUALLY
+// deployed there rather than false-failing forever. If either workflow is
+// ever un-archived, re-run n8n-fix-trash-tag-rename.mjs --apply first.
+// The legacy pair is ARCHIVED and n8n rejects PUTs to an archived workflow, so
+// neither the tag rename (2026-08-19) nor DATELESS_TRASH_TAG_MARKER (2026-08-26)
+// could be applied there. Both are inert — an archived workflow cannot execute —
+// so this verifier deliberately tests them against what is ACTUALLY DEPLOYED
+// rather than against current policy. Two adjustments, for two separate fixes:
+//   · the tag name is still the old "Temporary Trash";
+//   · a dateless tag still reads as EXPIRED (Infinity), so the block falls
+//     through to the stage fallback, or produces no block at all.
+// If either workflow is ever un-archived, run n8n-fix-trash-tag-rename.mjs AND
+// n8n-fix-dateless-trash-tag.mjs against it, then delete these adjustments.
+const LEGACY_DATELESS = new Set([
+  "No Response Trash, malformed date",
+  "No Response Trash, missing date",
+  "Dateless Temp Trash + still in Trash stage",
+  "Dateless Denied Credit + in Cold Hold",
+]);
+const LEGACY_POLICY_CASES = POLICY_CASES.map((c) => ({
+  ...c,
+  tags: c.tags.map((t) => (t === "No Response Trash" ? "Temporary Trash" : t)),
+  want: LEGACY_DATELESS.has(c.label)
+    ? (["Trash", "Permanent Trash", "Cold Rental Lead 1 month Hold"].includes(c.stage)
+        ? "trash_untagged_fallback"
+        : null)
+    : c.want,
+}));
+
+section("4. Legacy New Lead (Ih8zMmNeUwKvITGf) · Match & Resolve Cal Link [ARCHIVED, old tag name]");
 const legacy1 = codeOf(await getWorkflow("Ih8zMmNeUwKvITGf"), "Match & Resolve Cal Link");
-for (const c of POLICY_CASES) {
+for (const c of LEGACY_POLICY_CASES) {
   console.log(`\n  ${c.label}`);
   const j = run(legacy1, {
     "FUB - Get Person": [{ people: [person(c)] }],
@@ -327,9 +372,9 @@ for (const c of POLICY_CASES) {
   else expect("no trash_* reason", String(j.reason ?? "").startsWith("trash_"), false);
 }
 
-section("5. Legacy Address (HwXpYAqwbG1zwGls) · Match & Resolve Cal Link");
+section("5. Legacy Address (HwXpYAqwbG1zwGls) · Match & Resolve Cal Link [ARCHIVED, old tag name]");
 const legacy2 = codeOf(await getWorkflow("HwXpYAqwbG1zwGls"), "Match & Resolve Cal Link");
-for (const c of POLICY_CASES) {
+for (const c of LEGACY_POLICY_CASES) {
   console.log(`\n  ${c.label}`);
   const j = run(legacy2, {
     "FUB - Get Person": [{ people: [person(c)] }],

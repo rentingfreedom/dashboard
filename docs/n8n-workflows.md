@@ -35,6 +35,7 @@ workflows should read this file first.
 | `5LwTZS4dw5qmInL2` | Cal Reminder - Immediate Sends | Own Cal.com webhook `calcom-reminder-events` (independent of the Booking Handler). **ACTIVE, test-gated.** `n8n/cal-reminder-immediate.json`. |
 | `3hGnl6mPnu2AMbZ1` | Cal Reminder - Cron Poll | Every 5 min. Due reminders + follow-ups. **ACTIVE, test-gated.** `n8n/cal-reminder-cron.json`. |
 | `41HFRjgWiPEFJwTU` | Cal Reminder - Reconfirm Webhook | Webhook `reconfirm` (GET `?token=`). Marks `confirmed`, returns static HTML. **ACTIVE.** `n8n/cal-reconfirm-webhook.json`. |
+| `R3rhuCYEGoBFArBa` | Identity Verification Reminders | Hourly tick, sends only in the 10am ET hour. One reminder SMS/day for 4 days to leads who haven't verified. **CREATED INACTIVE 2026-08-25.** |
 
 ## Pre-launch checklist
 
@@ -76,12 +77,60 @@ not a deploy — it is this list of state changes. `node scripts/launch-audit.mj
    Note `rental_application_alert_phone` drives **two** alerts as of 2026-08-08
    (Zillow application + new inquiry-lead); reassigning moves both.
 
-4. **Add Properties rows for the unmatched live Zillow addresses** —
-   `296 Blue Haw Dr`, `5464 Crown Ave`. Those leads get nothing until the rows
-   exist. (`2019 Codorus Ln #1` is deliberately excluded.) `522 Temple Rd` is
-   **blocked, not missing** — it shares an identical DoorLoop address with another
-   unit at `7636 Winchester st LLC`; adding a row won't help until the client
-   fixes that. See "DoorLoop reconciliation".
+4. ~~**Add Properties rows for the unmatched live Zillow addresses**~~ —
+   **RESOLVED 2026-08-20, do not add these.** Verified against the live
+   Properties tab: `296 Blue Haw Drive` and `5464 Crown Avenue` **already
+   exist**, both `active`, DoorLoop-linked, `provisioning_status=provisioned`,
+   with cal links. They were added during the DoorLoop reconciliation work; this
+   checklist item was never updated.
+
+   > **Adding `296 Blue Haw Dr` / `5464 Crown Ave` would be actively harmful.**
+   > It creates a *duplicate* property row for the same house and — because
+   > `createProperty()` fires `property.created` — provisions a **second**
+   > cal.com event type and Google resource for it.
+
+   The abbreviated Zillow forms match the spelled-out sheet rows already:
+   `Resolve Inquiry`'s `normalizeAddress()` strips every street suffix
+   (`street|st|road|rd|avenue|ave|drive|dr|court|ct|…`) before comparing, so
+   `296 Blue Haw Dr` → `296bluehaw` → matches `296 Blue Haw Drive` at score 120,
+   well above the 80 threshold. Verified by executing the live `jsCode` against
+   the real pairs 2026-08-20.
+
+   **`522 Temple Rd` — decided 2026-08-23, do not add it either.** It has no
+   Properties row, and it does not need one: DoorLoop unit
+   `6a6b7e39ae48cc7746b64eb9` ("522 Temple Road") carries an **ACTIVE lease
+   2026-08-01 → 2028-08-31** (Janessa Cote & Joshua Jones). It is occupied, not
+   marketed, and cannot be inquired on. Adding it would provision a cal.com event
+   type and a Google resource for a house nobody can show for two years.
+   Revisit when that lease ends, or sooner if it is listed early.
+
+   It has also **never been inquired on** — all 65 `Inquiries` rows were dumped
+   by address 2026-08-23 and none mentions Temple (see the correction under
+   "Addresses in Zillow but not in Properties"). Nothing is being lost today.
+
+   It remains **blocked, not missing** for DoorLoop *occupancy* purposes — it
+   shares an identical DoorLoop address with another unit at
+   `7636 Winchester st LLC`. Note the inquiry flow does not need DoorLoop: a row
+   with a `cal_link` is enough to serve an inquiry, and `doorloop_property_id`
+   may stay empty (status just stays manual).
+   (`2019 Codorus Ln #1` is deliberately excluded.)
+
+   > **If it is ever added, do NOT use the DoorLoop panel's Add button or
+   > `POST /api/properties/doorloop/add`.** The recon report correctly files this
+   > unit as `[blocked]` under *known*, so the panel never offers it — but calling
+   > the route directly with the unit id would create the **wrong property**. The
+   > route derives the street from `unit.address.street1`, which for this unit is
+   > the inherited parent address **`"7636 Winchester st"`**; `unit.name`
+   > ("522 Temple Road") is never consulted. That yields a row `7636 Winchester st`
+   > / key `7636-winchester-st` — a near-duplicate of the existing
+   > `7636-winchester-st-b` row — linked to the Temple unit, plus a spurious
+   > cal.com event type. **Use the ordinary Add Property dialog and type the
+   > street by hand.**
+   >
+   > Linking it by unit **id** afterwards would be correct — occupancy joins on
+   > the unit id, and the duplicated address only blocks *matching*, not the join.
+   > There is no path that does so today: `/doorloop/link` recomputes matching
+   > server-side and skips it, and `doorloop-match.mjs` is address-based.
 
 ### Decisions still open
 
@@ -195,6 +244,109 @@ then marks each sent.
   now. Side benefit: an old lead making a genuinely new inquiry is served.
 - Backup of the pre-change version: `n8n/fub-phone-added-BEFORE-sweep.json`.
 
+### Cal-link EMAIL alongside the SMS — `CAL_LINK_EMAIL_MARKER` (2026-08-25)
+
+Client request: a verified lead should get the cal.com link by **email as well
+as SMS**. Verified first that this did not already happen — the sweep and the
+inquiry flow hold Twilio nodes only; the estate's sole Gmail nodes belong to the
+two Cal booking workflows.
+
+Added **here** rather than anywhere else because the sweep is the single place
+that emits "here is your link for property X", one item per unsent `Inquiries`
+row, and it is what the Result Handler replays on successful verification. One
+email per property, matching the SMS — a two-property lead gets two of each.
+
+**Wiring is parallel, never in front.** `Build Cal Link Email` →
+`Send Cal Link Email` hangs off `Confirm Still Unsent` alongside `Send SMS`,
+the same shape `FUB - Add Tag` already uses. Nothing is inserted ahead of an
+existing node, so no existing node's `$json` changes — **gotcha 19, which has
+already bitten this project twice.**
+
+```
+Confirm Still Unsent ─┬─> Send SMS -> Log to Text Log / FUB Note / Mark Sent
+                      ├─> FUB - Add Tag                            (pre-existing)
+                      └─> Build Cal Link Email -> Send Cal Link Email   (NEW)
+```
+
+- `Send Cal Link Email` carries `onError: continueRegularOutput`. Email is an
+  *addition*; a Gmail failure must never abort the execution and cost the lead
+  their text or stop `Mark Inquiry Sent`.
+- `Build Cal Link Email` returns `[]` when there's no address, so Gmail is never
+  called with an empty `to`.
+- `Check & Build Message` now also emits `email` from the FUB person.
+
+> **Address policy: any address, relays included — client decision 2026-08-25.**
+> **76 of 76** `Inquiries` rows carry an email but **54 are Zillow's anonymised
+> `@convo.zillow.com` relays**, so excluding them would drop most leads. Only 22
+> rows have a phone at all. **Delivery through Zillow's relay is UNVERIFIED** —
+> it may bounce, strip the link, or land inside Zillow's message thread rather
+> than an inbox. Worth confirming against one real relay address.
+
+```bash
+node scripts/n8n-add-cal-link-email.mjs [--apply] [--revert --apply]
+node scripts/cal-link-email-verify.mjs                     # 29 assertions
+```
+Backup `n8n/BEFORE-cal-link-email/`. The verifier asserts the connections graph
+as well as behaviour: the entire safety story is "parallel branch", and a future
+rewire that routed `Send SMS` through the email branch would pass every
+behavioural test while breaking the SMS path.
+
+### Every-inquiry staff alert — `INQUIRY_ALERT_MARKER` (2026-08-25)
+
+One SMS to staff for **every recorded inquiry**, saying who inquired, about
+what, and **what the system decided to do**. Added for launch-week visibility.
+
+**Why not just add a recipient to the new-inquiry-lead alert.** That alert only
+fires for a lead entering `Tenant Inquiry Lead (Do Not Contact)` **with no phone
+number**. A lead who arrives *with* a phone goes straight to the Identity Gate
+and produces no staff notification at all — and those are exactly the ones where
+the funnel actually runs. Watching launch week through that alert would surface
+the minority of leads and hide the interesting ones.
+
+> **`alert_cc_phones` is a NEW key, and comma-separating an existing one would
+> have broken things.** `rental_application_alert_phone` is shared: Zillow's
+> `Parse & Resolve Application` reads it and feeds **three** Twilio nodes
+> (`Send Existing-Match Alert`, `Send Phone-Needed SMS`, `Send Parse-Failed
+> Alert`), each passing it straight to Twilio as a single `To`. **Twilio rejects
+> a comma-separated `To` (error 21211)**, so putting a list in that cell would
+> silently break the entire Zillow alert path — including the dedup branch that
+> still has never run through n8n's engine. `alert_cc_phones` is read **only** by
+> `Build Inquiry Alert`.
+
+**Emptying `alert_cc_phones` turns the notification off.** It is its own master
+switch — no separate enabled flag.
+
+**Fan-out, not a second node.** `Send Inquiry Alert` reads `to` from its
+*immediate* input, so `Build Inquiry Alert` returning one item per recipient
+makes the single Twilio node send one SMS each. n8n runs a node once per item.
+This is the general answer to "can we text two numbers?" anywhere in this
+system — fan out in the build node; never comma-separate a Twilio `To`.
+
+**Wiring.** Hangs off **all three** `Row Recorded? (N)` true branches, parallel
+to the existing `Send Now?` / `Gate Needed?` / `Alert Needed?`. Two consequences,
+both intended: it fires only once the row is **confirmed recorded**, and it does
+**not** fire on the exhausted-append path, which already has its own
+`Send Append-Failure Alert`. Nothing is inserted in front of an existing node
+(gotcha 19).
+
+> **All three `Row Recorded?` IFs must be wired, or the alert is intermittent.**
+> The append-retry chain is unrolled into three explicit attempts; a row verified
+> on attempt 2 flows through `Row Recorded? (2)`. Wiring only the first would
+> make the alert fire for most inquiries and silently skip the ones that hit the
+> retry path — an intermittency that is very hard to diagnose from the outside.
+> `inquiry-alert-verify.mjs` asserts all three.
+
+`Send Inquiry Alert` carries `onError: continueRegularOutput`: observability must
+never break delivery to the actual lead.
+
+```bash
+node scripts/n8n-add-inquiry-alert.mjs [--apply] [--revert --apply]
+node scripts/inquiry-alert-verify.mjs                      # 36 assertions
+```
+Backup `n8n/BEFORE-inquiry-alert/`. The script also creates `alert_cc_phones`
+(default `+18038047847`, Andrew's own number) if missing, and never overwrites an
+existing value.
+
 ### Inquiries tab
 
 `person_id`, `property_key`, `cal_link`, `inquired_at`, `link_sent`,
@@ -287,10 +439,30 @@ Verified live 2026-08-05: two events <1s apart now produce two surviving rows
 
 ### Addresses in Zillow but not in Properties
 
-Live inquiries arrive for addresses with no Properties row: `522 Temple Rd`,
-`296 Blue Haw Dr`, `5464 Crown Ave` (plus the deliberately-excluded
-`2019 Codorus Ln #1`). These get `match_status = unmatched`, no link, and one alert
-SMS per address. See pre-launch item 4.
+**This section was wrong about all three addresses, and is now closed.** It used to
+read: *"Live inquiries arrive for addresses with no Properties row: `522 Temple Rd`,
+`296 Blue Haw Dr`, `5464 Crown Ave`."* Corrected in two passes:
+
+- `296 Blue Haw Dr` / `5464 Crown Ave` — **2026-08-20.** Both already exist as
+  spelled-out rows, provisioned and DoorLoop-linked, and `normalizeAddress()`
+  strips street suffixes so the abbreviated Zillow forms match them.
+- `522 Temple Rd` — **2026-08-23.** It has **never produced an inquiry at all.**
+  All 65 `Inquiries` rows were dumped by address: zero mention Temple. The only
+  `unmatched` rows are 5 test artifacts from person 2545 (`9999 Nonexistent Test
+  Ln`, `108 Laurels Curv`, `44 Wrongperson Guard Retest Way`) and 7 for
+  `129 Towering Pine Dr`, which has since been added and now matches (3 later rows
+  for it are `matched`). See pre-launch item 4 for why it stays unadded.
+
+**There are currently no real unmatched addresses.** The unmatched-address alert
+has not fired on a genuine live gap. If one appears, it gets
+`match_status = unmatched`, no link, and one alert SMS per address.
+
+> **The lesson, not just the correction.** This list was assembled from
+> plausible-looking addresses rather than from the `Inquiries` tab, and all three
+> entries survived months of review because nobody re-derived them from data.
+> Both the `296`/`5464` claim and the Temple claim were disproved by reading the
+> tab. Re-derive before acting on any "these need rows" list — adding a row is not
+> free, it provisions a cal.com event type and a Google resource.
 
 ### Legacy overlap — needs a decision
 
@@ -375,6 +547,205 @@ Backup `n8n/BEFORE-identity-empty-email-fix/`. Verified live 2026-08-08, executi
 
 > **Worth doing:** audit how many existing real leads in FUB have no email, since
 > each has been silently stuck at this step since the Gate went live.
+
+### Identity verification reminders — `R3rhuCYEGoBFArBa` (2026-08-25)
+
+One reminder SMS per day, for **4 days**, to any lead who was sent a
+verification SMS and hasn't verified. Client request 2026-08-25. Reminders on
+days **1–4** after the original (day 0), so 5 messages total at most, stopping
+the moment they verify.
+
+**Created INACTIVE. Activating is a separate, deliberate step** — run
+`identity-reminders-preview.mjs` first and read the due list.
+
+> **Each reminder mints a FRESH Stripe session, and it has to.** The hosted URL
+> is **single-use and expires in 48h** (`create-session/route.ts`), and is
+> deliberately never stored — so days 3 and 4 have no link to resend. Confirmed
+> with Stripe: billing is triggered by a **completed `VerificationReport`**
+> (*"You will not be billed until the VerificationReport is complete"*), so
+> sessions that are created and never submitted are **free**. Extra sessions
+> cost nothing; only real submissions do.
+
+> **A new row per reminder — never rotate `session_id` in place.** The Result
+> Handler matches the Stripe webhook by `session_id` alone
+> (`rows.find(r => String(r.session_id) === String(body.session_id))`). If a
+> reminder overwrote the id and the lead completed an **older** session still
+> inside its 48h window, the webhook would match no row, `found:false`, and
+> **that lead would verify successfully and receive nothing.** Appending keeps
+> every minted session findable.
+
+**Why it doesn't reuse the Identity Gate.** The obvious design — POST the
+lead's original webhook body back to `phone-added-send-text` — cannot work:
+
+```js
+const alreadySent = identityRows.some(r => String(r.lead_id) === String(person.id));
+if (!isTestMode && alreadySent) return fail("already_sent");
+```
+
+`alreadySent` is true if **any** row exists for the lead, whatever its status,
+so every reminder is refused. Making it work would mean bypassing both
+`already_sent` **and** `verification_already_pending` — i.e. deliberately
+disabling the guard that stops a real lead getting repeat verification SMS
+forever, in the node every lead funnels through. **Do not do this.** The
+reminder workflow carries its own guards and edits nothing existing.
+
+A useful consequence: because `already_sent` fires *before* the pending check,
+a lead mid-reminder-window can't also be served by an inquiry-driven session.
+**`identity_verification_pending_ttl_hours` therefore did NOT need changing.**
+
+**Its guards are deliberately blunter than `Check Guards`.** A reminder is an
+optional nudge, so its guard may only ever *under*-send: it blocks on **any** of
+the three trash tags with no expiry-window arithmetic, on any trash-family
+stage, on a stage outside `allowed_stages`, and on a missing phone. No 90/365-day
+windows, no reapply-reroute — those decide whether to *re-engage* someone, which
+isn't this workflow's job.
+
+| Situation | Behaviour |
+|---|---|
+| Verified (any row) | excluded — they're done |
+| `requires_input` / failed | excluded. **Client decision: pending only** — the failed-SMS already hands off to a human |
+| < 1 day since first SMS | too soon |
+| > 4 days | window over |
+| Already reminded today | one per day; a 20h floor backs up the day check |
+| 4 reminders sent | capped |
+
+**Send hour and timezone.** The trigger ticks **hourly**; `Find Due Reminders`
+sends only when the current hour in `America/New_York` equals
+`identity_reminder_hour_et` (10). **No workflow in this instance sets a
+timezone** — every `settings` is just `{"executionOrder":"v1"}` — so a cron
+expression would inherit the instance default and drift with DST. Computing the
+ET hour in code is correct regardless of instance config.
+
+**Loop safety.** Every path rejoins `Loop Back`, so `SplitInBatches` always
+advances: a guard rejection, a failed Stripe call, and a failed Twilio send all
+continue the batch. One bad lead can never starve the rest — the lesson from the
+Cron Poll's crash loop.
+
+New Settings keys: `identity_reminder_enabled` (master switch),
+`identity_reminder_max` (4), `identity_reminder_hour_et` (10),
+`identity_reminder_sms_template`. New `Identity_Verifications` columns:
+`reminder_number` (0/blank = the original), `reminder_anchor_at`.
+
+```bash
+node scripts/identity-reminders-setup.mjs [--apply]        # columns + settings
+node scripts/n8n-create-identity-reminders.mjs [--apply]   # creates it INACTIVE
+node scripts/identity-reminders-preview.mjs [--force-hour] # who would be texted? read-only
+node scripts/identity-reminders-verify.mjs                 # 41 synthetic assertions
+```
+
+`identity-reminders-verify.mjs` exists because **live data has nothing due** —
+a preview reporting "0 to send" proves the filter can say no, and nothing about
+the day arithmetic, the cap, or the guards. Those are exactly what causes harm
+if wrong. Same reasoning as `doorloop-recon-cases.mjs`.
+
+Preview 2026-08-25, before activation: **0 due**, 7 leads skipped — 4
+`status_verified`, 2 `window_over` (18–19d), 1 `requires_input` (2652). Clean
+start; activating texts nobody. Confirmed by simulating the live
+`Find Due Reminders` code at 10am ET on each of the **next 14 days**: 0 due
+every day. All 7 exclusions are permanent (`verified` never reverses,
+`window_over` only grows, `requires_input` is out of scope), and none can
+acquire a new row because `already_sent` refuses a new session for any lead that
+already has one.
+
+**ACTIVATED 2026-08-25.** First tick verified live, execution **26664**,
+`success`: `Read Settings=52 | Read Identity Verifications=11 |
+Find Due Reminders=1 | Any Due?=0`, `Send Reminder SMS` did not run — correct
+outside the send hour. Note `Read Identity Verifications=11`, not 52×11, which
+is `executeOnce` working (gotcha 4).
+
+> **Activation failed the first time — worth knowing for anything built against
+> this instance.** `POST /workflows/<id>/activate` returned **400 "Missing
+> required credential: googleSheetsOAuth2Api"** on all three Sheets nodes.
+> Attaching the service-account credential is **not sufficient**: the node also
+> needs `authentication: "serviceAccount"` in its *parameters*, or n8n defaults
+> to OAuth2 and refuses to publish. This estate mixes both — `Read Settings` in
+> the Identity Gate uses OAuth2 while `Read Identity Verifications` right beside
+> it uses the service account — so copying the wrong neighbour is easy. The
+> builder script now sets it on all three.
+
+### `Log to Identity Verifications` fails AFTER the SMS — the record can be lost
+
+**Observed live 2026-08-27, execution 27851 (Gabriel James, person 2737).** The
+node order is: create session → build SMS → **send SMS** → log the row. A Sheets
+quota failure at that last node therefore means **"message delivered, no
+record"**. It has `retryOnFail` 5 × 15s but **no `onError`**, so it retried for
+75s, failed, and errored the execution *after* the lead had already been texted.
+
+The consequence is silent and total: `Find Verification Row` in the Result
+Handler matches the Stripe webhook by `session_id` **alone**, so a lead with no
+row **verifies successfully and nothing happens**. They are also invisible to the
+reminder workflow, and `already_sent` will not block a duplicate later.
+
+Repaired by appending the missing row from the execution's own
+`Build Verification SMS` output (`scripts/_oneoff-2026-08-27-repairs.mjs`,
+journal in `n8n/BEFORE-2026-08-27-repairs/`).
+
+> **Worth fixing properly if it recurs.** Options: give the node
+> `onError: continueRegularOutput` plus an alert so the loss is at least
+> visible; or write the row *before* the send, so a failure costs a message
+> rather than a record. Not changed unilaterally — reordering the send is a
+> behaviour change to the most critical path in the system.
+
+### Verification is not coupled to deliverability — leads can be asked to verify for nothing
+
+The Identity Gate fires on "gated stage + phone", but the cal link is only
+delivered if a **deliverable inquiry row** exists (`match_status = matched`, a
+non-empty `cal_link`, and `link_sent = false`). Nothing couples those two
+conditions, so a lead can be told *"verify your ID so we can schedule your
+showing"*, complete it, and receive silence.
+
+Three leads reached that state in the first days after launch, by three
+different routes:
+
+| Lead | Why undeliverable |
+|---|---|
+| Erick Silva (2738) | inquiry address had no Properties row → `unmatched`, no `cal_link` |
+| Detric Yoder (2721) | row is `skipped_test_gate` from before go-live; the sweep only reads `false` |
+| Gabriel James (2737) | verification row lost to Sheets quota (above) |
+
+Adding the missing property does **not** repair the first case on its own: the
+sweep reads `cal_link` from the **Inquiries** row, not from Properties, so an
+existing unmatched row stays unmatched and must be backfilled
+(`property_key`, `cal_link`, `match_status`) with `link_sent` left `FALSE`.
+
+### Stripe went LIVE 2026-08-26 — every earlier link was test-mode
+
+The Vercel project carried `sk_test_…` through launch, so **every verification
+link sent before 2026-08-26 ~13:00Z was a Stripe TEST-mode link**, and the
+webhook secret was the test endpoint's. Confirmed, not inferred: retrieving
+those sessions with the test key returns HTTP 200 and `livemode: false`.
+
+Six real leads were holding one — 2711, 2715, 2719, 2727, 2728, 2729. **None had
+submitted anything** (`requires_input` is Stripe's *initial* state, not a
+failure), so nobody wasted a real attempt.
+
+Two things made those links dead: test mode, and a webhook that would now be
+signed with a secret the live endpoint does not share — so completing one would
+verify the lead and fire **nothing**, with no cal link ever following.
+
+**They could not be re-issued through the gate**: `already_sent` refuses a new
+session for any lead that already has a row. **The reminder workflow is the
+re-issue mechanism** — it mints a fresh (now live) session, bypasses
+`already_sent` by design, and records the new `session_id` so the Result Handler
+can match. Client decision 2026-08-26: let the normal 10am ET run pick them up
+rather than forcing it early.
+
+> **How to tell test from live, since the object ids look identical.** A
+> VerificationSession id is `vs_…` in both modes. Three reliable checks:
+> the hosted `url` contains `/start/live_…` vs `/start/test_…`; the retrieved
+> object has a `livemode` boolean; and retrieving a live session with a test key
+> returns **404**. The 404 is the strongest signal — it is the one that proves a
+> key swap actually took effect in Vercel rather than just being saved there.
+
+> **Still unverified: the webhook signing secret.** A secret key can be proved
+> by minting a session (free — Stripe bills only a completed
+> `VerificationReport`). A *signing* secret only reveals itself on a real
+> inbound event. If it is wrong, a lead verifies successfully and nothing
+> happens — the same silent-failure class as the Sheets-quota bail. Confirm in
+> Stripe Dashboard → **live mode** → Developers → Webhooks that the endpoint
+> exists (live and test endpoints are separate objects) and that its signing
+> secret matches `STRIPE_WEBHOOK_SECRET` in Vercel, then watch the first real
+> verification end to end.
 
 ### Dedicated test contact for Stripe outcomes
 
@@ -863,26 +1234,57 @@ gate's untagged-fallback branch covers the same case, so there shouldn't be a re
 
 ## FUB Trash-tag gate
 
-Three tags, applied by the **client's own FUB automation** on stage entry — this
-system only ever **reads** them, never writes them:
+Three tags. This system only ever **reads** them, never writes them (except the
+reapply-reroute PATCH, which restores stage/date, never touches tags).
 
-| Tag | Applied on entering stage | Reapply window |
-|---|---|---|
-| `Permanent Trash` | `Permanent Trash` | never (always blocks) |
-| `Temporary Trash` | `Trash` | 90 days |
-| `Denied Credit` | `Cold Rental Lead 1 month Hold` | 365 days |
+> **Process changed 2026-08-19 — read this before touching the tag names.**
+> The tags used to be applied by FUB's own per-stage automation (a distinct stage
+> per tag). The client simplified this for Nicole: she now applies one of the three
+> tags **manually**, then moves everyone to a **single** stage,
+> `Cold Rental Lead 1 month Hold`. `Permanent Trash` and `Trash` are no longer used
+> as destination stages going forward — confirmed live, `GET /v1/stages` no longer
+> lists `Permanent Trash` at all, and `people?stage=Permanent%20Trash` returns 0.
+>
+> This broke the gate silently: the code checked for a tag named `Temporary Trash`,
+> which was **never the real tag** — live data showed 0 people ever held it. The
+> actual tag is **`No Response Trash`**. Because the string never matched, anyone
+> tagged `No Response Trash` fell through to the untagged stage-fallback branch
+> instead of the intended 90-day window (no expiry, no reapply-reroute). Confirmed
+> on two real leads created under the new process, persons **2669** and **2666**
+> (tagged 8/15 and 8/17): both were computing `trash_untagged_fallback` before the
+> fix, `trash_temporary` (correct) after. Fixed by
+> `scripts/n8n-fix-trash-tag-rename.mjs`, which also repoints the `Permanent Trash`
+> and `No Response Trash` reroute targets at `Cold Rental Lead 1 month Hold` (the
+> old per-tag targets, `Permanent Trash` and `Trash`, are dead stages under the new
+> process — a reapply-reroute PATCH to either would misfile or error).
+>
+> **The two archived legacy workflows (`Ih8zMmNeUwKvITGf`, `HwXpYAqwbG1zwGls`)
+> could not be patched** — n8n now rejects PUTs to them (`400 Cannot update an
+> archived workflow`). They still read the old `Temporary Trash` string, which is
+> inert since they can't execute while archived. `trash-tag-gate-verify.mjs` tests
+> them against the old tag name on purpose (see `LEGACY_POLICY_CASES` in that
+> script) so it verifies what's actually deployed there. If either is ever
+> un-archived, re-run `n8n-fix-trash-tag-rename.mjs --apply` first.
+
+| Tag | Applied by | Reapply/reroute target | Window |
+|---|---|---|---|
+| `Permanent Trash` | Nicole, manually | `Cold Rental Lead 1 month Hold` | never (always blocks) |
+| `No Response Trash` | Nicole, manually | `Cold Rental Lead 1 month Hold` | 90 days |
+| `Denied Credit` | Nicole, manually | `Cold Rental Lead 1 month Hold` | 365 days |
 
 Decision table, evaluated in this order:
 
 - **`Permanent Trash` tag** → hard block, unconditionally. No date check.
-- **`Denied Credit` present** → governs entirely, even if `Temporary Trash` is also
-  present (that tag's window is ignored) — block if `daysSinceTrash <= 365`.
-- **`Temporary Trash` only** → block if `daysSinceTrash <= 90`.
+- **`Denied Credit` present** → governs entirely, even if `No Response Trash` is
+  also present (that tag's window is ignored) — block if `daysSinceTrash <= 365`.
+- **`No Response Trash` only** → block if `daysSinceTrash <= 90`.
 - **None of the three** → plain stage fallback: block if the *current* stage is
   `Trash` / `Permanent Trash` / `Cold Rental Lead 1 month Hold`. Suppress-only —
   there's no `trash_date`, so no reapply-reroute. Added 2026-08-07 to cover anyone
-  already sitting in a trash-family stage before this shipped (the client's tagging
-  automation only fires on new stage-entry events).
+  already sitting in a trash-family stage before this shipped. `Trash` and
+  `Permanent Trash` are kept in this list defensively even though Nicole's new
+  process no longer sends anyone there — harmless if unused, and it still covers
+  any pre-existing record that was never migrated off the old stages.
 
 `daysSinceTrash` comes from `customTrashDate`. A missing/unparseable value computes
 as `Infinity`, which never satisfies `<=`, so **a tag with no date is treated as
@@ -1086,11 +1488,11 @@ end-to-end after the isolation patch.
 
 ### Known open issues
 
-- **A trash tag with no `customTrashDate` does not block** (documented policy —
-  `Infinity` never satisfies `<=`). The watcher's empty-cache exception and the
-  backfill exist to stop this biting, but it remains true for anyone who acquires a
-  tag without the watcher stamping a date. Treating a dateless tag as blocking is a
-  policy change and wants sign-off; flagged rather than changed.
+- ~~**A trash tag with no `customTrashDate` does not block**~~ — **FIXED
+  2026-08-26, `DATELESS_TRASH_TAG_MARKER`. It was firing in production.** See
+  "Dateless trash tag" below. This was flagged here for weeks as needing
+  sign-off; the client's new manual process turned it from theoretical into a
+  live customer-facing bug.
 - **Trash-invisible people, pre-existing, deliberately not fixed.** `FUB - Get Person`
   in four workflows builds its URL from FUB's webhook-supplied `uri`, which for every
   real event observed is the **list-style `?id=`** endpoint — which excludes
@@ -1118,6 +1520,112 @@ active development days. At the client's real traffic — a couple of leads a da
 firing an isolated chain — this sits in the 1.2% band, and the two 5-minute crons
 contribute ~2 requests/min against a 60/min quota. **Decided: do not move to Supabase
 for this.** Retry standardisation was applied instead.
+
+### Dateless trash tag — `DATELESS_TRASH_TAG_MARKER` (2026-08-26, WAS LIVE)
+
+**A trash tag with no `customTrashDate` did not block, and the client's process
+creates exactly that state on every lead they retire.**
+
+```js
+const daysSinceTrash = Number.isFinite(trashDateMs) ? ... : Infinity;
+if (tagsLower.includes("no response trash")) { if (daysSinceTrash <= 90) block; }
+```
+
+`Infinity` never satisfies `<=`, so the tag read as **expired**. Nicole applies
+the tag **first** and moves the stage **second**; `customTrashDate` is only
+stamped on entering a trash-family stage, i.e. at step 2. Between the two, the
+person sits in a *gated tenant stage* carrying a trash tag with no date — and
+the gate returned `proceed: true, reason: "ok"` and sent them an ID-verification
+SMS.
+
+> **Confirmed live, not theorised.** Seven people (2663, 2668, 2675, 2687, 2689,
+> 2690, 2692) hit that window in one burst on 2026-08-26. **All seven were saved
+> only by a Google Sheets quota error** — every one of those executions bailed
+> `sheets_unavailable` before reaching the send. Verified by replaying the
+> deployed `Check Guards` against a person shaped exactly like them:
+> `proceed: true` before the fix, `trash_temporary` after.
+
+**The fix, in two places, because either alone is insufficient:**
+
+| Where | Change |
+|---|---|
+| `Check Guards` (+ sweep, inquiry flow, Zillow) | a tag seen with no date means **trashed NOW** — synthesise `Date.now()`, so both windows block with no special-casing |
+| `Trash Transition Watcher` | also stamp `customTrashDate` on seeing a trash **tag**, not only a stage transition |
+
+> **The watcher fix alone would not have worked.** `Check Guards` reads the
+> person from the **original** `FUB - Get Person` fetch, so a date the watcher
+> stamps in the same execution is invisible to it — the *first* event, the
+> dangerous one, would still have sent. The Check Guards change covers that
+> execution; the watcher covers every one after.
+
+**Deliberately unchanged:** tag-expiry cleanup still requires a **real** date
+(`hasRealTrashDate` reads the raw field) — absence of *our* field is not evidence
+about the *client's* tag, and cleaning on a synthesised date would delete their
+tags. `Permanent Trash` never consulted the date. The watcher never overwrites an
+existing date. Genuine expiry still works: a `No Response Trash` dated 100 days
+ago still does **not** block.
+
+> **Fixed in four nodes, not one.** The policy is duplicated across six nodes.
+> Patching only `Check Guards` left the sweep and inquiry flow still willing to
+> **send** to a dateless-tagged lead — `trash-tag-gate-verify.mjs` caught that
+> immediately (33 failures), which is precisely what it is for. The two LEGACY
+> workflows keep the old logic: archived, PUT-rejected, and unable to execute.
+> `LEGACY_POLICY_CASES` now encodes both their deviations (old tag name **and**
+> dateless-permissive) so the verifier tests what is actually deployed there.
+
+```bash
+node scripts/n8n-fix-dateless-trash-tag.mjs [--apply] [--revert --apply]
+```
+Backup `n8n/BEFORE-dateless-trash-tag/`. Verifier now **335 assertions**.
+
+### Early stage filter — `EARLY_STAGE_FILTER_MARKER` (2026-08-26)
+
+**23 of 35 Identity Gate executions were silently doing nothing.** Every one
+failed at `Read Identity Verifications` with *"The service is receiving too many
+requests from you"*, after retrying 5 × 15s, and returned the read-isolation
+bail `sheets_unavailable`. **All of them report execution status `success`**, so
+no error monitoring can see it. One real lead — 2721 Detric Yoder, gated stage,
+phone on file — was dropped and never recovered.
+
+This is exactly what the launch runbook predicted when gate #17 came off:
+*"every `peopleUpdated` event across the whole FUB account now reaches
+`Read Settings` / `Read Identity Verifications` again… **watch for executions
+dying at `Read Identity Verifications`**."*
+
+The filter restores gate #17's *shape* — a short-circuit ahead of the Sheets
+reads — keyed on **stage** instead of `firstName`:
+
+```
+Watcher Needs Write? ─┬─> In Gated Scope? -> In Scope? ─┬─(true)──> Read Settings
+FUB - Update Person (Watcher) ─┘                        └─(false)─> Build Out-Of-Scope Result
+```
+
+Passes: the two gated tenant stages, **any trash-family stage**, or **any trash
+tag**. The last two clauses are load-bearing — they keep the reapply-reroute
+reachable, including for a tagged person who has drifted into some other stage,
+which is the exact case the reroute exists for. Everything else (owners, current
+tenants, PM pipeline stages, and Trash-invisible people whose `?id=` lookup
+returns nothing) short-circuits; all of those already produced no action, they
+merely paid for two Sheets reads first.
+
+The stage list is **hardcoded**, same constraint and convention as
+`WATCH_SCOPE_STAGES` — it runs before `Read Settings` so it cannot read
+`allowed_stages`. **If the production `allowed_stages` changes, update it too.**
+
+> **Sizing, honestly: this removes ~43% of the load, measured over 80 real
+> executions — not most of it.** The remainder is genuine tenant-stage traffic,
+> much of it the client bulk-tagging leads, where each `tags` write fires its own
+> `peopleUpdated`. Substantial, not a cure. If drops continue the next lever is
+> `docs/supabase-migration-plan.md`.
+
+The watcher and the new-inquiry-lead alert both sit **upstream** and are
+untouched — including the tag-stamping added by `DATELESS_TRASH_TAG_MARKER`,
+which must keep running for tagged people whatever their stage.
+
+```bash
+node scripts/n8n-add-early-stage-filter.mjs [--apply] [--revert --apply]
+```
+Backup `n8n/BEFORE-early-stage-filter/`.
 
 ## Trash backfill + fall-through fix (2026-08-07)
 
@@ -1190,8 +1698,10 @@ so every one came back on reactivation: ~330 executions in 3 minutes, peaking at
 Removes a trash tag whose window has provably expired, at the moment the Identity Gate
 evaluates that person, plus a FUB note so history isn't silently deleted.
 
-- Only `Temporary Trash` (90d) and `Denied Credit` (365d) are removable.
-  `Permanent Trash` is **never** touched.
+- Only `No Response Trash` (90d) and `Denied Credit` (365d) are removable.
+  `Permanent Trash` is **never** touched. (Renamed from `Temporary Trash` 2026-08-19
+  — see "FUB Trash-tag gate" above; the tag key in `TAG_WINDOW_DAYS` changed, the
+  90/365-day windows did not.)
 - Requires a **real parsed** `customTrashDate`. A dateless tag reads as expired, but
   absence of *our* field is not evidence about the *client's* tag — removing on that
   basis would delete their data because we failed to stamp.

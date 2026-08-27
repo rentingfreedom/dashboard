@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-07-31T01:50:10.405Z",
+  "updatedAt": "2026-08-07T09:51:53.700Z",
   "createdAt": "2026-07-09T13:04:35.705Z",
   "id": "ztUEx7Htu620SLbj",
   "name": "RentingFreedom - Access Code Dispatch",
@@ -57,7 +57,7 @@
       "id": "fe27fbd5-bc31-4edb-85cc-8a02d59aeb32",
       "retryOnFail": true,
       "maxTries": 5,
-      "waitBetweenTries": 8000
+      "waitBetweenTries": 15000
     },
     {
       "name": "Find Ready Showings",
@@ -68,7 +68,7 @@
         300
       ],
       "parameters": {
-        "jsCode": "\nconst now = Date.now();\nconst oneHour = 60 * 60 * 1000;\nconst rows = $input.all().map(i => i.json);\n\nconst ready = rows.filter(r => {\n  if (r.status !== 'scheduled') return false;\n  if (!r.showing_time) return false;\n  const showingMs = new Date(r.showing_time).getTime();\n  // Window: showing is between now and 1h from now (send when T-60min to T)\n  return showingMs >= now && showingMs <= now + oneHour;\n});\n\nif (ready.length === 0) return [{ json: { hasReady: false } }];\nreturn ready.map(r => ({ json: { ...r, hasReady: true } }));\n"
+        "jsCode": "\nconst now = Date.now();\nconst oneHour = 60 * 60 * 1000;\nconst rows = $input.all().map(i => i.json);\n\n// ── ACCESS_GATE_MARKER: test gate ──────────────────────────────────────────────\n// Reads the is_test verdict stamped onto the row by the Booking Handler's\n// 'Build Showing Row', which is where the FUB person is actually in hand.\n// Do NOT re-derive this from person_name — that is the cal.com attendee\n// name, which is whatever the tester typed, not the FUB lead's name.\n// Sheets coerces \"true\" -> boolean TRUE on write (gotcha 14), so compare\n// as a lowercased string. Blank (rows appended before the gate) = not test.\nconst isTestShowing = (r) => String(r.is_test ?? '').trim().toLowerCase() === 'true';\n\nconst ready = rows.filter(r => {\n  if (!isTestShowing(r)) return false; // ACCESS_GATE_MARKER\n  if (r.status !== 'scheduled') return false;\n  if (!r.showing_time) return false;\n  const showingMs = new Date(r.showing_time).getTime();\n  // Window: showing is between now and 1h from now (send when T-60min to T)\n  return showingMs >= now && showingMs <= now + oneHour;\n});\n\nif (ready.length === 0) return [{ json: { hasReady: false } }];\nreturn ready.map(r => ({ json: { ...r, hasReady: true } }));\n"
       },
       "id": "da3ab4ee-55b1-485f-b504-07d67814ba38"
     },
@@ -145,7 +145,7 @@
       "id": "9ecadf95-929a-4cb5-bcbc-4c203e6b5b71",
       "retryOnFail": true,
       "maxTries": 5,
-      "waitBetweenTries": 8000
+      "waitBetweenTries": 15000
     },
     {
       "name": "Calc Code Window (Cron)",
@@ -418,7 +418,7 @@
       "id": "cd001e4c-52d1-40b0-afb0-cf1d34a78aa8",
       "retryOnFail": true,
       "maxTries": 5,
-      "waitBetweenTries": 8000
+      "waitBetweenTries": 15000
     },
     {
       "name": "FUB - Note Code Sent (Cron)",
@@ -672,9 +672,9 @@
   "meta": null,
   "nodeGroups": [],
   "pinData": {},
-  "versionId": "7191205f-d986-4d67-86ac-fa2a07cf0995",
-  "activeVersionId": "7191205f-d986-4d67-86ac-fa2a07cf0995",
-  "versionCounter": 14,
+  "versionId": "456addeb-e07e-47ad-92df-4bb359b09f4f",
+  "activeVersionId": "456addeb-e07e-47ad-92df-4bb359b09f4f",
+  "versionCounter": 16,
   "triggerCount": 2,
   "sourceWorkflowId": null,
   "shared": [
@@ -699,9 +699,9 @@
   ],
   "tags": [],
   "activeVersion": {
-    "updatedAt": "2026-07-31T01:50:10.406Z",
-    "createdAt": "2026-07-31T01:50:10.406Z",
-    "versionId": "7191205f-d986-4d67-86ac-fa2a07cf0995",
+    "updatedAt": "2026-08-07T09:51:53.701Z",
+    "createdAt": "2026-08-07T09:51:53.701Z",
+    "versionId": "456addeb-e07e-47ad-92df-4bb359b09f4f",
     "workflowId": "ztUEx7Htu620SLbj",
     "nodes": [
       {
@@ -754,7 +754,7 @@
         "id": "fe27fbd5-bc31-4edb-85cc-8a02d59aeb32",
         "retryOnFail": true,
         "maxTries": 5,
-        "waitBetweenTries": 8000
+        "waitBetweenTries": 15000
       },
       {
         "name": "Find Ready Showings",
@@ -765,7 +765,7 @@
           300
         ],
         "parameters": {
-          "jsCode": "\nconst now = Date.now();\nconst oneHour = 60 * 60 * 1000;\nconst rows = $input.all().map(i => i.json);\n\nconst ready = rows.filter(r => {\n  if (r.status !== 'scheduled') return false;\n  if (!r.showing_time) return false;\n  const showingMs = new Date(r.showing_time).getTime();\n  // Window: showing is between now and 1h from now (send when T-60min to T)\n  return showingMs >= now && showingMs <= now + oneHour;\n});\n\nif (ready.length === 0) return [{ json: { hasReady: false } }];\nreturn ready.map(r => ({ json: { ...r, hasReady: true } }));\n"
+          "jsCode": "\nconst now = Date.now();\nconst oneHour = 60 * 60 * 1000;\nconst rows = $input.all().map(i => i.json);\n\n// ── ACCESS_GATE_MARKER: test gate ──────────────────────────────────────────────\n// Reads the is_test verdict stamped onto the row by the Booking Handler's\n// 'Build Showing Row', which is where the FUB person is actually in hand.\n// Do NOT re-derive this from person_name — that is the cal.com attendee\n// name, which is whatever the tester typed, not the FUB lead's name.\n// Sheets coerces \"true\" -> boolean TRUE on write (gotcha 14), so compare\n// as a lowercased string. Blank (rows appended before the gate) = not test.\nconst isTestShowing = (r) => String(r.is_test ?? '').trim().toLowerCase() === 'true';\n\nconst ready = rows.filter(r => {\n  if (!isTestShowing(r)) return false; // ACCESS_GATE_MARKER\n  if (r.status !== 'scheduled') return false;\n  if (!r.showing_time) return false;\n  const showingMs = new Date(r.showing_time).getTime();\n  // Window: showing is between now and 1h from now (send when T-60min to T)\n  return showingMs >= now && showingMs <= now + oneHour;\n});\n\nif (ready.length === 0) return [{ json: { hasReady: false } }];\nreturn ready.map(r => ({ json: { ...r, hasReady: true } }));\n"
         },
         "id": "da3ab4ee-55b1-485f-b504-07d67814ba38"
       },
@@ -842,7 +842,7 @@
         "id": "9ecadf95-929a-4cb5-bcbc-4c203e6b5b71",
         "retryOnFail": true,
         "maxTries": 5,
-        "waitBetweenTries": 8000
+        "waitBetweenTries": 15000
       },
       {
         "name": "Calc Code Window (Cron)",
@@ -1115,7 +1115,7 @@
         "id": "cd001e4c-52d1-40b0-afb0-cf1d34a78aa8",
         "retryOnFail": true,
         "maxTries": 5,
-        "waitBetweenTries": 8000
+        "waitBetweenTries": 15000
       },
       {
         "name": "FUB - Note Code Sent (Cron)",
@@ -1365,18 +1365,18 @@
     "autosaved": false,
     "workflowPublishHistory": [
       {
-        "createdAt": "2026-07-31T01:50:10.431Z",
-        "id": 244,
+        "createdAt": "2026-08-07T09:51:53.729Z",
+        "id": 302,
         "workflowId": "ztUEx7Htu620SLbj",
-        "versionId": "7191205f-d986-4d67-86ac-fa2a07cf0995",
+        "versionId": "456addeb-e07e-47ad-92df-4bb359b09f4f",
         "event": "deactivated",
         "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
       },
       {
-        "createdAt": "2026-07-31T01:50:10.444Z",
-        "id": 245,
+        "createdAt": "2026-08-07T09:51:53.747Z",
+        "id": 303,
         "workflowId": "ztUEx7Htu620SLbj",
-        "versionId": "7191205f-d986-4d67-86ac-fa2a07cf0995",
+        "versionId": "456addeb-e07e-47ad-92df-4bb359b09f4f",
         "event": "activated",
         "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
       }

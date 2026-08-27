@@ -1,0 +1,881 @@
+{
+  "updatedAt": "2026-08-09T21:23:05.088Z",
+  "createdAt": "2026-06-24T20:40:51.397Z",
+  "id": "TGGhSkTSZGYPrZo9",
+  "name": "RentingFreedom - New Property → Provision",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "trigger-1",
+      "name": "Google Sheets - Watch Properties",
+      "type": "n8n-nodes-base.googleSheetsTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Properties"
+        },
+        "event": "rowAdded",
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsTriggerOAuth2Api": {
+          "id": "OdBlDOqZdIKqbLuN",
+          "name": "Google Sheets Trigger account"
+        }
+      }
+    },
+    {
+      "id": "http-1",
+      "name": "Cal.com - Get Event Types",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        560,
+        300
+      ],
+      "parameters": {
+        "url": "https://api.cal.com/v2/event-types",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "cal-api-version",
+              "value": "2024-06-14"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Uyhr5FNmPBQkGhp3",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "id": "code-1",
+      "name": "Build Cal.com Body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// MULTI_ROW_MARKER\n// One item per triggered row. Previously this read .first() and returned a\n// single item, so any poll that picked up two new rows provisioned only one and\n// silently dropped the rest (exec 15828). See gotcha 11.\nconst triggerRows = $('Google Sheets - Watch Properties').all().map((i) => i.json);\nconst eventTypeItems = $input.all().map(i => i.json);\n\nfunction unwrapApiList(items) {\n  const out = [];\n  for (const item of items) {\n    if (!item) continue;\n    const candidates = [item.data, item.eventTypes, item.items, item.results, item];\n    let picked = null;\n    for (const c of candidates) {\n      if (Array.isArray(c)) { picked = c; break; }\n    }\n    if (picked) out.push(...picked);\n  }\n  return out;\n}\n\nconst eventTypes = unwrapApiList(eventTypeItems);\n\nconst s = (v) => String(v ?? '').trim();\nconst lower = (v) => s(v).toLowerCase();\nconst isDateLike = (v) => /^(\\d{4}-\\d{2}-\\d{2}|\\d{1,2}\\/\\d{1,2}\\/\\d{4})/.test(s(v));\nconst slugify = (input) => s(input)\n  .toLowerCase()\n  .replace(/https?:\\/\\//g, '')\n  .split('/')\n  .pop()\n  .replace(/[^a-z0-9]+/g, '-')\n  .replace(/^-+|-+$/g, '');\nconst titleCase = (input) => s(input)\n  .split(/\\s+/)\n  .filter(Boolean)\n  .map(part => part.charAt(0).toUpperCase() + part.slice(1))\n  .join(' ');\nconst cleanText = (value, fallback) => {\n  const v = s(value);\n  if (!v || isDateLike(v) || ['updated', 'provisioned', 'subscribed', 'active', 'inactive'].includes(lower(v))) return fallback;\n  return v;\n};\nconst parseDuration = (value, fallback = 30) => {\n  const m = s(value).match(/\\d+/);\n  const n = m ? parseInt(m[0], 10) : NaN;\n  return Number.isFinite(n) && n > 0 ? n : fallback;\n};\n\nconst templateSlug = '102-braeford';\nconst templateEvent =\n  eventTypes.find(e => slugify(e.slug) === templateSlug) ||\n  eventTypes.find(e => slugify(e.title).includes('102-braeford'));\nif (!templateEvent) throw new Error('Template event type \"102-braeford\" not found in Cal.com');\n\nconst templateScheduleId =\n  templateEvent.scheduleId ?? templateEvent.schedule_id ??\n  templateEvent.schedule?.id ?? templateEvent.schedule?.scheduleId ?? null;\n\nconst out = [];\nfor (const row of triggerRows) {\n\n  const fallbackBase = titleCase(row.owner_label || row.street_address || row.property_key || 'Property');\n  const rowTitleBase = cleanText(row.cal_event_type_name, '');\n  const title = /walk-through/i.test(rowTitleBase)\n    ? rowTitleBase\n    : (rowTitleBase ? `${rowTitleBase} Walk-Through` : `${fallbackBase} Walk-Through`);\n\n  const slug = slugify(row.cal_link || row.property_key || title);\n  const existing = eventTypes.find(e => slugify(e.slug) === slug);\n  const description = cleanText(row.cal_description, '30 minute walk-through');\n  const duration = parseDuration(row.cal_duration_minutes, 30);\n  const address = cleanText(row.street_address, cleanText(row.owner_label, fallbackBase));\n  const calLink = cleanText(row.cal_link, `cal.com/rentingfreedom/${slug}`);\n\n  out.push({\n    json: {\n      ...row,\n      cal_link: calLink,\n      cal_event_type_id: existing?.id || '',\n      method: existing ? 'PATCH' : 'POST',\n      url: existing ? `https://api.cal.com/v2/event-types/${existing.id}` : 'https://api.cal.com/v2/event-types',\n      body: {\n        lengthInMinutes: duration,\n        title,\n        slug,\n        description,\n        ...(templateScheduleId ? { scheduleId: templateScheduleId } : {}),\n        locations: [{ type: 'address', address, public: true }],\n        bookingFields: [{ type: 'name', required: true, isDefault: true, slug: 'name' }],\n        disableGuests: true,\n        bookingRequiresAuthentication: false,\n        lockTimeZoneToggleOnBookingPage: true,\n        minimumBookingNotice: 0,\n        beforeEventBuffer: 0,\n        afterEventBuffer: 0,\n        slotInterval: Math.min(duration, 30),\n        customName: title,\n      },\n    }\n  });\n}\n\nreturn out;\n"
+      }
+    },
+    {
+      "id": "http-2",
+      "name": "Cal.com - Create Event Type",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1000,
+        300
+      ],
+      "parameters": {
+        "method": "={{$json.method}}",
+        "url": "={{$json.url}}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "cal-api-version",
+              "value": "2024-06-14"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.body }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Uyhr5FNmPBQkGhp3",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "id": "http-3",
+      "name": "Google Admin - Create Resource",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1240,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://admin.googleapis.com/admin/directory/v1/customer/my_customer/resources/calendars",
+        "authentication": "predefinedCredentialType",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ resourceId: $('Google Sheets - Watch Properties').first().json.property_key, resourceName: $('Google Sheets - Watch Properties').first().json.street_address || $('Google Sheets - Watch Properties').first().json.owner_label, resourceType: 'property' }) }}",
+        "options": {},
+        "nodeCredentialType": "googleOAuth2Api"
+      },
+      "credentials": {
+        "googleOAuth2Api": {
+          "id": "8cK53nGg6kaf4Djf",
+          "name": "Google Workspace Auth"
+        }
+      }
+    },
+    {
+      "id": "code-2",
+      "name": "Prepare Sheet Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1480,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// MULTI_ROW_MARKER\n// One output row per provisioned property. Was three .first() calls returning a\n// single item, which discarded every row after the first even once Build\n// Cal.com Body started emitting them all.\n//\n// Index alignment is valid because this chain is strictly linear and 1:1 —\n// Build Cal.com Body -> Cal.com - Create Event Type -> Google Admin - Create\n// Resource -> here — with every node in runOnceForAllItems mode and none\n// setting executeOnce.\nconst buildItems = $('Build Cal.com Body').all();\nconst calItems = $('Cal.com - Create Event Type').all();\nconst adminItems = $input.all();\n\nconst stripScheme = (v) => String(v ?? '').replace(/^https?:\\/\\//i, '');\nconst now = new Date().toISOString();\n\nconst out = [];\nfor (let i = 0; i < adminItems.length; i++) {\n  const buildData = (buildItems[i] ?? buildItems[buildItems.length - 1]).json;\n  const calResponse = (calItems[i] ?? calItems[calItems.length - 1]).json;\n  const adminResponse = adminItems[i].json;\n\n  const calPayload = calResponse.data ?? calResponse;\n  const calEventTypeId = calPayload.id ?? buildData.cal_event_type_id ?? '';\n  const bookingUrl = calPayload.bookingUrl ? stripScheme(calPayload.bookingUrl) : buildData.cal_link;\n  const calSuccess = !calResponse.error && (calPayload.id || calResponse.status === 'success' || calResponse.success === true);\n  const calError = calResponse.error?.message || calResponse.message || calPayload.message || (calSuccess ? '' : JSON.stringify(calResponse));\n\n  const adminSuccess = !adminResponse.error && (adminResponse.resourceId || adminResponse.kind);\n  const googleResourceId = adminResponse.resourceId ?? '';\n  const resourceCalendarEmail = adminResponse.resourceEmail ?? '';\n  const adminError = adminResponse.error?.message || (adminSuccess ? '' : JSON.stringify(adminResponse));\n\n  out.push({\n    json: {\n      property_key: buildData.property_key,\n      cal_event_type_id: String(calEventTypeId),\n      cal_link: bookingUrl,\n      cal_provisioning_status: calSuccess ? 'provisioned' : 'error',\n      cal_last_synced_at: now,\n      cal_sync_error: calSuccess ? '' : calError,\n      google_resource_id: googleResourceId,\n      resource_calendar_email: resourceCalendarEmail,\n      provisioning_status: (calSuccess && adminSuccess) ? 'provisioned' : 'partial_error',\n      provisioned_at: (calSuccess && adminSuccess) ? now : '',\n      error_message: [calSuccess ? '' : `Cal.com: ${calError}`, adminSuccess ? '' : `Admin: ${adminError}`].filter(Boolean).join(' | '),\n    },\n  });\n}\n\nreturn out;\n"
+      }
+    },
+    {
+      "id": "sheets-1",
+      "name": "Google Sheets - Update Properties",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        1720,
+        300
+      ],
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Properties",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "property_key": "={{$json.property_key}}",
+            "cal_event_type_id": "={{$json.cal_event_type_id}}",
+            "cal_provisioning_status": "={{$json.cal_provisioning_status}}",
+            "resource_calendar_email": "={{$json.resource_calendar_email}}",
+            "provisioning_status": "={{$json.provisioning_status}}",
+            "provisioned_at": "={{$json.provisioned_at}}"
+          },
+          "matchingColumns": [
+            "property_key"
+          ],
+          "schema": [
+            {
+              "id": "street_address",
+              "displayName": "street_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "owner_label",
+              "displayName": "owner_label",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "property_key",
+              "displayName": "property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "resource_calendar_email",
+              "displayName": "resource_calendar_email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cal_event_type_id",
+              "displayName": "cal_event_type_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cal_provisioning_status",
+              "displayName": "cal_provisioning_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "provisioning_status",
+              "displayName": "provisioning_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "provisioned_at",
+              "displayName": "provisioned_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "id": "filter-1",
+      "name": "Skip If Already Provisioned",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [
+        360,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.cal_provisioning_status }}",
+              "rightValue": "provisioned",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Google Sheets - Watch Properties": {
+      "main": [
+        [
+          {
+            "node": "Skip If Already Provisioned",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cal.com - Get Event Types": {
+      "main": [
+        [
+          {
+            "node": "Build Cal.com Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Cal.com Body": {
+      "main": [
+        [
+          {
+            "node": "Cal.com - Create Event Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cal.com - Create Event Type": {
+      "main": [
+        [
+          {
+            "node": "Google Admin - Create Resource",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Admin - Create Resource": {
+      "main": [
+        [
+          {
+            "node": "Prepare Sheet Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Sheet Update": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets - Update Properties",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip If Already Provisioned": {
+      "main": [
+        [
+          {
+            "node": "Cal.com - Get Event Types",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {
+    "node:Google Sheets - Watch Properties": {
+      "documentId": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+      "sheetId": 0,
+      "lastIndexChecked": 72
+    }
+  },
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "2c7e7ade-b29d-44bb-bc3f-6ef4e5cbcac7",
+  "activeVersionId": "2c7e7ade-b29d-44bb-bc3f-6ef4e5cbcac7",
+  "versionCounter": 7,
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-06-24T20:40:51.397Z",
+      "createdAt": "2026-06-24T20:40:51.397Z",
+      "role": "workflow:owner",
+      "workflowId": "TGGhSkTSZGYPrZo9",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-08-09T21:22:27.175Z",
+    "createdAt": "2026-08-09T21:22:27.175Z",
+    "versionId": "2c7e7ade-b29d-44bb-bc3f-6ef4e5cbcac7",
+    "workflowId": "TGGhSkTSZGYPrZo9",
+    "nodes": [
+      {
+        "id": "trigger-1",
+        "name": "Google Sheets - Watch Properties",
+        "type": "n8n-nodes-base.googleSheetsTrigger",
+        "typeVersion": 1,
+        "position": [
+          240,
+          300
+        ],
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "gid=0",
+            "mode": "list",
+            "cachedResultName": "Properties"
+          },
+          "event": "rowAdded",
+          "options": {}
+        },
+        "credentials": {
+          "googleSheetsTriggerOAuth2Api": {
+            "id": "OdBlDOqZdIKqbLuN",
+            "name": "Google Sheets Trigger account"
+          }
+        }
+      },
+      {
+        "id": "http-1",
+        "name": "Cal.com - Get Event Types",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          560,
+          300
+        ],
+        "parameters": {
+          "url": "https://api.cal.com/v2/event-types",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "cal-api-version",
+                "value": "2024-06-14"
+              },
+              {
+                "name": "Accept",
+                "value": "application/json"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "Uyhr5FNmPBQkGhp3",
+            "name": "Header Auth account"
+          }
+        }
+      },
+      {
+        "id": "code-1",
+        "name": "Build Cal.com Body",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          760,
+          300
+        ],
+        "parameters": {
+          "jsCode": "// MULTI_ROW_MARKER\n// One item per triggered row. Previously this read .first() and returned a\n// single item, so any poll that picked up two new rows provisioned only one and\n// silently dropped the rest (exec 15828). See gotcha 11.\nconst triggerRows = $('Google Sheets - Watch Properties').all().map((i) => i.json);\nconst eventTypeItems = $input.all().map(i => i.json);\n\nfunction unwrapApiList(items) {\n  const out = [];\n  for (const item of items) {\n    if (!item) continue;\n    const candidates = [item.data, item.eventTypes, item.items, item.results, item];\n    let picked = null;\n    for (const c of candidates) {\n      if (Array.isArray(c)) { picked = c; break; }\n    }\n    if (picked) out.push(...picked);\n  }\n  return out;\n}\n\nconst eventTypes = unwrapApiList(eventTypeItems);\n\nconst s = (v) => String(v ?? '').trim();\nconst lower = (v) => s(v).toLowerCase();\nconst isDateLike = (v) => /^(\\d{4}-\\d{2}-\\d{2}|\\d{1,2}\\/\\d{1,2}\\/\\d{4})/.test(s(v));\nconst slugify = (input) => s(input)\n  .toLowerCase()\n  .replace(/https?:\\/\\//g, '')\n  .split('/')\n  .pop()\n  .replace(/[^a-z0-9]+/g, '-')\n  .replace(/^-+|-+$/g, '');\nconst titleCase = (input) => s(input)\n  .split(/\\s+/)\n  .filter(Boolean)\n  .map(part => part.charAt(0).toUpperCase() + part.slice(1))\n  .join(' ');\nconst cleanText = (value, fallback) => {\n  const v = s(value);\n  if (!v || isDateLike(v) || ['updated', 'provisioned', 'subscribed', 'active', 'inactive'].includes(lower(v))) return fallback;\n  return v;\n};\nconst parseDuration = (value, fallback = 30) => {\n  const m = s(value).match(/\\d+/);\n  const n = m ? parseInt(m[0], 10) : NaN;\n  return Number.isFinite(n) && n > 0 ? n : fallback;\n};\n\nconst templateSlug = '102-braeford';\nconst templateEvent =\n  eventTypes.find(e => slugify(e.slug) === templateSlug) ||\n  eventTypes.find(e => slugify(e.title).includes('102-braeford'));\nif (!templateEvent) throw new Error('Template event type \"102-braeford\" not found in Cal.com');\n\nconst templateScheduleId =\n  templateEvent.scheduleId ?? templateEvent.schedule_id ??\n  templateEvent.schedule?.id ?? templateEvent.schedule?.scheduleId ?? null;\n\nconst out = [];\nfor (const row of triggerRows) {\n\n  const fallbackBase = titleCase(row.owner_label || row.street_address || row.property_key || 'Property');\n  const rowTitleBase = cleanText(row.cal_event_type_name, '');\n  const title = /walk-through/i.test(rowTitleBase)\n    ? rowTitleBase\n    : (rowTitleBase ? `${rowTitleBase} Walk-Through` : `${fallbackBase} Walk-Through`);\n\n  const slug = slugify(row.cal_link || row.property_key || title);\n  const existing = eventTypes.find(e => slugify(e.slug) === slug);\n  const description = cleanText(row.cal_description, '30 minute walk-through');\n  const duration = parseDuration(row.cal_duration_minutes, 30);\n  const address = cleanText(row.street_address, cleanText(row.owner_label, fallbackBase));\n  const calLink = cleanText(row.cal_link, `cal.com/rentingfreedom/${slug}`);\n\n  out.push({\n    json: {\n      ...row,\n      cal_link: calLink,\n      cal_event_type_id: existing?.id || '',\n      method: existing ? 'PATCH' : 'POST',\n      url: existing ? `https://api.cal.com/v2/event-types/${existing.id}` : 'https://api.cal.com/v2/event-types',\n      body: {\n        lengthInMinutes: duration,\n        title,\n        slug,\n        description,\n        ...(templateScheduleId ? { scheduleId: templateScheduleId } : {}),\n        locations: [{ type: 'address', address, public: true }],\n        bookingFields: [{ type: 'name', required: true, isDefault: true, slug: 'name' }],\n        disableGuests: true,\n        bookingRequiresAuthentication: false,\n        lockTimeZoneToggleOnBookingPage: true,\n        minimumBookingNotice: 0,\n        beforeEventBuffer: 0,\n        afterEventBuffer: 0,\n        slotInterval: Math.min(duration, 30),\n        customName: title,\n      },\n    }\n  });\n}\n\nreturn out;\n"
+        }
+      },
+      {
+        "id": "http-2",
+        "name": "Cal.com - Create Event Type",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          1000,
+          300
+        ],
+        "parameters": {
+          "method": "={{$json.method}}",
+          "url": "={{$json.url}}",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "cal-api-version",
+                "value": "2024-06-14"
+              },
+              {
+                "name": "Accept",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ $json.body }}",
+          "options": {}
+        },
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "Uyhr5FNmPBQkGhp3",
+            "name": "Header Auth account"
+          }
+        }
+      },
+      {
+        "id": "http-3",
+        "name": "Google Admin - Create Resource",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          1240,
+          300
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://admin.googleapis.com/admin/directory/v1/customer/my_customer/resources/calendars",
+          "authentication": "predefinedCredentialType",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ resourceId: $('Google Sheets - Watch Properties').first().json.property_key, resourceName: $('Google Sheets - Watch Properties').first().json.street_address || $('Google Sheets - Watch Properties').first().json.owner_label, resourceType: 'property' }) }}",
+          "options": {},
+          "nodeCredentialType": "googleOAuth2Api"
+        },
+        "credentials": {
+          "googleOAuth2Api": {
+            "id": "8cK53nGg6kaf4Djf",
+            "name": "Google Workspace Auth"
+          }
+        }
+      },
+      {
+        "id": "code-2",
+        "name": "Prepare Sheet Update",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1480,
+          300
+        ],
+        "parameters": {
+          "jsCode": "// MULTI_ROW_MARKER\n// One output row per provisioned property. Was three .first() calls returning a\n// single item, which discarded every row after the first even once Build\n// Cal.com Body started emitting them all.\n//\n// Index alignment is valid because this chain is strictly linear and 1:1 —\n// Build Cal.com Body -> Cal.com - Create Event Type -> Google Admin - Create\n// Resource -> here — with every node in runOnceForAllItems mode and none\n// setting executeOnce.\nconst buildItems = $('Build Cal.com Body').all();\nconst calItems = $('Cal.com - Create Event Type').all();\nconst adminItems = $input.all();\n\nconst stripScheme = (v) => String(v ?? '').replace(/^https?:\\/\\//i, '');\nconst now = new Date().toISOString();\n\nconst out = [];\nfor (let i = 0; i < adminItems.length; i++) {\n  const buildData = (buildItems[i] ?? buildItems[buildItems.length - 1]).json;\n  const calResponse = (calItems[i] ?? calItems[calItems.length - 1]).json;\n  const adminResponse = adminItems[i].json;\n\n  const calPayload = calResponse.data ?? calResponse;\n  const calEventTypeId = calPayload.id ?? buildData.cal_event_type_id ?? '';\n  const bookingUrl = calPayload.bookingUrl ? stripScheme(calPayload.bookingUrl) : buildData.cal_link;\n  const calSuccess = !calResponse.error && (calPayload.id || calResponse.status === 'success' || calResponse.success === true);\n  const calError = calResponse.error?.message || calResponse.message || calPayload.message || (calSuccess ? '' : JSON.stringify(calResponse));\n\n  const adminSuccess = !adminResponse.error && (adminResponse.resourceId || adminResponse.kind);\n  const googleResourceId = adminResponse.resourceId ?? '';\n  const resourceCalendarEmail = adminResponse.resourceEmail ?? '';\n  const adminError = adminResponse.error?.message || (adminSuccess ? '' : JSON.stringify(adminResponse));\n\n  out.push({\n    json: {\n      property_key: buildData.property_key,\n      cal_event_type_id: String(calEventTypeId),\n      cal_link: bookingUrl,\n      cal_provisioning_status: calSuccess ? 'provisioned' : 'error',\n      cal_last_synced_at: now,\n      cal_sync_error: calSuccess ? '' : calError,\n      google_resource_id: googleResourceId,\n      resource_calendar_email: resourceCalendarEmail,\n      provisioning_status: (calSuccess && adminSuccess) ? 'provisioned' : 'partial_error',\n      provisioned_at: (calSuccess && adminSuccess) ? now : '',\n      error_message: [calSuccess ? '' : `Cal.com: ${calError}`, adminSuccess ? '' : `Admin: ${adminError}`].filter(Boolean).join(' | '),\n    },\n  });\n}\n\nreturn out;\n"
+        }
+      },
+      {
+        "id": "sheets-1",
+        "name": "Google Sheets - Update Properties",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.4,
+        "position": [
+          1720,
+          300
+        ],
+        "parameters": {
+          "operation": "appendOrUpdate",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Properties",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "property_key": "={{$json.property_key}}",
+              "cal_event_type_id": "={{$json.cal_event_type_id}}",
+              "cal_provisioning_status": "={{$json.cal_provisioning_status}}",
+              "resource_calendar_email": "={{$json.resource_calendar_email}}",
+              "provisioning_status": "={{$json.provisioning_status}}",
+              "provisioned_at": "={{$json.provisioned_at}}"
+            },
+            "matchingColumns": [
+              "property_key"
+            ],
+            "schema": [
+              {
+                "id": "street_address",
+                "displayName": "street_address",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true,
+                "removed": false
+              },
+              {
+                "id": "owner_label",
+                "displayName": "owner_label",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true,
+                "removed": false
+              },
+              {
+                "id": "property_key",
+                "displayName": "property_key",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "resource_calendar_email",
+                "displayName": "resource_calendar_email",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "cal_event_type_id",
+                "displayName": "cal_event_type_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "cal_provisioning_status",
+                "displayName": "cal_provisioning_status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "provisioning_status",
+                "displayName": "provisioning_status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "provisioned_at",
+                "displayName": "provisioned_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ],
+            "attemptToConvertTypes": false,
+            "convertFieldsToString": false
+          },
+          "options": {}
+        },
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000
+      },
+      {
+        "id": "filter-1",
+        "name": "Skip If Already Provisioned",
+        "type": "n8n-nodes-base.filter",
+        "typeVersion": 2,
+        "position": [
+          360,
+          300
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": false,
+              "leftValue": "",
+              "typeValidation": "loose"
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.cal_provisioning_status }}",
+                "rightValue": "provisioned",
+                "operator": {
+                  "type": "string",
+                  "operation": "notEquals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      }
+    ],
+    "connections": {
+      "Google Sheets - Watch Properties": {
+        "main": [
+          [
+            {
+              "node": "Skip If Already Provisioned",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Cal.com - Get Event Types": {
+        "main": [
+          [
+            {
+              "node": "Build Cal.com Body",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Cal.com Body": {
+        "main": [
+          [
+            {
+              "node": "Cal.com - Create Event Type",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Cal.com - Create Event Type": {
+        "main": [
+          [
+            {
+              "node": "Google Admin - Create Resource",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Google Admin - Create Resource": {
+        "main": [
+          [
+            {
+              "node": "Prepare Sheet Update",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Prepare Sheet Update": {
+        "main": [
+          [
+            {
+              "node": "Google Sheets - Update Properties",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Skip If Already Provisioned": {
+        "main": [
+          [
+            {
+              "node": "Cal.com - Get Event Types",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Justin Artis",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-08-09T21:22:27.200Z",
+        "id": 343,
+        "workflowId": "TGGhSkTSZGYPrZo9",
+        "versionId": "2c7e7ade-b29d-44bb-bc3f-6ef4e5cbcac7",
+        "event": "deactivated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      },
+      {
+        "createdAt": "2026-08-09T21:22:27.772Z",
+        "id": 344,
+        "workflowId": "TGGhSkTSZGYPrZo9",
+        "versionId": "2c7e7ade-b29d-44bb-bc3f-6ef4e5cbcac7",
+        "event": "activated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      },
+      {
+        "createdAt": "2026-08-09T21:23:05.110Z",
+        "id": 345,
+        "workflowId": "TGGhSkTSZGYPrZo9",
+        "versionId": "2c7e7ade-b29d-44bb-bc3f-6ef4e5cbcac7",
+        "event": "deactivated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      },
+      {
+        "createdAt": "2026-08-09T21:23:05.679Z",
+        "id": 346,
+        "workflowId": "TGGhSkTSZGYPrZo9",
+        "versionId": "2c7e7ade-b29d-44bb-bc3f-6ef4e5cbcac7",
+        "event": "activated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    ]
+  }
+}

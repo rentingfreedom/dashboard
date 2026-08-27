@@ -1,0 +1,69 @@
+{
+  "written_at": "2026-08-25T17:49:09.854Z",
+  "fill_value": "TRUE",
+  "entries": [
+    {
+      "booking_uid": "gSU6KCkFyPeqdB5dPyghpW",
+      "column": "followup_sent",
+      "range": "Cal Bookings!AP30",
+      "before": "FALSE",
+      "start_time": "2026-08-24T20:15:00.000Z"
+    },
+    {
+      "booking_uid": "gSU6KCkFyPeqdB5dPyghpW",
+      "column": "followup_1day_email_sent",
+      "range": "Cal Bookings!AR30",
+      "before": "FALSE",
+      "start_time": "2026-08-24T20:15:00.000Z"
+    },
+    {
+      "booking_uid": "gSU6KCkFyPeqdB5dPyghpW",
+      "column": "followup_1day_sms_sent",
+      "range": "Cal Bookings!AT30",
+      "before": "FALSE",
+      "start_time": "2026-08-24T20:15:00.000Z"
+    },
+    {
+      "booking_uid": "gSU6KCkFyPeqdB5dPyghpW",
+      "column": "followup_2day_email_sent",
+      "range": "Cal Bookings!AV30",
+      "before": "FALSE",
+      "start_time": "2026-08-24T20:15:00.000Z"
+    },
+    {
+      "booking_uid": "gSU6KCkFyPeqdB5dPyghpW",
+      "column": "followup_2day_sms_sent",
+      "range": "Cal Bookings!AX30",
+      "before": "FALSE",
+      "start_time": "2026-08-24T20:15:00.000Z"
+    },
+    {
+      "booking_uid": "gSU6KCkFyPeqdB5dPyghpW",
+      "column": "followup_3day_email_sent",
+      "range": "Cal Bookings!AZ30",
+      "before": "FALSE",
+      "start_time": "2026-08-24T20:15:00.000Z"
+    },
+    {
+      "booking_uid": "gSU6KCkFyPeqdB5dPyghpW",
+      "column": "followup_3day_sms_sent",
+      "range": "Cal Bookings!BB30",
+      "before": "FALSE",
+      "start_time": "2026-08-24T20:15:00.000Z"
+    },
+    {
+      "booking_uid": "gSU6KCkFyPeqdB5dPyghpW",
+      "column": "followup_7day_email_sent",
+      "range": "Cal Bookings!BD30",
+      "before": "FALSE",
+      "start_time": "2026-08-24T20:15:00.000Z"
+    },
+    {
+      "booking_uid": "gSU6KCkFyPeqdB5dPyghpW",
+      "column": "followup_7day_sms_sent",
+      "range": "Cal Bookings!BF30",
+      "before": "FALSE",
+      "start_time": "2026-08-24T20:15:00.000Z"
+    }
+  ]
+}

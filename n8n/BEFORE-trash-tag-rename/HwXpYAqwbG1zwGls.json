@@ -1,0 +1,304 @@
+{
+  "updatedAt": "2026-08-07T19:23:13.861Z",
+  "createdAt": "2026-06-24T12:10:30.282Z",
+  "id": "HwXpYAqwbG1zwGls",
+  "name": "RentingFreedom Production - FUB Address → Cal Link",
+  "description": null,
+  "active": false,
+  "isArchived": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "06b890ba-bfa6-48b3-a737-6d526355b118",
+        "options": {}
+      },
+      "id": "58933db8-3c9b-4c4f-a37e-b392bb8ca01b",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        96
+      ],
+      "webhookId": "06b890ba-bfa6-48b3-a737-6d526355b118",
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.body.uri }}&fields=allFields",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2b4aa7e1-cc57-47dd-b3d2-8a8f9e7cc383",
+      "name": "FUB - Get Person",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Properties"
+        },
+        "options": {}
+      },
+      "id": "12d1f285-bf2c-4bf8-9ddd-c434aba51d31",
+      "name": "Google Sheets - Read Properties",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        0,
+        208
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "59de6b0c-e3c0-4bdc-95e0-b9490c843714",
+      "name": "Wait For Both",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        224,
+        96
+      ],
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction normalize(value) { return String(value ?? \"\").toLowerCase().replace(/[^a-z0-9]/g, \"\"); }\nfunction normalizeAddress(value) { return String(value ?? \"\").toLowerCase().replace(/\\b(apartment|apt|unit|suite|ste)\\b/g, \"\").replace(/\\b(street|st|road|rd|avenue|ave|drive|dr|court|ct|boulevard|blvd|lane|ln|circle|cir|place|pl|terrace|ter)\\b/g, \"\").replace(/[^a-z0-9]/g, \"\"); }\nfunction dedupe(values) { return [...new Set(values.map(v => String(v || \"\").trim()).filter(Boolean))]; }\n\nconst person = $items(\"FUB - Get Person\")[0]?.json?.people?.[0] || {};\nconst sheetRows = $items(\"Google Sheets - Read Properties\").map(i => i.json || {});\n\n// ── TRASH_TAG_GATE_MARKER: tag-based trash gate (replaces the old stage==\"trash\" check) ──\n// See docs/n8n-workflows.md \"FUB Trash-tag gate\".\nconst tagsLower = (person.tags || []).map((t) => String(t).trim().toLowerCase());\nconst trashDateMs = new Date(person.customTrashDate || \"\").getTime();\nconst daysSinceTrash = Number.isFinite(trashDateMs) ? (Date.now() - trashDateMs) / 86400000 : Infinity;\nlet trashBlock = null;\nif (tagsLower.includes(\"permanent trash\")) trashBlock = \"trash_permanent\";\nelse if (tagsLower.includes(\"denied credit\")) { if (daysSinceTrash <= 365) trashBlock = \"trash_denied_credit\"; }\nelse if (tagsLower.includes(\"temporary trash\")) { if (daysSinceTrash <= 90) trashBlock = \"trash_temporary\"; }\n// ── TRASH_FALLTHROUGH_MARKER: stage fallback must run whenever no TAG produced a block.\n// As an \"else if\" it was skipped by any matching tag, so a dateless or\n// expired tag left someone LESS protected than an untagged person.\nif (!trashBlock && [\"trash\", \"permanent trash\", \"cold rental lead 1 month hold\"].includes(String(person.stage ?? \"\").trim().toLowerCase())) trashBlock = \"trash_untagged_fallback\";\nif (trashBlock) {\n  return [{ json: { skipped: true, reason: trashBlock, person_id: person.id, person_name: person.name } }];\n}\n\nconst addressCandidates = [];\nif (Array.isArray(person.addresses)) {\n  for (const addr of person.addresses) {\n    if (addr?.street) addressCandidates.push(addr.street);\n    const parts = [addr?.street, addr?.city, addr?.state, addr?.code].filter(Boolean);\n    if (parts.length > 1) addressCandidates.push(parts.join(\", \"));\n  }\n}\nconst uniqueCandidates = dedupe(addressCandidates);\n\nif (uniqueCandidates.length === 0) {\n  return [{ json: { skipped: true, reason: \"no_address\", person_id: person.id, person_name: person.name } }];\n}\n\nconst normalizedCandidates = dedupe(uniqueCandidates.map(v => normalize(v)));\nconst normalizedAddressCandidates = dedupe(uniqueCandidates.map(v => normalizeAddress(v)));\n\nconst matches = [];\nfor (const row of sheetRows) {\n  const fields = [\n    { key: \"street_address\", value: row.street_address || \"\" },\n    { key: \"property_key\",   value: row.property_key   || \"\" },\n  ];\n  let score = 0;\n  for (const field of fields) {\n    const nf  = normalize(field.value);\n    const naf = normalizeAddress(field.value);\n    if (naf && normalizedAddressCandidates.includes(naf)) score += field.key === \"street_address\" ? 120 : 90;\n    else if (nf && normalizedCandidates.includes(nf)) score += 70;\n    else { for (const c of uniqueCandidates) { const nc = normalize(c); if (nc && nf && (nf.includes(nc) || nc.includes(nf))) { score += 20; break; } } }\n  }\n  if (score > 0) matches.push({ ...row, score });\n}\nmatches.sort((a, b) => b.score - a.score);\nconst best = matches[0] || null;\n\nif (!best || best.score < 80) {\n  return [{ json: { skipped: true, reason: \"no_match\", person_id: person.id, person_name: person.name, address: uniqueCandidates[0], top_score: best?.score ?? 0 } }];\n}\nif (!best.cal_link) {\n  return [{ json: { skipped: true, reason: \"cal_link_blank\", person_id: person.id, person_name: person.name, matched_property: best.property_key } }];\n}\n\nreturn [{ json: {\n  skipped: false,\n  person_id: String(person.id),\n  person_name: person.name,\n  address: uniqueCandidates[0],\n  matched_property: best.property_key,\n  cal_link: best.cal_link,\n  match_score: best.score\n}}];\n"
+      },
+      "id": "8aa7a6f1-67a7-4dcf-a5d0-eb5e3284a9cd",
+      "name": "Match & Resolve Cal Link",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        96
+      ],
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.skipped }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ef004109-0ba0-4ea8-91b2-66e5ea0de702",
+      "name": "Matched?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        672,
+        96
+      ],
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://api.followupboss.com/v1/people/{{$json.person_id}}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ customCalLink: $json.cal_link }) }}",
+        "options": {}
+      },
+      "id": "6f6fcc5e-d740-471c-bb38-36df77da990f",
+      "name": "FUB - Write Cal Link",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        896,
+        0
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "FUB - Get Person",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Google Sheets - Read Properties",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Get Person": {
+      "main": [
+        [
+          {
+            "node": "Wait For Both",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets - Read Properties": {
+      "main": [
+        [
+          {
+            "node": "Wait For Both",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Wait For Both": {
+      "main": [
+        [
+          {
+            "node": "Match & Resolve Cal Link",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Match & Resolve Cal Link": {
+      "main": [
+        [
+          {
+            "node": "Matched?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Matched?": {
+      "main": [
+        [
+          {
+            "node": "FUB - Write Cal Link",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": {},
+  "versionId": "80ada337-7040-4540-9760-967b800666f3",
+  "activeVersionId": null,
+  "versionCounter": 7,
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-06-24T12:10:30.282Z",
+      "createdAt": "2026-06-24T12:10:30.282Z",
+      "role": "workflow:owner",
+      "workflowId": "HwXpYAqwbG1zwGls",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": null
+}

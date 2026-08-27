@@ -1,0 +1,2461 @@
+{
+  "updatedAt": "2026-08-18T20:10:41.349Z",
+  "createdAt": "2026-07-24T12:36:41.083Z",
+  "id": "L13GUyrWbjSJwn8p",
+  "name": "RentingFreedom Production - Identity Verification Gate",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "idv-webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        208
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "phone-added-send-text",
+        "options": {}
+      },
+      "webhookId": "phone-added-send-text"
+    },
+    {
+      "id": "idv-get-person",
+      "name": "FUB - Get Person",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        208
+      ],
+      "parameters": {
+        "url": "={{ $json.body.uri }}&fields=allFields",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "id": "idv-read-settings",
+      "name": "Read Settings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        208
+      ],
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Settings",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "id": "idv-read-identity-log",
+      "name": "Read Identity Verifications",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        448,
+        208
+      ],
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Identity_Verifications",
+          "mode": "name"
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "eB6JrDkriJ1BATPy",
+          "name": "RF Dashboard Service Account (Project 2, Sheets)"
+        }
+      },
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "id": "idv-check-guards",
+      "name": "Check Guards",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        208
+      ],
+      "parameters": {
+        "jsCode": "const person = $items(\"FUB - Get Person\")[0]?.json?.people?.[0] || {};\nconst settingsRows = $items(\"Read Settings\").map(i => i.json || {});\nconst identityRows = $items(\"Read Identity Verifications\").map(i => i.json || {});\nconst originalBody = $(\"Webhook\").first().json.body || {};\n\nconst settings = {};\nfor (const row of settingsRows) {\n  if (row.key && row.value !== undefined) settings[row.key] = row.value;\n}\n\nconst rejectedLabel = (settings.rejected_stage_label || \"Rejected\").trim().toLowerCase();\nconst stage = (person.stage || \"\").trim();\nconst phone = person.phones?.[0]?.value;\n\nfunction fail(reason) {\n  return [{ json: {\n    proceed: false, reason,\n    person_id: person.id ? String(person.id) : \"\",\n    person_name: person.name || \"\",\n  } }];\n}\n\n// Same safeguard as the existing SMS workflow: only proceed for synthetic\n// test leads until this is validated end-to-end on real applicants.\nconst isTestMode = (person.firstName || \"\") === \"Test\";\nif (!isTestMode) return fail(\"not_test_mode\");\n\nif (!phone) return fail(\"no_phone\");\n\n// ── TRASH_TAG_GATE_MARKER: tag-based trash gate (replaces the old stage==\"trash\" check) ──\n// See docs/n8n-workflows.md \"FUB Trash-tag gate\".\n// Reroute PATCH + marker note happen downstream of \"Should Proceed?\" (false\n// branch) -> \"Needs Reapply Reroute?\", not here — this node only decides.\nconst tagsLower = (person.tags || []).map((t) => String(t).trim().toLowerCase());\nconst trashDateMs = new Date(person.customTrashDate || \"\").getTime();\nconst daysSinceTrash = Number.isFinite(trashDateMs) ? (Date.now() - trashDateMs) / 86400000 : Infinity;\nlet trashBlock = null;\nif (tagsLower.includes(\"permanent trash\")) trashBlock = { reason: \"trash_permanent\", rerouteStage: \"Permanent Trash\" };\nelse if (tagsLower.includes(\"denied credit\")) { if (daysSinceTrash <= 365) trashBlock = { reason: \"trash_denied_credit\", rerouteStage: \"Cold Rental Lead 1 month Hold\" }; }\nelse if (tagsLower.includes(\"temporary trash\")) { if (daysSinceTrash <= 90) trashBlock = { reason: \"trash_temporary\", rerouteStage: \"Trash\" }; }\n// ── TRASH_FALLTHROUGH_MARKER: the stage fallback must run whenever no TAG produced a\n// block -- as an \"else if\" it was skipped by any matching tag, so a\n// dateless/expired tag left someone LESS protected than an untagged\n// person. See scripts/n8n-add-trash-fallthrough.mjs.\nif (!trashBlock && [\"trash\", \"permanent trash\", \"cold rental lead 1 month hold\"].includes(stage.toLowerCase())) trashBlock = { reason: \"trash_untagged_fallback\", rerouteStage: null };\n// ── TAG_EXPIRY_CLEANUP_MARKER: strip a trash tag whose window has provably expired ──────\n// All three tags share ONE customTrashDate (the most recent transition), so\n// a stale tag riding alongside a fresh one silently wins the precedence rule\n// -- Denied Credit would give 365 days and reroute to Cold Hold when the real\n// event was a 90-day Trash. Precedence logic can't tell them apart; removing\n// the expired tag while it IS still expired is the only point where we can.\n// Permanent Trash has no window and is never removed. A tag with no real\n// date is left alone: Infinity days reads as \"expired\", but the absence of\n// OUR field is not evidence about the CLIENT's tag.\nconst TAG_WINDOW_DAYS = { \"temporary trash\": 90, \"denied credit\": 365 };\nconst hasRealTrashDate = Number.isFinite(trashDateMs);\nconst expiredTags = hasRealTrashDate\n  ? (person.tags || []).filter((t) => {\n      const w = TAG_WINDOW_DAYS[String(t).trim().toLowerCase()];\n      return w !== undefined && daysSinceTrash > w;\n    })\n  : [];\nconst cleanedTags = (person.tags || []).filter((t) => !expiredTags.includes(t));\nconst needsTagCleanup = expiredTags.length > 0;\n\nif (trashBlock) {\n  const needsReapplyReroute = !!trashBlock.rerouteStage && stage.toLowerCase() !== trashBlock.rerouteStage.toLowerCase();\n  return [{ json: {\n    proceed: false, reason: trashBlock.reason,\n    person_id: person.id ? String(person.id) : \"\",\n    person_name: person.name || \"\",\n    needs_reapply_reroute: needsReapplyReroute,\n    reapply_reroute_stage: trashBlock.rerouteStage || \"\",\n    reapply_preserved_trash_date: person.customTrashDate || \"\",\n    needs_tag_cleanup: needsTagCleanup,\n    expired_tags: expiredTags,\n    cleaned_tags: cleanedTags,\n    trash_date: person.customTrashDate || \"\",\n  } }];\n}\n\nif (stage.toLowerCase() === rejectedLabel) return fail(\"rejected_stage\");\n\n// ── STAGE_GATE_MARKER: FUB stage gate ────────────────────────────────────────────\n// A lead outside the allowed stages never gets a verification SMS.\n// Empty / missing allowed_stages == allow everything, so losing the Settings\n// row degrades to the pre-gate behaviour rather than muting the whole system.\nconst allowedStages = String(settings.allowed_stages ?? \"\")\n  .split(\",\")\n  .map((s) => s.trim().toLowerCase())\n  .filter(Boolean);\n// Sheets coerces on write and the stage names contain punctuation and mixed\n// case (\"Tenant Inquiry Lead (Do Not Contact)\"), so compare normalized.\nconst personStage = String(person.stage ?? \"\").trim().toLowerCase();\nconst stageAllowed = allowedStages.length === 0 || allowedStages.includes(personStage);\n\nif (!stageAllowed) return fail(\"stage_not_allowed:\" + stage);\n\n\n// Test-mode leads are reused indefinitely for end-to-end testing, so\n// don't let a prior session block a fresh test run.\nconst alreadySent = identityRows.some(r => String(r.lead_id) === String(person.id));\nif (!isTestMode && alreadySent) return fail(\"already_sent\");\n\n// ── PENDING_VERIFICATION_GUARD_MARKER ────────────────────────────────────────────────────────────\n// A second inquiry from the same lead while their first verification session\n// is still open must not fire a second Stripe session / second SMS — the\n// Inquiry flow calls this gate on every inquiry from an unverified lead by\n// design, so THIS is the place that has to be safe to call more than once.\n// Applies to test leads too (this is exactly how the bug was found).\n// Matched on person_id OR phone (last 10 digits — formats vary: FUB stores\n// bare digits, the sheet/Twilio store \"+1...\"), same discipline as the\n// Inquiry flow's identity lookup. A pending row older than the TTL is\n// treated as abandoned, not \"in flight\", so a lead who never finished\n// Stripe Identity isn't stuck forever.\nconst pendingTtlHours = Number(settings.identity_verification_pending_ttl_hours ?? 24) || 24;\nconst last10 = (v) => String(v ?? \"\").replace(/\\D/g, \"\").slice(-10);\nconst personLast10 = last10(phone);\nconst nowMs = Date.now();\nconst hasPendingSession = identityRows.some(r => {\n  const sameLead = String(r.lead_id ?? \"\") !== \"\" && String(r.lead_id) === String(person.id ?? \"\");\n  const samePhone = personLast10 !== \"\" && last10(r.phone) === personLast10;\n  if (!(sameLead || samePhone)) return false;\n  if (String(r.status ?? \"\").trim().toLowerCase() !== \"pending\") return false;\n  const sentMs = new Date(r.sent_at).getTime();\n  // Unparseable sent_at can't be judged stale — treat as still in flight\n  // rather than risk letting a second SMS through.\n  const ageHours = Number.isFinite(sentMs) ? (nowMs - sentMs) / 3600000 : 0;\n  return ageHours < pendingTtlHours;\n});\nif (hasPendingSession) return fail(\"verification_already_pending\");\n\nconst digits = phone.replace(/\\D/g, \"\");\nconst toNumber = digits.length === 10 ? `+1${digits}` : `+${digits}`;\n\nreturn [{ json: {\n  proceed: true,\n  reason: \"ok\",\n  person_id: String(person.id),\n  person_name: person.name || \"\",\n  first_name: person.firstName || person.name || \"\",\n  email: person.emails?.[0]?.value || undefined,\n  stage,\n  phone: toNumber,\n  from_number: settings.from_number || \"\",\n  identity_sms_template: settings.identity_verification_sms_template || \"\",\n  original_webhook_body: JSON.stringify(originalBody),\n  needs_tag_cleanup: needsTagCleanup,\n  expired_tags: expiredTags,\n  cleaned_tags: cleanedTags,\n  trash_date: person.customTrashDate || \"\",\n} }];"
+      }
+    },
+    {
+      "id": "idv-should-proceed",
+      "name": "Should Proceed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        896,
+        208
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.proceed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "idv-create-session",
+      "name": "Create Stripe Identity Session",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        112
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://dashboard.rentingfreedom.com/api/identity/create-session",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead_id: $json.person_id, lead_name: $json.person_name, phone: $json.phone, email: $json.email, stage: $json.stage, source: \"fub_phone_added\" }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "LstfkvTtbGOIQdtO",
+          "name": "RF Dashboard Internal API"
+        }
+      }
+    },
+    {
+      "id": "idv-build-sms",
+      "name": "Build Verification SMS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        112
+      ],
+      "parameters": {
+        "jsCode": "const guard = $(\"Check Guards\").first().json;\nconst session = $json;\n\nconst template = guard.identity_sms_template ||\n  \"Hi {{first_name}}, before we can schedule your showing we need to quickly verify your ID. Please complete this short verification: {{verify_link}}\";\n\nconst message = template\n  .replace(/\\{\\{first_name\\}\\}/g, guard.first_name || \"\")\n  .replace(/\\{\\{verify_link\\}\\}/g, session.url || \"\");\n\nreturn [{ json: {\n  message,\n  phone: guard.phone,\n  from_number: guard.from_number,\n  session_id: session.sessionId,\n  person_id: guard.person_id,\n  person_name: guard.person_name,\n  original_webhook_body: guard.original_webhook_body,\n  sent_at: new Date().toISOString(),\n} }];"
+      }
+    },
+    {
+      "id": "idv-send-sms",
+      "name": "Send Verification SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        1568,
+        112
+      ],
+      "parameters": {
+        "from": "={{ $json.from_number }}",
+        "to": "={{ $json.phone }}",
+        "message": "={{ $json.message }}",
+        "options": {}
+      },
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      }
+    },
+    {
+      "id": "idv-log-sheet",
+      "name": "Log to Identity Verifications",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1792,
+        112
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Identity_Verifications",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "session_id": "={{ $('Build Verification SMS').first().json.session_id }}",
+            "lead_id": "={{ $('Build Verification SMS').first().json.person_id }}",
+            "lead_name": "={{ $('Build Verification SMS').first().json.person_name }}",
+            "phone": "={{ $('Build Verification SMS').first().json.phone }}",
+            "original_webhook_body": "={{ $('Build Verification SMS').first().json.original_webhook_body }}",
+            "status": "pending",
+            "sent_at": "={{ $('Build Verification SMS').first().json.sent_at }}",
+            "resolved_at": "",
+            "error_code": "",
+            "error_reason": ""
+          },
+          "schema": [
+            {
+              "id": "session_id",
+              "displayName": "session_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "lead_id",
+              "displayName": "lead_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "lead_name",
+              "displayName": "lead_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "original_webhook_body",
+              "displayName": "original_webhook_body",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sent_at",
+              "displayName": "sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "resolved_at",
+              "displayName": "resolved_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "error_code",
+              "displayName": "error_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "error_reason",
+              "displayName": "error_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "eB6JrDkriJ1BATPy",
+          "name": "RF Dashboard Service Account (Project 2, Sheets)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "id": "gate-fub-note",
+      "name": "FUB - Log Note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1568,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Build Verification SMS').first().json.person_id), body: 'Automated SMS sent (ID verification):\\n\\n' + $('Build Verification SMS').first().json.message }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {},
+        "url": "=https://api.followupboss.com/v1/notes?personId={{ ($('FUB - Get Person').item.json.people?.[0] ?? $('FUB - Get Person').item.json).id }}&limit=5&sort=-created"
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "id": "trash-tag-get-notes",
+      "name": "FUB - Get Recent Notes",
+      "position": [
+        150,
+        380
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "trash-tag-watcher",
+      "name": "Trash Transition Watcher",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        300,
+        380
+      ],
+      "parameters": {
+        "jsCode": "// ── TRASH_TAG_GATE_MARKER: stage-transition watcher, stamps customTrashDate ──\n// FUB's peopleUpdated webhook carries no previous-stage data (confirmed live,\n// 2026-08-06/07 against real executions) -- customTrashGateLastStage is our\n// own cache of \"what stage did we last see this person in\", written by this\n// node. A transition is \"entering a trash-family stage the cache didn't\n// already show them in\". See docs/n8n-workflows.md \"FUB Trash-tag gate\".\nconst personPayload = $items(\"FUB - Get Person\")[0]?.json || {};\nconst person = personPayload.people?.[0] || personPayload;\n// ── WATCHER_ISOLATION_MARKER: the notes fetch is allowed to fail without aborting this\n// workflow (onError: continueRegularOutput), so it can hand us an { error }\n// item instead of notes. We cannot check for the reapply self-collision\n// marker in that case -- so do NOT stamp customTrashDate on an unverified\n// basis. Refreshing the cache field is still safe and keeps future\n// comparisons accurate. See docs/n8n-workflows.md \"Watcher isolation\".\nconst notesPayload = $items(\"FUB - Get Recent Notes\")[0]?.json || {};\nconst notesUnavailable = !!notesPayload.error || !Array.isArray(notesPayload.notes);\nconst recentNotes = Array.isArray(notesPayload.notes) ? notesPayload.notes : [];\n\nconst TRASH_STAGES = [\"trash\", \"permanent trash\", \"cold rental lead 1 month hold\"];\nconst currentStage = String(person.stage ?? \"\").trim();\nconst currentStageLower = currentStage.toLowerCase();\nconst cachedStage = String(person.customTrashGateLastStage ?? \"\").trim();\nconst cachedStageLower = cachedStage.toLowerCase();\n\nconst cacheStale = cachedStageLower !== currentStageLower;\n\n// ── NEW_INQUIRY_LEAD_ALERT_MARKER: alert a human when a lead lands in the ─────\n// initial-inquiry stage with no phone number, so someone can go find one.\n// FUB's peopleUpdated payload carries no previous stage, so entry is detected\n// against customTrashGateLastStage — the cache this node already maintains.\n// See scripts/n8n-add-new-inquiry-lead-alert.mjs for the full rationale.\nconst NEW_LEAD_ALERT_STAGE = \"tenant inquiry lead (do not contact)\";\n// An empty cache means \"first time this system has ever seen this person\",\n// which is ambiguous: a brand-new lead and a pre-existing record that simply\n// predates the watcher look identical. 14 of the 16 people in this stage\n// today have an empty cache, so treating empty as \"new\" would text about all\n// of them. Their creation timestamp is what separates the two.\nconst NEW_LEAD_CREATED_WINDOW_MS = 60 * 60 * 1000;\nconst personCreatedMs = new Date(person.created ?? \"\").getTime();\nconst recentlyCreated =\n  Number.isFinite(personCreatedMs) && Date.now() - personCreatedMs < NEW_LEAD_CREATED_WINDOW_MS;\n// FUB returns phones: [] (not a missing key) for a lead with none — e.g. a\n// Zillow inquiry, which carries only an anonymized @convo.zillow.com email.\nconst hasPhone =\n  Array.isArray(person.phones) &&\n  person.phones.some((p) => String(p?.value ?? \"\").trim() !== \"\");\nconst enteringInquiryStage =\n  currentStageLower === NEW_LEAD_ALERT_STAGE &&\n  cacheStale &&\n  (cachedStageLower !== \"\" || recentlyCreated);\nconst notifyNewInquiryLead = enteringInquiryStage && !hasPhone;\nconst newLeadAlert = {\n  notify_new_inquiry_lead: notifyNewInquiryLead,\n  new_lead_person_id: person.id ?? \"\",\n  new_lead_name: String(person.name ?? \"\").trim(),\n  new_lead_stage: currentStage,\n  new_lead_source: String(person.source ?? \"\").trim(),\n  new_lead_email: person.emails?.[0]?.value ?? \"\",\n  new_lead_created: person.created ?? \"\",\n  new_lead_from_cache: cachedStage,\n};\n\n// ── WATCHER_SCOPE_MARKER: only act on the two gated tenant stages ──────────────\n// The client's FUB account is not only a rental CRM (owners, lenders,\n// developers, general contacts also live in it). Client decision 2026-08-07:\n// this watcher must not write to those people at all. Hardcoded rather than\n// read from Settings' allowed_stages because this node runs BEFORE\n// Read Settings -- see scripts/n8n-add-watcher-scope.mjs for the full\n// rationale. Keep in sync with the production allowed_stages value.\nconst WATCH_SCOPE_STAGES = [\n  \"tenant inquiry lead (do not contact)\",\n  \"tenant still looking for rental\",\n];\nconst inScope = WATCH_SCOPE_STAGES.includes(currentStageLower);\nconst cachedInScope = WATCH_SCOPE_STAGES.includes(cachedStageLower);\nconst inTrashFamily = TRASH_STAGES.includes(currentStageLower);\n// A first-ever-seen person already sitting in trash (empty cache) is still\n// stamped: a trash tag with NO customTrashDate computes as Infinity days,\n// which the tag policy treats as EXPIRED and lets through. Stamping errs\n// toward blocking, which is the safe direction.\nconst watcherApplies = inScope || (inTrashFamily && (cachedInScope || cachedStageLower === \"\"));\nif (!watcherApplies) {\n  return [{ json: { needs_write: false, reason: \"out_of_scope\", stage: currentStage, ...newLeadAlert, notify_new_inquiry_lead: false } }];\n}\nconst enteringTrashFamily = inTrashFamily && cacheStale && (cachedInScope || cachedStageLower === \"\");\n\n// Self-collision: the reapply-reroute nodes further down this same workflow\n// already set customTrashDate correctly in the SAME PUT call that moved the\n// stage back -- and that PUT itself re-fires this webhook. Detect that by\n// looking for the marker note it leaves, posted in the last 5 minutes, so\n// this node doesn't clobber the preserved date with \"now\".\nconst REAPPLY_NOTE_MARKER = \"Automation: reapply blocked\";\nconst recentReapplyNote = recentNotes.find((n) => {\n  if (!String(n.body ?? \"\").includes(REAPPLY_NOTE_MARKER)) return false;\n  const noteMs = new Date(n.created).getTime();\n  return Number.isFinite(noteMs) && Date.now() - noteMs < 5 * 60 * 1000;\n});\n\nconst shouldStamp = enteringTrashFamily && !recentReapplyNote && !notesUnavailable;\n\nif (!shouldStamp && !cacheStale) {\n  return [{ json: { needs_write: false, reason: \"no_change\", ...newLeadAlert } }];\n}\n\nconst updateBody = {};\nif (shouldStamp) updateBody.customTrashDate = new Date().toISOString();\nif (cacheStale) updateBody.customTrashGateLastStage = currentStage;\n\nreturn [{ json: {\n  needs_write: true,\n  person_id: person.id,\n  update_body: updateBody,\n  stamped: shouldStamp,\n  suppressed_by_reapply_note: !!recentReapplyNote,\n  ...newLeadAlert,\n} }];"
+      }
+    },
+    {
+      "id": "trash-tag-watcher-if",
+      "name": "Watcher Needs Write?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        450,
+        380
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.needs_write }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {},
+        "method": "PUT",
+        "url": "=https://api.followupboss.com/v1/people/{{ $json.person_id }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.update_body) }}"
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "id": "trash-tag-update-watcher",
+      "name": "FUB - Update Person (Watcher)",
+      "position": [
+        600,
+        460
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "trash-tag-reroute-if",
+      "name": "Needs Reapply Reroute?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1050,
+        380
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.needs_reapply_reroute }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {},
+        "method": "PUT",
+        "url": "=https://api.followupboss.com/v1/people/{{ $json.person_id }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ stage: $json.reapply_reroute_stage, customTrashDate: $json.reapply_preserved_trash_date }) }}"
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "id": "trash-tag-update-reapply",
+      "name": "FUB - Update Person (Reapply)",
+      "position": [
+        1200,
+        460
+      ]
+    },
+    {
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {},
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Check Guards').item.json.person_id), body: 'Automation: reapply blocked, rerouted to ' + $('Check Guards').item.json.reapply_reroute_stage + ', trash_date preserved from ' + $('Check Guards').item.json.reapply_preserved_trash_date }) }}"
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "id": "trash-tag-reapply-note",
+      "name": "FUB - Log Reapply Note",
+      "position": [
+        1350,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.needs_tag_cleanup }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Tag Cleanup Needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        892,
+        528
+      ],
+      "id": "af381824-b915-4508-b201-8b2ad7a7602b"
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {},
+        "method": "PUT",
+        "url": "=https://api.followupboss.com/v1/people/{{ $json.person_id }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ tags: $json.cleaned_tags }) }}"
+      },
+      "name": "FUB - Remove Expired Tags",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1132,
+        528
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "d2b88d56-3cb8-494a-97cc-96b3c664ddce"
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {},
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Check Guards').item.json.person_id), body: 'Automation: trash tag(s) expired and removed: ' + $('Check Guards').item.json.expired_tags.join(', ') + ' (trash_date ' + $('Check Guards').item.json.trash_date + ')' }) }}"
+      },
+      "name": "FUB - Log Tag Cleanup Note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1372,
+        528
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "id": "c2401441-4b40-46ff-81cf-eeeb7cee188a"
+    },
+    {
+      "id": "new-lead-alert-if",
+      "name": "New Inquiry Lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        450,
+        700
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.notify_new_inquiry_lead }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "new-lead-alert-settings",
+      "name": "Read Settings (New Lead Alert)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        660,
+        700
+      ],
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Settings",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "new-lead-alert-build",
+      "name": "Build New-Lead Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        870,
+        700
+      ],
+      "parameters": {
+        "jsCode": "// ── NEW_INQUIRY_LEAD_ALERT_MARKER: build the staff SMS ───────────\n// Named-node reference, never $json: the immediate input here is the Settings\n// read's rows, not the watcher's output. Gotcha 12 / 19.\nconst lead = $(\"Trash Transition Watcher\").first().json;\n\n// The Settings read is onError-tolerant, so it can hand back an { error }\n// item instead of rows. Fail loudly in the execution log rather than sending\n// a text with an empty \"to\" (which is what Twilio error 21604 looks like).\nconst rows = $items(\"Read Settings (New Lead Alert)\").map((i) => i.json || {});\nconst settings = {};\nfor (const row of rows) {\n  if (row.key && row.value !== undefined) settings[row.key] = row.value;\n}\n\n// Reuses the Zillow flow's recipient by client decision — same \"someone must\n// go find this lead's phone number\" job, same person doing it today.\nconst alertPhone = String(settings.rental_application_alert_phone ?? \"\").trim();\nconst fromNumber = String(settings.from_number ?? \"\").trim();\nif (!alertPhone || !fromNumber) {\n  console.log(\n    \"NEW-LEAD ALERT NOT SENT — missing Settings values. \" +\n      `person_id=${lead.new_lead_person_id} name=\"${lead.new_lead_name}\" ` +\n      `rental_application_alert_phone=\"${alertPhone}\" from_number=\"${fromNumber}\"`\n  );\n  return [];\n}\n\nconst name = lead.new_lead_name || `FUB person #${lead.new_lead_person_id}`;\nconst source = lead.new_lead_source ? ` Source: ${lead.new_lead_source}.` : \"\";\nconst message =\n  `RF: New tenant inquiry lead ${name} entered \"${lead.new_lead_stage}\" in FUB ` +\n  `with no phone number. FUB person #${lead.new_lead_person_id}.${source} ` +\n  `Add their phone number in FUB to kick off the usual verification flow.`;\n\nconsole.log(\n  `NEW-LEAD ALERT person_id=${lead.new_lead_person_id} name=\"${name}\" ` +\n    `from_cache=\"${lead.new_lead_from_cache}\" created=${lead.new_lead_created}`\n);\n\nreturn [{ json: {\n  message,\n  alert_phone: alertPhone,\n  from_number: fromNumber,\n  person_id: lead.new_lead_person_id,\n  person_name: name,\n  sent_at: new Date().toISOString(),\n} }];"
+      }
+    },
+    {
+      "id": "new-lead-alert-send",
+      "name": "Send New-Lead Alert",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        1080,
+        700
+      ],
+      "parameters": {
+        "from": "={{ $json.from_number }}",
+        "to": "={{ $json.alert_phone }}",
+        "message": "={{ $json.message }}",
+        "options": {}
+      },
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "early-test-gate-if",
+      "name": "Is Test Lead? (Early)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        630,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $('FUB - Get Person').first().json.people?.[0]?.firstName || '' }}",
+              "rightValue": "Test",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "early-test-gate-result",
+      "name": "Build Not-Test-Mode Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        630,
+        460
+      ],
+      "parameters": {
+        "jsCode": "// ── EARLY_TEST_GATE_MARKER ────────────────────────────────────────────────────────────\n// See scripts/n8n-add-early-test-gate.mjs. Mirrors Check Guards' own\n// fail(\"not_test_mode\") EXACTLY (same shape, same fields) — this does not\n// change what happens to a non-test lead, only how cheaply it happens.\n// Check Guards remains the single source of truth for every other rule.\nconst person = $(\"FUB - Get Person\").first().json?.people?.[0] || {};\nreturn [{ json: {\n  proceed: false,\n  reason: \"not_test_mode\",\n  person_id: person.id ? String(person.id) : \"\",\n  person_name: person.name || \"\",\n} }];"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "FUB - Get Person",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Get Person": {
+      "main": [
+        [
+          {
+            "node": "FUB - Get Recent Notes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Settings": {
+      "main": [
+        [
+          {
+            "node": "Read Identity Verifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Identity Verifications": {
+      "main": [
+        [
+          {
+            "node": "Check Guards",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Guards": {
+      "main": [
+        [
+          {
+            "node": "Should Proceed?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Tag Cleanup Needed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Proceed?": {
+      "main": [
+        [
+          {
+            "node": "Create Stripe Identity Session",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Needs Reapply Reroute?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Stripe Identity Session": {
+      "main": [
+        [
+          {
+            "node": "Build Verification SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Verification SMS": {
+      "main": [
+        [
+          {
+            "node": "Send Verification SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Verification SMS": {
+      "main": [
+        [
+          {
+            "node": "FUB - Log Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Log Note": {
+      "main": [
+        [
+          {
+            "node": "Log to Identity Verifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Get Recent Notes": {
+      "main": [
+        [
+          {
+            "node": "Trash Transition Watcher",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trash Transition Watcher": {
+      "main": [
+        [
+          {
+            "node": "Watcher Needs Write?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "New Inquiry Lead?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Watcher Needs Write?": {
+      "main": [
+        [
+          {
+            "node": "FUB - Update Person (Watcher)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Test Lead? (Early)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Update Person (Watcher)": {
+      "main": [
+        [
+          {
+            "node": "Is Test Lead? (Early)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Reapply Reroute?": {
+      "main": [
+        [
+          {
+            "node": "FUB - Update Person (Reapply)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "FUB - Update Person (Reapply)": {
+      "main": [
+        [
+          {
+            "node": "FUB - Log Reapply Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tag Cleanup Needed?": {
+      "main": [
+        [
+          {
+            "node": "FUB - Remove Expired Tags",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "FUB - Remove Expired Tags": {
+      "main": [
+        [
+          {
+            "node": "FUB - Log Tag Cleanup Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New Inquiry Lead?": {
+      "main": [
+        [
+          {
+            "node": "Read Settings (New Lead Alert)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Read Settings (New Lead Alert)": {
+      "main": [
+        [
+          {
+            "node": "Build New-Lead Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build New-Lead Alert": {
+      "main": [
+        [
+          {
+            "node": "Send New-Lead Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Test Lead? (Early)": {
+      "main": [
+        [
+          {
+            "node": "Read Settings",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Not-Test-Mode Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Not-Test-Mode Result": {
+      "main": [
+        [
+          {
+            "node": "Should Proceed?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Tag Cleanup Needed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "081d7c98-66ad-4c9f-8319-a018402f893a",
+  "activeVersionId": "081d7c98-66ad-4c9f-8319-a018402f893a",
+  "versionCounter": 23,
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-07-24T12:36:41.083Z",
+      "createdAt": "2026-07-24T12:36:41.083Z",
+      "role": "workflow:owner",
+      "workflowId": "L13GUyrWbjSJwn8p",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-08-18T20:10:41.354Z",
+    "createdAt": "2026-08-18T20:10:41.354Z",
+    "versionId": "081d7c98-66ad-4c9f-8319-a018402f893a",
+    "workflowId": "L13GUyrWbjSJwn8p",
+    "nodes": [
+      {
+        "id": "idv-webhook",
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          -224,
+          208
+        ],
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "phone-added-send-text",
+          "options": {}
+        },
+        "webhookId": "phone-added-send-text"
+      },
+      {
+        "id": "idv-get-person",
+        "name": "FUB - Get Person",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          0,
+          208
+        ],
+        "parameters": {
+          "url": "={{ $json.body.uri }}&fields=allFields",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        }
+      },
+      {
+        "id": "idv-read-settings",
+        "name": "Read Settings",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          224,
+          208
+        ],
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Settings",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "alwaysOutputData": true,
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000
+      },
+      {
+        "id": "idv-read-identity-log",
+        "name": "Read Identity Verifications",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          448,
+          208
+        ],
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Identity_Verifications",
+            "mode": "name"
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "credentials": {
+          "googleApi": {
+            "id": "eB6JrDkriJ1BATPy",
+            "name": "RF Dashboard Service Account (Project 2, Sheets)"
+          }
+        },
+        "alwaysOutputData": true,
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000
+      },
+      {
+        "id": "idv-check-guards",
+        "name": "Check Guards",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          672,
+          208
+        ],
+        "parameters": {
+          "jsCode": "const person = $items(\"FUB - Get Person\")[0]?.json?.people?.[0] || {};\nconst settingsRows = $items(\"Read Settings\").map(i => i.json || {});\nconst identityRows = $items(\"Read Identity Verifications\").map(i => i.json || {});\nconst originalBody = $(\"Webhook\").first().json.body || {};\n\nconst settings = {};\nfor (const row of settingsRows) {\n  if (row.key && row.value !== undefined) settings[row.key] = row.value;\n}\n\nconst rejectedLabel = (settings.rejected_stage_label || \"Rejected\").trim().toLowerCase();\nconst stage = (person.stage || \"\").trim();\nconst phone = person.phones?.[0]?.value;\n\nfunction fail(reason) {\n  return [{ json: {\n    proceed: false, reason,\n    person_id: person.id ? String(person.id) : \"\",\n    person_name: person.name || \"\",\n  } }];\n}\n\n// Same safeguard as the existing SMS workflow: only proceed for synthetic\n// test leads until this is validated end-to-end on real applicants.\nconst isTestMode = (person.firstName || \"\") === \"Test\";\nif (!isTestMode) return fail(\"not_test_mode\");\n\nif (!phone) return fail(\"no_phone\");\n\n// ── TRASH_TAG_GATE_MARKER: tag-based trash gate (replaces the old stage==\"trash\" check) ──\n// See docs/n8n-workflows.md \"FUB Trash-tag gate\".\n// Reroute PATCH + marker note happen downstream of \"Should Proceed?\" (false\n// branch) -> \"Needs Reapply Reroute?\", not here — this node only decides.\nconst tagsLower = (person.tags || []).map((t) => String(t).trim().toLowerCase());\nconst trashDateMs = new Date(person.customTrashDate || \"\").getTime();\nconst daysSinceTrash = Number.isFinite(trashDateMs) ? (Date.now() - trashDateMs) / 86400000 : Infinity;\nlet trashBlock = null;\nif (tagsLower.includes(\"permanent trash\")) trashBlock = { reason: \"trash_permanent\", rerouteStage: \"Permanent Trash\" };\nelse if (tagsLower.includes(\"denied credit\")) { if (daysSinceTrash <= 365) trashBlock = { reason: \"trash_denied_credit\", rerouteStage: \"Cold Rental Lead 1 month Hold\" }; }\nelse if (tagsLower.includes(\"temporary trash\")) { if (daysSinceTrash <= 90) trashBlock = { reason: \"trash_temporary\", rerouteStage: \"Trash\" }; }\n// ── TRASH_FALLTHROUGH_MARKER: the stage fallback must run whenever no TAG produced a\n// block -- as an \"else if\" it was skipped by any matching tag, so a\n// dateless/expired tag left someone LESS protected than an untagged\n// person. See scripts/n8n-add-trash-fallthrough.mjs.\nif (!trashBlock && [\"trash\", \"permanent trash\", \"cold rental lead 1 month hold\"].includes(stage.toLowerCase())) trashBlock = { reason: \"trash_untagged_fallback\", rerouteStage: null };\n// ── TAG_EXPIRY_CLEANUP_MARKER: strip a trash tag whose window has provably expired ──────\n// All three tags share ONE customTrashDate (the most recent transition), so\n// a stale tag riding alongside a fresh one silently wins the precedence rule\n// -- Denied Credit would give 365 days and reroute to Cold Hold when the real\n// event was a 90-day Trash. Precedence logic can't tell them apart; removing\n// the expired tag while it IS still expired is the only point where we can.\n// Permanent Trash has no window and is never removed. A tag with no real\n// date is left alone: Infinity days reads as \"expired\", but the absence of\n// OUR field is not evidence about the CLIENT's tag.\nconst TAG_WINDOW_DAYS = { \"temporary trash\": 90, \"denied credit\": 365 };\nconst hasRealTrashDate = Number.isFinite(trashDateMs);\nconst expiredTags = hasRealTrashDate\n  ? (person.tags || []).filter((t) => {\n      const w = TAG_WINDOW_DAYS[String(t).trim().toLowerCase()];\n      return w !== undefined && daysSinceTrash > w;\n    })\n  : [];\nconst cleanedTags = (person.tags || []).filter((t) => !expiredTags.includes(t));\nconst needsTagCleanup = expiredTags.length > 0;\n\nif (trashBlock) {\n  const needsReapplyReroute = !!trashBlock.rerouteStage && stage.toLowerCase() !== trashBlock.rerouteStage.toLowerCase();\n  return [{ json: {\n    proceed: false, reason: trashBlock.reason,\n    person_id: person.id ? String(person.id) : \"\",\n    person_name: person.name || \"\",\n    needs_reapply_reroute: needsReapplyReroute,\n    reapply_reroute_stage: trashBlock.rerouteStage || \"\",\n    reapply_preserved_trash_date: person.customTrashDate || \"\",\n    needs_tag_cleanup: needsTagCleanup,\n    expired_tags: expiredTags,\n    cleaned_tags: cleanedTags,\n    trash_date: person.customTrashDate || \"\",\n  } }];\n}\n\nif (stage.toLowerCase() === rejectedLabel) return fail(\"rejected_stage\");\n\n// ── STAGE_GATE_MARKER: FUB stage gate ────────────────────────────────────────────\n// A lead outside the allowed stages never gets a verification SMS.\n// Empty / missing allowed_stages == allow everything, so losing the Settings\n// row degrades to the pre-gate behaviour rather than muting the whole system.\nconst allowedStages = String(settings.allowed_stages ?? \"\")\n  .split(\",\")\n  .map((s) => s.trim().toLowerCase())\n  .filter(Boolean);\n// Sheets coerces on write and the stage names contain punctuation and mixed\n// case (\"Tenant Inquiry Lead (Do Not Contact)\"), so compare normalized.\nconst personStage = String(person.stage ?? \"\").trim().toLowerCase();\nconst stageAllowed = allowedStages.length === 0 || allowedStages.includes(personStage);\n\nif (!stageAllowed) return fail(\"stage_not_allowed:\" + stage);\n\n\n// Test-mode leads are reused indefinitely for end-to-end testing, so\n// don't let a prior session block a fresh test run.\nconst alreadySent = identityRows.some(r => String(r.lead_id) === String(person.id));\nif (!isTestMode && alreadySent) return fail(\"already_sent\");\n\n// ── PENDING_VERIFICATION_GUARD_MARKER ────────────────────────────────────────────────────────────\n// A second inquiry from the same lead while their first verification session\n// is still open must not fire a second Stripe session / second SMS — the\n// Inquiry flow calls this gate on every inquiry from an unverified lead by\n// design, so THIS is the place that has to be safe to call more than once.\n// Applies to test leads too (this is exactly how the bug was found).\n// Matched on person_id OR phone (last 10 digits — formats vary: FUB stores\n// bare digits, the sheet/Twilio store \"+1...\"), same discipline as the\n// Inquiry flow's identity lookup. A pending row older than the TTL is\n// treated as abandoned, not \"in flight\", so a lead who never finished\n// Stripe Identity isn't stuck forever.\nconst pendingTtlHours = Number(settings.identity_verification_pending_ttl_hours ?? 24) || 24;\nconst last10 = (v) => String(v ?? \"\").replace(/\\D/g, \"\").slice(-10);\nconst personLast10 = last10(phone);\nconst nowMs = Date.now();\nconst hasPendingSession = identityRows.some(r => {\n  const sameLead = String(r.lead_id ?? \"\") !== \"\" && String(r.lead_id) === String(person.id ?? \"\");\n  const samePhone = personLast10 !== \"\" && last10(r.phone) === personLast10;\n  if (!(sameLead || samePhone)) return false;\n  if (String(r.status ?? \"\").trim().toLowerCase() !== \"pending\") return false;\n  const sentMs = new Date(r.sent_at).getTime();\n  // Unparseable sent_at can't be judged stale — treat as still in flight\n  // rather than risk letting a second SMS through.\n  const ageHours = Number.isFinite(sentMs) ? (nowMs - sentMs) / 3600000 : 0;\n  return ageHours < pendingTtlHours;\n});\nif (hasPendingSession) return fail(\"verification_already_pending\");\n\nconst digits = phone.replace(/\\D/g, \"\");\nconst toNumber = digits.length === 10 ? `+1${digits}` : `+${digits}`;\n\nreturn [{ json: {\n  proceed: true,\n  reason: \"ok\",\n  person_id: String(person.id),\n  person_name: person.name || \"\",\n  first_name: person.firstName || person.name || \"\",\n  email: person.emails?.[0]?.value || undefined,\n  stage,\n  phone: toNumber,\n  from_number: settings.from_number || \"\",\n  identity_sms_template: settings.identity_verification_sms_template || \"\",\n  original_webhook_body: JSON.stringify(originalBody),\n  needs_tag_cleanup: needsTagCleanup,\n  expired_tags: expiredTags,\n  cleaned_tags: cleanedTags,\n  trash_date: person.customTrashDate || \"\",\n} }];"
+        }
+      },
+      {
+        "id": "idv-should-proceed",
+        "name": "Should Proceed?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          896,
+          208
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.proceed }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "idv-create-session",
+        "name": "Create Stripe Identity Session",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1120,
+          112
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://dashboard.rentingfreedom.com/api/identity/create-session",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ lead_id: $json.person_id, lead_name: $json.person_name, phone: $json.phone, email: $json.email, stage: $json.stage, source: \"fub_phone_added\" }) }}",
+          "options": {}
+        },
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "LstfkvTtbGOIQdtO",
+            "name": "RF Dashboard Internal API"
+          }
+        }
+      },
+      {
+        "id": "idv-build-sms",
+        "name": "Build Verification SMS",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1344,
+          112
+        ],
+        "parameters": {
+          "jsCode": "const guard = $(\"Check Guards\").first().json;\nconst session = $json;\n\nconst template = guard.identity_sms_template ||\n  \"Hi {{first_name}}, before we can schedule your showing we need to quickly verify your ID. Please complete this short verification: {{verify_link}}\";\n\nconst message = template\n  .replace(/\\{\\{first_name\\}\\}/g, guard.first_name || \"\")\n  .replace(/\\{\\{verify_link\\}\\}/g, session.url || \"\");\n\nreturn [{ json: {\n  message,\n  phone: guard.phone,\n  from_number: guard.from_number,\n  session_id: session.sessionId,\n  person_id: guard.person_id,\n  person_name: guard.person_name,\n  original_webhook_body: guard.original_webhook_body,\n  sent_at: new Date().toISOString(),\n} }];"
+        }
+      },
+      {
+        "id": "idv-send-sms",
+        "name": "Send Verification SMS",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          1568,
+          112
+        ],
+        "parameters": {
+          "from": "={{ $json.from_number }}",
+          "to": "={{ $json.phone }}",
+          "message": "={{ $json.message }}",
+          "options": {}
+        },
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        }
+      },
+      {
+        "id": "idv-log-sheet",
+        "name": "Log to Identity Verifications",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          1792,
+          112
+        ],
+        "parameters": {
+          "operation": "append",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Identity_Verifications",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "session_id": "={{ $('Build Verification SMS').first().json.session_id }}",
+              "lead_id": "={{ $('Build Verification SMS').first().json.person_id }}",
+              "lead_name": "={{ $('Build Verification SMS').first().json.person_name }}",
+              "phone": "={{ $('Build Verification SMS').first().json.phone }}",
+              "original_webhook_body": "={{ $('Build Verification SMS').first().json.original_webhook_body }}",
+              "status": "pending",
+              "sent_at": "={{ $('Build Verification SMS').first().json.sent_at }}",
+              "resolved_at": "",
+              "error_code": "",
+              "error_reason": ""
+            },
+            "schema": [
+              {
+                "id": "session_id",
+                "displayName": "session_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "lead_id",
+                "displayName": "lead_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "lead_name",
+                "displayName": "lead_name",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "phone",
+                "displayName": "phone",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "original_webhook_body",
+                "displayName": "original_webhook_body",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "status",
+                "displayName": "status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "sent_at",
+                "displayName": "sent_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "resolved_at",
+                "displayName": "resolved_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "error_code",
+                "displayName": "error_code",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "error_reason",
+                "displayName": "error_reason",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ]
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "credentials": {
+          "googleApi": {
+            "id": "eB6JrDkriJ1BATPy",
+            "name": "RF Dashboard Service Account (Project 2, Sheets)"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000
+      },
+      {
+        "id": "gate-fub-note",
+        "name": "FUB - Log Note",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          1568,
+          300
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.followupboss.com/v1/notes",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ personId: Number($('Build Verification SMS').first().json.person_id), body: 'Automated SMS sent (ID verification):\\n\\n' + $('Build Verification SMS').first().json.message }) }}",
+          "options": {}
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        }
+      },
+      {
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "parameters": {
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "options": {},
+          "url": "=https://api.followupboss.com/v1/notes?personId={{ ($('FUB - Get Person').item.json.people?.[0] ?? $('FUB - Get Person').item.json).id }}&limit=5&sort=-created"
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        },
+        "id": "trash-tag-get-notes",
+        "name": "FUB - Get Recent Notes",
+        "position": [
+          150,
+          380
+        ],
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": true
+      },
+      {
+        "id": "trash-tag-watcher",
+        "name": "Trash Transition Watcher",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          300,
+          380
+        ],
+        "parameters": {
+          "jsCode": "// ── TRASH_TAG_GATE_MARKER: stage-transition watcher, stamps customTrashDate ──\n// FUB's peopleUpdated webhook carries no previous-stage data (confirmed live,\n// 2026-08-06/07 against real executions) -- customTrashGateLastStage is our\n// own cache of \"what stage did we last see this person in\", written by this\n// node. A transition is \"entering a trash-family stage the cache didn't\n// already show them in\". See docs/n8n-workflows.md \"FUB Trash-tag gate\".\nconst personPayload = $items(\"FUB - Get Person\")[0]?.json || {};\nconst person = personPayload.people?.[0] || personPayload;\n// ── WATCHER_ISOLATION_MARKER: the notes fetch is allowed to fail without aborting this\n// workflow (onError: continueRegularOutput), so it can hand us an { error }\n// item instead of notes. We cannot check for the reapply self-collision\n// marker in that case -- so do NOT stamp customTrashDate on an unverified\n// basis. Refreshing the cache field is still safe and keeps future\n// comparisons accurate. See docs/n8n-workflows.md \"Watcher isolation\".\nconst notesPayload = $items(\"FUB - Get Recent Notes\")[0]?.json || {};\nconst notesUnavailable = !!notesPayload.error || !Array.isArray(notesPayload.notes);\nconst recentNotes = Array.isArray(notesPayload.notes) ? notesPayload.notes : [];\n\nconst TRASH_STAGES = [\"trash\", \"permanent trash\", \"cold rental lead 1 month hold\"];\nconst currentStage = String(person.stage ?? \"\").trim();\nconst currentStageLower = currentStage.toLowerCase();\nconst cachedStage = String(person.customTrashGateLastStage ?? \"\").trim();\nconst cachedStageLower = cachedStage.toLowerCase();\n\nconst cacheStale = cachedStageLower !== currentStageLower;\n\n// ── NEW_INQUIRY_LEAD_ALERT_MARKER: alert a human when a lead lands in the ─────\n// initial-inquiry stage with no phone number, so someone can go find one.\n// FUB's peopleUpdated payload carries no previous stage, so entry is detected\n// against customTrashGateLastStage — the cache this node already maintains.\n// See scripts/n8n-add-new-inquiry-lead-alert.mjs for the full rationale.\nconst NEW_LEAD_ALERT_STAGE = \"tenant inquiry lead (do not contact)\";\n// An empty cache means \"first time this system has ever seen this person\",\n// which is ambiguous: a brand-new lead and a pre-existing record that simply\n// predates the watcher look identical. 14 of the 16 people in this stage\n// today have an empty cache, so treating empty as \"new\" would text about all\n// of them. Their creation timestamp is what separates the two.\nconst NEW_LEAD_CREATED_WINDOW_MS = 60 * 60 * 1000;\nconst personCreatedMs = new Date(person.created ?? \"\").getTime();\nconst recentlyCreated =\n  Number.isFinite(personCreatedMs) && Date.now() - personCreatedMs < NEW_LEAD_CREATED_WINDOW_MS;\n// FUB returns phones: [] (not a missing key) for a lead with none — e.g. a\n// Zillow inquiry, which carries only an anonymized @convo.zillow.com email.\nconst hasPhone =\n  Array.isArray(person.phones) &&\n  person.phones.some((p) => String(p?.value ?? \"\").trim() !== \"\");\nconst enteringInquiryStage =\n  currentStageLower === NEW_LEAD_ALERT_STAGE &&\n  cacheStale &&\n  (cachedStageLower !== \"\" || recentlyCreated);\nconst notifyNewInquiryLead = enteringInquiryStage && !hasPhone;\nconst newLeadAlert = {\n  notify_new_inquiry_lead: notifyNewInquiryLead,\n  new_lead_person_id: person.id ?? \"\",\n  new_lead_name: String(person.name ?? \"\").trim(),\n  new_lead_stage: currentStage,\n  new_lead_source: String(person.source ?? \"\").trim(),\n  new_lead_email: person.emails?.[0]?.value ?? \"\",\n  new_lead_created: person.created ?? \"\",\n  new_lead_from_cache: cachedStage,\n};\n\n// ── WATCHER_SCOPE_MARKER: only act on the two gated tenant stages ──────────────\n// The client's FUB account is not only a rental CRM (owners, lenders,\n// developers, general contacts also live in it). Client decision 2026-08-07:\n// this watcher must not write to those people at all. Hardcoded rather than\n// read from Settings' allowed_stages because this node runs BEFORE\n// Read Settings -- see scripts/n8n-add-watcher-scope.mjs for the full\n// rationale. Keep in sync with the production allowed_stages value.\nconst WATCH_SCOPE_STAGES = [\n  \"tenant inquiry lead (do not contact)\",\n  \"tenant still looking for rental\",\n];\nconst inScope = WATCH_SCOPE_STAGES.includes(currentStageLower);\nconst cachedInScope = WATCH_SCOPE_STAGES.includes(cachedStageLower);\nconst inTrashFamily = TRASH_STAGES.includes(currentStageLower);\n// A first-ever-seen person already sitting in trash (empty cache) is still\n// stamped: a trash tag with NO customTrashDate computes as Infinity days,\n// which the tag policy treats as EXPIRED and lets through. Stamping errs\n// toward blocking, which is the safe direction.\nconst watcherApplies = inScope || (inTrashFamily && (cachedInScope || cachedStageLower === \"\"));\nif (!watcherApplies) {\n  return [{ json: { needs_write: false, reason: \"out_of_scope\", stage: currentStage, ...newLeadAlert, notify_new_inquiry_lead: false } }];\n}\nconst enteringTrashFamily = inTrashFamily && cacheStale && (cachedInScope || cachedStageLower === \"\");\n\n// Self-collision: the reapply-reroute nodes further down this same workflow\n// already set customTrashDate correctly in the SAME PUT call that moved the\n// stage back -- and that PUT itself re-fires this webhook. Detect that by\n// looking for the marker note it leaves, posted in the last 5 minutes, so\n// this node doesn't clobber the preserved date with \"now\".\nconst REAPPLY_NOTE_MARKER = \"Automation: reapply blocked\";\nconst recentReapplyNote = recentNotes.find((n) => {\n  if (!String(n.body ?? \"\").includes(REAPPLY_NOTE_MARKER)) return false;\n  const noteMs = new Date(n.created).getTime();\n  return Number.isFinite(noteMs) && Date.now() - noteMs < 5 * 60 * 1000;\n});\n\nconst shouldStamp = enteringTrashFamily && !recentReapplyNote && !notesUnavailable;\n\nif (!shouldStamp && !cacheStale) {\n  return [{ json: { needs_write: false, reason: \"no_change\", ...newLeadAlert } }];\n}\n\nconst updateBody = {};\nif (shouldStamp) updateBody.customTrashDate = new Date().toISOString();\nif (cacheStale) updateBody.customTrashGateLastStage = currentStage;\n\nreturn [{ json: {\n  needs_write: true,\n  person_id: person.id,\n  update_body: updateBody,\n  stamped: shouldStamp,\n  suppressed_by_reapply_note: !!recentReapplyNote,\n  ...newLeadAlert,\n} }];"
+        }
+      },
+      {
+        "id": "trash-tag-watcher-if",
+        "name": "Watcher Needs Write?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          450,
+          380
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.needs_write }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "parameters": {
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "options": {},
+          "method": "PUT",
+          "url": "=https://api.followupboss.com/v1/people/{{ $json.person_id }}",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify($json.update_body) }}"
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        },
+        "id": "trash-tag-update-watcher",
+        "name": "FUB - Update Person (Watcher)",
+        "position": [
+          600,
+          460
+        ],
+        "onError": "continueRegularOutput"
+      },
+      {
+        "id": "trash-tag-reroute-if",
+        "name": "Needs Reapply Reroute?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          1050,
+          380
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.needs_reapply_reroute }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "parameters": {
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "options": {},
+          "method": "PUT",
+          "url": "=https://api.followupboss.com/v1/people/{{ $json.person_id }}",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ stage: $json.reapply_reroute_stage, customTrashDate: $json.reapply_preserved_trash_date }) }}"
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        },
+        "id": "trash-tag-update-reapply",
+        "name": "FUB - Update Person (Reapply)",
+        "position": [
+          1200,
+          460
+        ]
+      },
+      {
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "parameters": {
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "options": {},
+          "method": "POST",
+          "url": "https://api.followupboss.com/v1/notes",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ personId: Number($('Check Guards').item.json.person_id), body: 'Automation: reapply blocked, rerouted to ' + $('Check Guards').item.json.reapply_reroute_stage + ', trash_date preserved from ' + $('Check Guards').item.json.reapply_preserved_trash_date }) }}"
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        },
+        "id": "trash-tag-reapply-note",
+        "name": "FUB - Log Reapply Note",
+        "position": [
+          1350,
+          460
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.needs_tag_cleanup }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "name": "Tag Cleanup Needed?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          892,
+          528
+        ],
+        "id": "af381824-b915-4508-b201-8b2ad7a7602b"
+      },
+      {
+        "parameters": {
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "options": {},
+          "method": "PUT",
+          "url": "=https://api.followupboss.com/v1/people/{{ $json.person_id }}",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ tags: $json.cleaned_tags }) }}"
+        },
+        "name": "FUB - Remove Expired Tags",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1132,
+          528
+        ],
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        },
+        "onError": "continueRegularOutput",
+        "id": "d2b88d56-3cb8-494a-97cc-96b3c664ddce"
+      },
+      {
+        "parameters": {
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "options": {},
+          "method": "POST",
+          "url": "https://api.followupboss.com/v1/notes",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ personId: Number($('Check Guards').item.json.person_id), body: 'Automation: trash tag(s) expired and removed: ' + $('Check Guards').item.json.expired_tags.join(', ') + ' (trash_date ' + $('Check Guards').item.json.trash_date + ')' }) }}"
+        },
+        "name": "FUB - Log Tag Cleanup Note",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1372,
+          528
+        ],
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        },
+        "onError": "continueRegularOutput",
+        "id": "c2401441-4b40-46ff-81cf-eeeb7cee188a"
+      },
+      {
+        "id": "new-lead-alert-if",
+        "name": "New Inquiry Lead?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          450,
+          700
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.notify_new_inquiry_lead }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "new-lead-alert-settings",
+        "name": "Read Settings (New Lead Alert)",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          660,
+          700
+        ],
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Settings",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "alwaysOutputData": true,
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000,
+        "onError": "continueRegularOutput"
+      },
+      {
+        "id": "new-lead-alert-build",
+        "name": "Build New-Lead Alert",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          870,
+          700
+        ],
+        "parameters": {
+          "jsCode": "// ── NEW_INQUIRY_LEAD_ALERT_MARKER: build the staff SMS ───────────\n// Named-node reference, never $json: the immediate input here is the Settings\n// read's rows, not the watcher's output. Gotcha 12 / 19.\nconst lead = $(\"Trash Transition Watcher\").first().json;\n\n// The Settings read is onError-tolerant, so it can hand back an { error }\n// item instead of rows. Fail loudly in the execution log rather than sending\n// a text with an empty \"to\" (which is what Twilio error 21604 looks like).\nconst rows = $items(\"Read Settings (New Lead Alert)\").map((i) => i.json || {});\nconst settings = {};\nfor (const row of rows) {\n  if (row.key && row.value !== undefined) settings[row.key] = row.value;\n}\n\n// Reuses the Zillow flow's recipient by client decision — same \"someone must\n// go find this lead's phone number\" job, same person doing it today.\nconst alertPhone = String(settings.rental_application_alert_phone ?? \"\").trim();\nconst fromNumber = String(settings.from_number ?? \"\").trim();\nif (!alertPhone || !fromNumber) {\n  console.log(\n    \"NEW-LEAD ALERT NOT SENT — missing Settings values. \" +\n      `person_id=${lead.new_lead_person_id} name=\"${lead.new_lead_name}\" ` +\n      `rental_application_alert_phone=\"${alertPhone}\" from_number=\"${fromNumber}\"`\n  );\n  return [];\n}\n\nconst name = lead.new_lead_name || `FUB person #${lead.new_lead_person_id}`;\nconst source = lead.new_lead_source ? ` Source: ${lead.new_lead_source}.` : \"\";\nconst message =\n  `RF: New tenant inquiry lead ${name} entered \"${lead.new_lead_stage}\" in FUB ` +\n  `with no phone number. FUB person #${lead.new_lead_person_id}.${source} ` +\n  `Add their phone number in FUB to kick off the usual verification flow.`;\n\nconsole.log(\n  `NEW-LEAD ALERT person_id=${lead.new_lead_person_id} name=\"${name}\" ` +\n    `from_cache=\"${lead.new_lead_from_cache}\" created=${lead.new_lead_created}`\n);\n\nreturn [{ json: {\n  message,\n  alert_phone: alertPhone,\n  from_number: fromNumber,\n  person_id: lead.new_lead_person_id,\n  person_name: name,\n  sent_at: new Date().toISOString(),\n} }];"
+        }
+      },
+      {
+        "id": "new-lead-alert-send",
+        "name": "Send New-Lead Alert",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          1080,
+          700
+        ],
+        "parameters": {
+          "from": "={{ $json.from_number }}",
+          "to": "={{ $json.alert_phone }}",
+          "message": "={{ $json.message }}",
+          "options": {}
+        },
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        },
+        "onError": "continueRegularOutput"
+      },
+      {
+        "id": "early-test-gate-if",
+        "name": "Is Test Lead? (Early)",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          630,
+          300
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $('FUB - Get Person').first().json.people?.[0]?.firstName || '' }}",
+                "rightValue": "Test",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "early-test-gate-result",
+        "name": "Build Not-Test-Mode Result",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          630,
+          460
+        ],
+        "parameters": {
+          "jsCode": "// ── EARLY_TEST_GATE_MARKER ────────────────────────────────────────────────────────────\n// See scripts/n8n-add-early-test-gate.mjs. Mirrors Check Guards' own\n// fail(\"not_test_mode\") EXACTLY (same shape, same fields) — this does not\n// change what happens to a non-test lead, only how cheaply it happens.\n// Check Guards remains the single source of truth for every other rule.\nconst person = $(\"FUB - Get Person\").first().json?.people?.[0] || {};\nreturn [{ json: {\n  proceed: false,\n  reason: \"not_test_mode\",\n  person_id: person.id ? String(person.id) : \"\",\n  person_name: person.name || \"\",\n} }];"
+        }
+      }
+    ],
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "node": "FUB - Get Person",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Get Person": {
+        "main": [
+          [
+            {
+              "node": "FUB - Get Recent Notes",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Settings": {
+        "main": [
+          [
+            {
+              "node": "Read Identity Verifications",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Identity Verifications": {
+        "main": [
+          [
+            {
+              "node": "Check Guards",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check Guards": {
+        "main": [
+          [
+            {
+              "node": "Should Proceed?",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Tag Cleanup Needed?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Should Proceed?": {
+        "main": [
+          [
+            {
+              "node": "Create Stripe Identity Session",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Needs Reapply Reroute?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Create Stripe Identity Session": {
+        "main": [
+          [
+            {
+              "node": "Build Verification SMS",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Verification SMS": {
+        "main": [
+          [
+            {
+              "node": "Send Verification SMS",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Send Verification SMS": {
+        "main": [
+          [
+            {
+              "node": "FUB - Log Note",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Log Note": {
+        "main": [
+          [
+            {
+              "node": "Log to Identity Verifications",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Get Recent Notes": {
+        "main": [
+          [
+            {
+              "node": "Trash Transition Watcher",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Trash Transition Watcher": {
+        "main": [
+          [
+            {
+              "node": "Watcher Needs Write?",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "New Inquiry Lead?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Watcher Needs Write?": {
+        "main": [
+          [
+            {
+              "node": "FUB - Update Person (Watcher)",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Is Test Lead? (Early)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Update Person (Watcher)": {
+        "main": [
+          [
+            {
+              "node": "Is Test Lead? (Early)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Needs Reapply Reroute?": {
+        "main": [
+          [
+            {
+              "node": "FUB - Update Person (Reapply)",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      },
+      "FUB - Update Person (Reapply)": {
+        "main": [
+          [
+            {
+              "node": "FUB - Log Reapply Note",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Tag Cleanup Needed?": {
+        "main": [
+          [
+            {
+              "node": "FUB - Remove Expired Tags",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      },
+      "FUB - Remove Expired Tags": {
+        "main": [
+          [
+            {
+              "node": "FUB - Log Tag Cleanup Note",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "New Inquiry Lead?": {
+        "main": [
+          [
+            {
+              "node": "Read Settings (New Lead Alert)",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      },
+      "Read Settings (New Lead Alert)": {
+        "main": [
+          [
+            {
+              "node": "Build New-Lead Alert",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build New-Lead Alert": {
+        "main": [
+          [
+            {
+              "node": "Send New-Lead Alert",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Is Test Lead? (Early)": {
+        "main": [
+          [
+            {
+              "node": "Read Settings",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Build Not-Test-Mode Result",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Not-Test-Mode Result": {
+        "main": [
+          [
+            {
+              "node": "Should Proceed?",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Tag Cleanup Needed?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Justin Artis",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-08-18T20:10:41.507Z",
+        "id": 347,
+        "workflowId": "L13GUyrWbjSJwn8p",
+        "versionId": "081d7c98-66ad-4c9f-8319-a018402f893a",
+        "event": "deactivated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      },
+      {
+        "createdAt": "2026-08-18T20:10:41.535Z",
+        "id": 348,
+        "workflowId": "L13GUyrWbjSJwn8p",
+        "versionId": "081d7c98-66ad-4c9f-8319-a018402f893a",
+        "event": "activated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    ]
+  }
+}
