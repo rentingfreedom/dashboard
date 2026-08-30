@@ -1655,14 +1655,105 @@ would be pure noise. Declines are logged as `[sheets-unavailable] … no alert`.
 ```bash
 node scripts/n8n-add-sheets-unavailable-alert.mjs [--apply] [--revert --apply]
 ```
-Backup `n8n/BEFORE-sheets-unavailable-alert/`. **Not yet proven against a real
-bail** — it is wiring-verified only. If it stays silent through one, read the
-execution log for the `[sheets-unavailable]` line; the likely cause is the
-would-have-been-served filter declining.
+Backup `n8n/BEFORE-sheets-unavailable-alert/`. If it stays silent through a
+bail, read the execution log for the `[sheets-unavailable]` line; the likely
+cause is the would-have-been-served filter declining.
 
-> **Superseded in part once the retry lands.** With automatic retry this alert
-> should move to the *exhausted* branch so it reports only leads the system
-> could not save. Today it fires on the first bail.
+> **Moved to the exhausted branch 2026-08-30** by `SHEETS_RETRY_MARKER` below.
+> It no longer fires on the first bail — only on a lead the automatic retry
+> could not save — and its copy says so rather than asking for a re-fire the
+> system has already attempted three times. Note this makes it a **strictly
+> rarer** alert: silence now means "recovered", not "never noticed".
+
+### Automatic retry for `sheets_unavailable` — `SHEETS_RETRY_MARKER` (2026-08-30)
+
+The bail above is now recovered automatically instead of merely reported.
+This is what eliminates the manual recovery in
+`scripts/_oneoff-cassandra-recover.mjs`.
+
+```
+Check Guards -> Sheets Unavailable? [true] -> Retry Decision -> Retry?
+        Retry? [true]  -> Wait Before Gate Retry (2 min) -> Re-POST Identity Gate
+        Retry? [false] -> Build Sheets-Unavailable Alert -> Send ... Alert
+```
+
+**It re-POSTs the gate's own webhook rather than retrying inline.** A retry has
+to re-run the *whole* path — fresh Sheets reads, the watcher, every guard — not
+just the failed read, and it must leave no partial state. `already_sent` makes
+it idempotent by construction. Precedent for the shape: `Trigger Identity Gate`
+in the inquiry flow posts to this same webhook.
+
+> **The counter rides in the webhook body and is load-bearing.** `body._retry`
+> is read back out of `$('Webhook')` on the next run and capped at
+> `MAX_RETRIES = 2` (3 executions per lead, worst case). Without it a sustained
+> quota outage becomes an **infinite self-POST loop that makes the outage
+> worse** — an unbounded failure mode that lands during an incident. It is
+> hardcoded, deliberately **not** a Settings key: Settings is part of what may
+> be unavailable. A non-numeric counter reads as `NaN`, which never satisfies
+> `<`, so a garbled body gives up rather than looping.
+
+**It only retries leads who would actually have been served** — gated tenant
+stage, phone on file, no trash tag — the same filter the alert applies, for the
+same reason: the early stage filter admits trash-family stages so the
+reapply-reroute stays reachable, and retrying those would add load in the exact
+minute the quota is exhausted. The filter is **duplicated** in `Retry Decision`
+and `Build Sheets-Unavailable Alert` (the alert must keep working standalone);
+`sheets-retry-verify.mjs` asserts the two agree case-for-case, because that is
+exactly the kind of duplication that drifts.
+
+**Why two minutes.** The Sheets nodes already spend 5 × 15s retrying internally
+*before* `Check Guards` ever sees the error, so any bail means the outage
+already outlasted 75s. A shorter wait would just spend the budget inside the
+same bad minute. Quota exhaustion here is a burst measured in
+seconds-to-minutes, so one 2-minute wait should recover most of them.
+
+> **Gotcha 19 was a live concern here, not a ritual.** Two nodes ARE inserted
+> in front of `Build Sheets-Unavailable Alert`. That is safe only because it
+> reads `$('Check Guards')`, `$items("FUB - Get Person")` and
+> `$items("Read Settings")` — named references, never `$json`/`$input`. **The
+> builder script checks this and refuses to run if that ever stops being
+> true.** Nothing is inserted ahead of `Should Proceed?` or
+> `Tag Cleanup Needed?`, which do read their immediate input.
+
+**Cost:** a Wait node parks the execution, so a burst leaves several open. Fine
+at current volume. A parked execution is **invisible to
+`GET /executions`** until it resumes — do not read an empty list as "nothing
+happened" while a retry is in flight.
+
+> **The Wait node had no precedent anywhere in this instance**, so it was
+> proved in a throwaway workflow first — both the in-process (10s) and the
+> DB-resume (2 min) paths — before touching the live gate. Worth repeating for
+> any node type this estate has never run.
+
+```bash
+node scripts/n8n-add-sheets-retry.mjs [--apply] [--revert --apply]
+node scripts/sheets-retry-verify.mjs                       # 62 assertions
+```
+Backup `n8n/BEFORE-sheets-unavailable-retry/` — **note the name.**
+`n8n/BEFORE-sheets-retry/` is a *different* directory belonging to
+`n8n-set-sheets-retry.mjs` (the 68-node retry standardisation), and it holds
+that script's only revert data for 13 workflows. This script briefly used it
+and clobbered `L13GUyrWbjSJwn8p.json`; recovered from git, which is the sole
+reason it was recoverable. **Give every new script its own `BEFORE-` directory
+and grep for the name first.** `--revert` also restores the alert's
+original message text, and refuses if it can't find the block it patched.
+
+**Verified live 2026-08-30, end to end, on a forced bail.** `Read Identity
+Verifications` was pointed at a non-existent tab for ~12s while a fresh test
+person (2753, gated stage, phone) had a phone added:
+
+| Execution | `_retry` | Outcome |
+|---|---|---|
+| **29900** | (none) | `Check Guards` → `sheets_unavailable`; `Retry Decision` → `should_retry=true attempt=0`; Wait ran; `Re-POST Identity Gate` fired |
+| **29901** | `1` | Sheets healthy → `proceed=true reason="ok"` → Stripe session → **real verification SMS** `SM3e25b931…` `error_code: null` → `Log to Identity Verifications` wrote the row |
+
+That is precisely the sequence Cassandra Ferra was lost to, recovered without a
+human. The **exhaustion** branch (cap reached → alert) is covered by the
+verifier's synthetic cases but has **not** been observed live.
+
+Test artifact: FUB person **2753**, moved to stage `Trash` after the run so the
+reminder workflow's guards block it — left in a gated stage it would have
+texted Andrew once a day for four days.
 
 ### Alert coverage gap: `alert_cc_phones` misses rental applications
 
@@ -2316,15 +2407,84 @@ Which steps still fire depends on the anchor, and this is the useful part:
 | `start` (24h, 2h, reconfirm) | suppressed permanently by the **late-booking guard** when booked after the target time — no alert |
 | `end` (followup 1/2/3/7-day) | deliberately **unguarded** so they catch up → each fires, fails, and alerts |
 
-Isaac will therefore generate **2 more failure alerts** (3-day and 7-day SMS).
+Isaac would therefore have generated **2 more failure alerts** (3-day and
+7-day SMS). Fixed below before either fired.
 
-> **Proposed fix, designed not built.** In `Find Due Notifications`, skip
-> `channel === 'sms'` steps when the row's phone is **empty**, marking them
-> `skipped_no_phone` instead of attempting. An empty phone can never succeed, so
-> the alert carries no actionable information. Keep attempting — and alerting —
-> when a phone exists but is malformed, which IS a data error a human can fix.
-> `Find Due Notifications` already treats any non-`false` value as resolved, so
-> a new sentinel needs no other changes.
+### No-phone SMS skip — `NO_PHONE_SKIP_MARKER` (2026-08-30)
+
+An invitee SMS step whose recipient is **empty** is now marked
+`skipped_no_phone` instead of being attempted. An empty phone can never
+succeed, so the alert carried no actionable information. A **malformed**
+phone still attempts and still alerts — that IS a data error a human can fix.
+
+```
+Build Message -> Missing Recipient? [true]  -> Mark Step Skipped -> Loop Back
+                                   [false] -> Channel?   (unchanged)
+```
+
+> **Two corrections to the design as originally sketched here — both would
+> have shipped bugs.**
+>
+> 1. *"`Find Due Notifications` already treats any non-`false` value as
+>    resolved, so a new sentinel needs no other changes."* **False.** The
+>    deployed check is an explicit two-value allowlist —
+>    `sentColValue === 'true' || sentColValue === 'failed'`. A
+>    `skipped_no_phone` sentinel would have been **inert**, and because
+>    end-anchored follow-ups have no upper bound the step would have
+>    re-queued every 5 minutes **forever** — the exact crash-loop shape the
+>    sentinel exists to prevent. The patch adds it to that allowlist.
+> 2. *Skip on `channel === 'sms'`.* That would have **silently killed the
+>    host's SMS.** `host_sms_1h` is channel `sms` but `Build Message` sends it
+>    to `settings.cal_justin_phone`, not `invitee_phone` — it succeeds on
+>    exactly the bookings whose invitee SMS fail (see the table above). The
+>    skip is therefore keyed on the **recipient**, not the channel.
+
+Rules carry `recipient`: `host_sms_1h` → `'host'`, `nicole_2h` → `'nicole'`,
+everything unmarked defaults to `'invitee'`. Only `channel === 'sms' &&
+recipient === 'invitee' &&` an empty `to` is skipped.
+
+> **An empty `cal_justin_phone` deliberately still attempts and still alerts.**
+> That is a Settings misconfiguration affecting *every* booking, not a property
+> of one — silently marking it resolved one booking at a time would bury it.
+
+`Mark Step Skipped` writes into `$('Build Message').item.json.range`, the same
+way `Mark Step Sent` / `Mark Step Failed` do. Unlike those two it carries
+`onError: continueRegularOutput`: nothing reads its output, and a failed mark
+must not starve the batch — worst case the next tick re-evaluates, which is
+harmless because no send is attempted either way. Every path rejoins
+`Loop Back`, so `SplitInBatches` always advances.
+
+> **Gotcha 19.** `Channel?` reads `$json.channel` from its immediate input, so
+> inserting ahead of it is only safe because an IF passes items through
+> unchanged. `Mark Step Sent`, `Mark Step Failed` and `Build Send-Failure
+> Record` all reach back via `$('Build Message').item`, which the insertion
+> preserves. The verifier asserts all four.
+
+```bash
+node scripts/n8n-add-no-phone-skip.mjs [--apply] [--revert --apply]
+node scripts/no-phone-skip-verify.mjs                      # 53 assertions
+```
+Backup `n8n/BEFORE-no-phone-skip/`. **`--revert` does not rewrite rows already
+stamped `skipped_no_phone`** — they become unresolved again and those SMS
+steps will re-fire (and fail). The script says so when reverting.
+
+**Verified live 2026-08-30, execution 29918.** A test booking was appended
+whose *only* unresolved step was a phoneless invitee SMS follow-up — every
+email step pre-marked `TRUE`, every start-anchored step days past — so no send
+was possible in either direction. The tick ran:
+
+```
+Find Due Notifications=1 | Any Due?=1 | Process One at a Time runs=2
+Build Message=1 | Missing Recipient?=1 | Mark Step Skipped=1 | Loop Back=1
+```
+
+`Channel?`, `Send SMS`, `Send Failed?` and `Send Failure Alert` **never ran**,
+the sentinel landed in the sheet, and the batch completed. Test row deleted
+afterwards.
+
+> **Constructing the fixture was the only way to see it today.** Isaac's next
+> real SMS step is not due until ~8/31 21:00Z, and the verifier's synthetic
+> cases prove the logic but not the wiring under n8n's own engine.
 
 ### Immediate Sends booking idempotency (2026-08-06, was launch-blocking)
 
@@ -2650,6 +2810,8 @@ nothing, write nothing, and touch no n8n state.
 | `new-inquiry-lead-alert-verify.mjs` | **47 assertions** — detection, wiring, isolation config |
 | `zillow-flow-verify.mjs` | parse + dedup against the **real** FUB search endpoint |
 | `doorloop-recon-verify.mjs` / `doorloop-recon-cases.mjs` | the report; `--live` diffs deployed jsCode |
+| `sheets-retry-verify.mjs` | **62 assertions** — the retry cap, the served-filter, the wiring |
+| `no-phone-skip-verify.mjs` | **53 assertions** — the sentinel allowlist, recipient keying |
 | `launch-audit.mjs` | all 12 workflows, 16 hard gates, 3 alert phones |
 
 For a live negative stage-gate test, flip the setting, fire, and restore:
