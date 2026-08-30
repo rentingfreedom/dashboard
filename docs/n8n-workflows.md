@@ -1768,6 +1768,62 @@ Consequence, and it caused real confusion 2026-08-30: the operator was CC'd on
 every one of whom arrived as an **application**, not an inquiry. Nicole received
 all four correctly. Not overload; two disjoint alert paths.
 
+**CLOSED 2026-08-30 — `APPLICATION_ALERT_CC_MARKER`.** Client decision: extend
+the CC list to applications. All three Zillow alert nodes now fan out to
+`rental_application_alert_phone` **plus** `alert_cc_phones`.
+
+```
+FUB - Add Note To Existing -> Build Existing-Match Alert -> Send Existing-Match Alert
+FUB - Add Note             -> Build Phone-Needed Alert   -> Send Phone-Needed SMS
+Parse Failed?              -> Build Parse-Failed Alert   -> Send Parse-Failed Alert
+```
+
+> **Fan-out alone was NOT sufficient here, and this is the part that is easy
+> to get wrong.** All three Twilio nodes resolved `to` through a **named-node**
+> reference (`$('Parse & Resolve Application').item.json.alert_phone`), not
+> their immediate input. Feeding a Twilio node N items only sends N different
+> texts if `to` reads `$json` — a named reference re-resolves the *same paired
+> source item* every time, so the fan-out would have texted one number N
+> times and looked like it worked. Each Twilio node is therefore repointed at
+> `$json`, and its message template moves into the build node with it.
+
+> **Nicole is never dropped, unlike the inquiry alert.** `Build Inquiry Alert`
+> treats an empty `alert_cc_phones` as "notification off"; here it means
+> "Nicole only". An application alert is the **only** mechanism that moves an
+> applicant forward (an existing-match never changes their stage), so it must
+> not acquire an off switch it never had. Recipients are deduped on the last
+> 10 digits, so setting `alert_cc_phones` to Nicole's own number does not text
+> her twice.
+
+**Isolation was required, not optional.** None of the three carried `onError`,
+and each has a parallel `Append … Row` sibling. Fan-out means one bad CC
+number would fail the Twilio node and abort the execution, **taking the row
+append with it** — a new failure mode created by this change. All three now
+carry `onError: continueRegularOutput`.
+
+```bash
+node scripts/n8n-add-application-alert-cc.mjs [--apply] [--revert --apply]
+node scripts/application-alert-cc-verify.mjs               # 63 assertions
+```
+Backup `n8n/BEFORE-application-alert-cc/`, which also holds
+`original-twilio-params.json` — **`--revert` depends on that file** to restore
+the original templates and refuses without it.
+
+> **The verifier's headline assertion is message byte-identity.** The
+> templates were retyped from n8n expression syntax into JS concatenation,
+> exactly the transcription that silently drops an em-dash, a quote, or the
+> conditional `Review:` suffix — and nobody would notice from outside, Nicole
+> would just start getting subtly wrong texts. The verifier renders the
+> **original** templates (from that backup file) with a small `{{ }}`
+> evaluator and asserts the new output matches character for character, with
+> and without `review_link`.
+
+**Not live-verified.** n8n's public API cannot fire a Gmail Trigger
+(`POST /workflows/:id/run` → 405), so this needs the editor with pinned data,
+or the next real application. Everything is offline-verified against the
+deployed jsCode plus the connections graph. **The next real Zillow application
+is the live test** — expect Nicole *and* the CC number to both receive it.
+
 ### Early stage filter — `EARLY_STAGE_FILTER_MARKER` (2026-08-26)
 
 **23 of 35 Identity Gate executions were silently doing nothing.** Every one
@@ -2810,6 +2866,7 @@ nothing, write nothing, and touch no n8n state.
 | `trash-tag-gate-verify.mjs` | **377 assertions** — all 6 trash-tag nodes + the watcher |
 | `new-inquiry-lead-alert-verify.mjs` | **47 assertions** — detection, wiring, isolation config |
 | `zillow-flow-verify.mjs` | parse + dedup against the **real** FUB search endpoint |
+| `application-alert-cc-verify.mjs` | **63 assertions** — message byte-identity, recipient fan-out |
 | `doorloop-recon-verify.mjs` / `doorloop-recon-cases.mjs` | the report; `--live` diffs deployed jsCode |
 | `sheets-retry-verify.mjs` | **62 assertions** — the retry cap, the served-filter, the wiring |
 | `no-phone-skip-verify.mjs` | **53 assertions** — the sentinel allowlist, recipient keying |

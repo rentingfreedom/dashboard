@@ -1,0 +1,26 @@
+{
+  "Send Existing-Match Alert": {
+    "parameters": {
+      "from": "={{ $('Parse & Resolve Application').item.json.from_number }}",
+      "to": "={{ $('Parse & Resolve Application').item.json.alert_phone }}",
+      "message": "=RF: Zillow rental application from {{ $('Parse & Resolve Application').item.json.applicant_name }} for {{ $('Parse & Resolve Application').item.json.canonical_address }} matches an EXISTING FUB person #{{ $('Check Existing Match').item.json.existing_person_id }} (\"{{ $('Check Existing Match').item.json.existing_stage }}\"). No duplicate created — review manually.{{ $('Parse & Resolve Application').item.json.review_link ? ' Review: ' + $('Parse & Resolve Application').item.json.review_link : '' }}",
+      "options": {}
+    }
+  },
+  "Send Phone-Needed SMS": {
+    "parameters": {
+      "from": "={{ $('Parse & Resolve Application').item.json.from_number }}",
+      "to": "={{ $('Parse & Resolve Application').item.json.alert_phone }}",
+      "message": "=RF: Zillow rental application from {{ $('Parse & Resolve Application').item.json.applicant_name }} for {{ $('Parse & Resolve Application').item.json.canonical_address }}. Created FUB person #{{ $('FUB - Create Person').item.json.id }} in \"{{ $('Parse & Resolve Application').item.json.fub_stage }}\" — add their phone number in FUB to kick off the usual verification flow.{{ $('Parse & Resolve Application').item.json.review_link ? ' Review: ' + $('Parse & Resolve Application').item.json.review_link : '' }}",
+      "options": {}
+    }
+  },
+  "Send Parse-Failed Alert": {
+    "parameters": {
+      "from": "={{ $json.from_number }}",
+      "to": "={{ $json.alert_phone }}",
+      "message": "=RF: got a Zillow rental-application-looking email I could not parse — check manually. Subject: \"{{ $json.raw_subject }}\"",
+      "options": {}
+    }
+  }
+}

@@ -387,6 +387,22 @@ regression:
    so the tag reads as expired and the block comes from the stage fallback, which
    matches the reason string exactly. **Fix by pointing it at a non-trash subject.**
 
+3. **`zillow-flow-verify` — 3 failures found 2026-08-30, 1 fixed, 2 left.**
+   Not caused by the alert-CC change (diffed: only the three Twilio nodes
+   changed, `Parse & Resolve Application` and `Check Existing Match` were
+   untouched). Case D asserted `test_gate_open: false` for a non-Test
+   applicant — **that is one of the 16 gates the launch lifted**, so it was
+   the same rot as 1b above and is now rewritten to assert the launched
+   behaviour, plus that the applicant's name changes nothing else about the
+   parse.
+
+   The remaining **2 are live-FUB-data coupling**, the same disease as
+   `stage-gate-verify`: Case A does a real `?name=` search for a name it
+   expects zero matches on and the CRM has since grown one; Case B asserts
+   test person **2607** is not trashed, and the 593-person trash backfill
+   trashed it. Both need the verifier decoupled from mutable live records —
+   a real fix, not a one-line edit, and not attempted here.
+
 `new-inquiry-lead-alert-verify.mjs` still **47/47**.
 
 ### Post-launch state of the manual items

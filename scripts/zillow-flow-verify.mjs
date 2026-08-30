@@ -185,9 +185,14 @@ console.log("─".repeat(72));
   expect("reason", j.reason, "duplicate_message");
 }
 
-// ─── Case D: a real applicant name (not "Test ...") must hit the test-gate skip, not create anyone ──
+// ─── Case D: post-launch, a real applicant name must be PROCESSED ──
+// This asserted the opposite until 2026-08-30 (`test_gate_open: false`, routing
+// to Append Test-Gate-Skipped Row). The launch lifted that gate — this is one
+// of the 16 — so the assertion was testing a behaviour that no longer exists
+// and had been failing ever since. Rewritten for the launched state rather
+// than annotated as expected; see the launch runbook.
 console.log("\n" + "─".repeat(72));
-console.log("Case D — non-test applicant name must NOT pass the test gate");
+console.log("Case D — post-launch: a non-test applicant name is PROCESSED (gate lifted)");
 console.log("─".repeat(72));
 {
   const email = makeEmail("test-msg-real-001", "Jordan Realperson", "102 Braeford");
@@ -195,8 +200,13 @@ console.log("─".repeat(72));
   const j = out[0].json;
   expect("skip", j.skip, false);
   expect("is_test_lead", j.is_test_lead, false);
-  expect("test_gate_open", j.test_gate_open, false);
-  console.log("  → would route to \"Test Gate Closed?\" → Append Test-Gate-Skipped Row (no FUB write, no SMS)");
+  expect("test_gate_open (gate lifted at launch)", j.test_gate_open, true);
+  // The applicant name must still not change anything else about the parse.
+  const testEmail = makeEmail("test-msg-real-002", "Test Realperson", "102 Braeford");
+  const tj = runParse(parseCode, { emails: [testEmail], properties, settings: settingsRows, appRows: [] })[0].json;
+  expect("a real name parses the same address as a Test name", j.canonical_address, tj.canonical_address);
+  expect("  and reaches the same match_status", j.match_status, tj.match_status);
+  console.log("  → would route to \"Should Process?\" → FUB - Search Existing Person, like any applicant");
 }
 
 // ─── Wiring: confirm the IF-node graph actually routes where the code assumes ──
