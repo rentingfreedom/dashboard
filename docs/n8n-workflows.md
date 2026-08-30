@@ -1013,10 +1013,33 @@ and cross-checks the four IF nodes against the live `connections` graph. All pas
 new applicant, existing match (person 2607), redelivered `message_id` skipped, and a
 non-`Test` name correctly routed to `Test Gate Closed?`.
 
-**Still open:** multi-email-per-poll behaviour (the code loops, but `.item`
-references were only exercised single-item); the Gmail Trigger's own search filter
-against a real *live inbound* message (everything to date used pinned/synthetic
-data); and the dedup/existing-match branch through n8n's engine end to end.
+**Live-verified 2026-08-27 → 08-29, all three of the previously-open items:**
+
+- **The Gmail Trigger against real inbound mail** — six real applications have
+  now flowed through it (Gabriel James, Tristian Peters, Omisha Burns, Shaquya
+  Campbell, Cassandra Ferra, Joshua Milner). Everything before this used pinned
+  or synthetic data.
+- **The dedup/existing-match branch, end to end through n8n's engine**
+  (execution **28417**, Omisha Burns, 2026-08-28). She matched existing FUB
+  person **2057** (`C - Cold 6+ Months`): `existing_found: true`,
+  `existing_trashed: false`, **no duplicate person created**, note added, alert
+  SMS to Nicole (`SM8319d891…`, `error_code: null`), and a Rental Applications
+  row with `existing_person_match = TRUE`. This branch had been unexercised
+  since 2026-08-07 and was the last such path; **that risk is closed.**
+- **Multi-email-per-poll** — still not observed. Applications 10 minutes apart
+  produced separate single-item executions (`trigger=1 parsed=1` each), so the
+  loop is still only exercised single-item. **Genuinely still open**, but note
+  it was NOT the cause of the Cassandra incident, which people reasonably
+  assumed — see "Sheets quota after the early stage filter".
+
+> **An existing-match does NOT move the person's stage** — by design, it never
+> silently overwrites. So an applicant matched to someone parked in an untracked
+> stage (Omisha, `C - Cold 6+ Months`) stays there, the Identity Gate refuses
+> them `stage_not_allowed`, and **nothing automated progresses them**. The alert
+> to Nicole is the entire mechanism. If she moves them into a gated stage they
+> will get a verification SMS — and, having no Inquiries row, will verify into
+> silence unless one is created. See "Verification is not coupled to
+> deliverability".
 
 Test artifacts left in place deliberately: FUB persons 2607/2649/2650, notes
 2549/2653/2654, and the `Rental Applications` rows from those runs.
@@ -1577,6 +1600,81 @@ ago still does **not** block.
 node scripts/n8n-fix-dateless-trash-tag.mjs [--apply] [--revert --apply]
 ```
 Backup `n8n/BEFORE-dateless-trash-tag/`. Verifier now **335 assertions**.
+
+### Sheets quota after the early stage filter — measured 2026-08-30
+
+The filter helped and is not enough. Across the last **200** Identity Gate
+executions: **34 `sheets_unavailable` bails (17%)**, down from the **66%**
+measured before it. Affecting 17 distinct people, of whom **16 were harmless**
+(non-gated stage, trash-tagged, or already holding a verification row).
+
+**One real casualty: Cassandra Ferra (2748), 2026-08-29.** She applied via
+Zillow at 22:00:23; the flow created her person and alerted Nicole; someone
+added her phone within the minute; both resulting gate runs died:
+
+```
+21:59:56  person 1688  PROCEED  SMS sent          <- a different applicant
+22:01:03  person 2748  sheets_unavailable
+22:01:18  person 2748  sheets_unavailable
+```
+
+> **The obvious hypothesis was wrong, and worth recording.** "Applied close
+> after another person" sounds like the Zillow flow's unexercised
+> multi-email-per-poll path. It was not: those two applications were 10 minutes
+> apart in separate single-item executions. The collision was **downstream** —
+> person created → phone added → `peopleUpdated` → two Sheets reads — all
+> landing inside one minute. Check the executions, not the arrival times.
+
+The early stage filter behaved correctly throughout: she passed `scope=true`,
+and two unrelated people seconds later were correctly filtered at `scope=false`.
+
+**Finding stranded leads.** A bail is only harmful if the lead would otherwise
+have been served. The sweep that identifies them: scan recent gate executions
+for `Check Guards.reason === "sheets_unavailable"`, collect the person ids, then
+keep only those with a gated stage, a phone, no trash tag, **and no
+`Identity_Verifications` row**. Everything else is noise.
+
+### Sheets-unavailable alert — `SHEETS_UNAVAILABLE_ALERT_MARKER` (2026-08-30)
+
+Turns the silent drop into a text. `Sheets Unavailable?` hangs off
+`Check Guards` in parallel with `Should Proceed?` and `Tag Cleanup Needed?` —
+nothing inserted in front (gotcha 19).
+
+> **It cannot read Settings for its own configuration**, because Settings is
+> part of what may be unavailable. Recipient and sender fall back to hardcoded
+> constants (`+18038047847`, `+18548886242`) but PREFER the Settings values when
+> readable — in practice `Read Identity Verifications` is usually the failing
+> read while `Read Settings` succeeds.
+
+**It only alerts for leads who would actually have been served**: gated tenant
+stage + phone on file + no trash tag, all derived from the FUB person with no
+Sheets read. The early stage filter deliberately admits trash-family stages and
+trash-tagged people so the reapply-reroute stays reachable, so alerting on those
+would be pure noise. Declines are logged as `[sheets-unavailable] … no alert`.
+
+```bash
+node scripts/n8n-add-sheets-unavailable-alert.mjs [--apply] [--revert --apply]
+```
+Backup `n8n/BEFORE-sheets-unavailable-alert/`. **Not yet proven against a real
+bail** — it is wiring-verified only. If it stays silent through one, read the
+execution log for the `[sheets-unavailable]` line; the likely cause is the
+would-have-been-served filter declining.
+
+> **Superseded in part once the retry lands.** With automatic retry this alert
+> should move to the *exhausted* branch so it reports only leads the system
+> could not save. Today it fires on the first bail.
+
+### Alert coverage gap: `alert_cc_phones` misses rental applications
+
+`alert_cc_phones` is read **only** by `Build Inquiry Alert` in the Inquiry flow,
+which fires on FUB `eventsCreated`. **Rental applications do not produce an
+inquiry event**, so they never reach it — those alert `rental_application_alert_phone`
+(Nicole) via the Zillow flow's own three alert nodes.
+
+Consequence, and it caused real confusion 2026-08-30: the operator was CC'd on
+"leads" but received nothing for Cassandra, Omisha, Gabriel, or Tristian —
+every one of whom arrived as an **application**, not an inquiry. Nicole received
+all four correctly. Not overload; two disjoint alert paths.
 
 ### Early stage filter — `EARLY_STAGE_FILTER_MARKER` (2026-08-26)
 
@@ -2188,6 +2286,45 @@ two bookings (one bad phone, one good) with due steps in the same poll — all 4
 processed in **one** execution with no error; the bad SMS was isolated, marked
 `"failed"`, and a real alert SMS delivered. The next tick showed **zero** due items
 for it — no crash loop.
+
+### Consults booked from the public link have NO phone — every SMS step fails
+
+**Observed live 2026-08-28**, booking `3bjyKisHCT5skSgwRmP2g7` (Isaac Usen):
+
+```
+reminder_2h_email_sent   TRUE    18:15:33   <- he DID get the reminder, by email
+reminder_2h_sms_sent     failed  18:15:34   <- Twilio rejected an empty To
+host_sms_1h_sent         TRUE    19:15:33   <- Justin's SMS fine, different recipient
+```
+
+`invitee_phone` is only populated from Cal.com `metadata.phone`, which is set by
+the **identity-verified per-property showing links** the inquiry flow builds. The
+**consult** URL (`cal_consult_url`) is a generic public link carrying no
+metadata, and its booking page does not ask for a phone. So **every consult
+booked from the website has no phone, and every SMS step for it will fail.**
+2 of 3 non-test bookings are already in this state, both consults.
+
+The send isolation handled it exactly as designed: the email twin of the same
+reminder succeeded a second earlier, the SMS was marked with the `"failed"`
+sentinel so it cannot crash-loop, one alert fired, and the rest of the schedule
+kept running. **The lead was not missed** — only the SMS duplicate.
+
+Which steps still fire depends on the anchor, and this is the useful part:
+
+| Anchor | Behaviour on a phoneless booking |
+|---|---|
+| `start` (24h, 2h, reconfirm) | suppressed permanently by the **late-booking guard** when booked after the target time — no alert |
+| `end` (followup 1/2/3/7-day) | deliberately **unguarded** so they catch up → each fires, fails, and alerts |
+
+Isaac will therefore generate **2 more failure alerts** (3-day and 7-day SMS).
+
+> **Proposed fix, designed not built.** In `Find Due Notifications`, skip
+> `channel === 'sms'` steps when the row's phone is **empty**, marking them
+> `skipped_no_phone` instead of attempting. An empty phone can never succeed, so
+> the alert carries no actionable information. Keep attempting — and alerting —
+> when a phone exists but is malformed, which IS a data error a human can fix.
+> `Find Due Notifications` already treats any non-`false` value as resolved, so
+> a new sentinel needs no other changes.
 
 ### Immediate Sends booking idempotency (2026-08-06, was launch-blocking)
 
