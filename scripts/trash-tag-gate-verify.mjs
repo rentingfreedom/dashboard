@@ -10,10 +10,16 @@
  * people, asserting the documented decision table in docs/n8n-workflows.md
  * ("FUB Trash-tag gate").
  *
- * Also asserts the ORDERING property that matters most while the system is
- * still test-gated: in the Identity Gate, `not_test_mode` must short-circuit
- * BEFORE any trash-tag or reapply-reroute logic runs, so a real lead can
- * never acquire reroute fields.
+ * Also asserts the property that matters most now that the system is LIVE:
+ * the test gate is gone, so `firstName` must have NO effect on the decision.
+ * Every policy case runs twice — as `Test` and as a real lead — and the two
+ * results must match apart from the echoed identity fields. That catches a
+ * partially re-introduced test gate.
+ *
+ * (Before 2026-08-30 this asserted the opposite — that `not_test_mode`
+ * short-circuited first — and had been failing 7 assertions as a documented
+ * "expected failure" since launch. A verifier expected to fail is one nobody
+ * reads; rewrite the assertion for the new truth instead of annotating it.)
  *
  * Sends nothing, writes nothing, touches no n8n state. Same discipline as
  * stage-gate-verify.mjs / trash-gate-verify.mjs — the cheap check to re-run
@@ -189,25 +195,38 @@ for (const c of POLICY_CASES) {
   }
 }
 
-section("1b. Identity Gate · not_test_mode ORDERING (the launch-critical one)");
-console.log("\n  Real (non-Test) lead carrying a Permanent Trash tag");
-{
-  const j = runGate(person(POLICY_CASES[0], { firstName: "Carol", name: "Carol Pritchett" }));
-  expect("reason is not_test_mode (short-circuits first)", j.reason, "not_test_mode");
-  expect("proceed", j.proceed, false);
-  expect("needs_reapply_reroute absent", j.needs_reapply_reroute, undefined);
-  expect("reapply_reroute_stage absent", j.reapply_reroute_stage, undefined);
+section("1b. Identity Gate · the test gate is LIFTED (post-launch invariant)");
+// Until 2026-08-25 this section asserted the opposite: that `not_test_mode`
+// short-circuited BEFORE any trash-tag or reroute logic, so a real lead could
+// never acquire reroute fields. That gate is gone, and these assertions failed
+// for days as "expected failures" — which is how a verifier stops being read.
+//
+// The invariant that replaces it is stronger, not weaker: firstName must have
+// NO effect on the outcome any more. That catches a partially re-introduced
+// test gate, which is the realistic regression now — and it would also have
+// caught the old behaviour, since a `not_test_mode` bail differs from a real
+// lead's result.
+const REAL = { firstName: "Carol", name: "Carol Pritchett", lastName: "Pritchett" };
+for (const c of POLICY_CASES) {
+  console.log(`\n  ${c.label} — Test lead vs real lead`);
+  const asTest = runGate(person(c));
+  const asReal = runGate(person(c, REAL));
+  // Identity fields legitimately differ — person_name/first_name are echoed
+  // downstream to personalise the SMS, they are not decisions. Everything the
+  // policy actually decides must be identical.
+  const policyOf = (j) => {
+    const { person_id, person_name, first_name, ...rest } = j;
+    return rest;
+  };
+  expect("firstName does not change the decision", policyOf(asReal), policyOf(asTest));
+  expect("  no not_test_mode bail survives anywhere", asReal.reason, asTest.reason);
 }
-console.log("\n  Real (non-Test) lead, drifted stage + in-window No Response Trash tag");
+console.log("\n  Real lead, drifted stage + in-window No Response Trash tag -> reroute applies to them too");
 {
-  const j = runGate(
-    person(
-      { tags: ["No Response Trash"], trashDate: daysAgo(10), stage: "Lead" },
-      { firstName: "Carol", name: "Carol Pritchett" }
-    )
-  );
-  expect("reason is not_test_mode", j.reason, "not_test_mode");
-  expect("needs_reapply_reroute absent", j.needs_reapply_reroute, undefined);
+  const j = runGate(person({ tags: ["No Response Trash"], trashDate: daysAgo(10), stage: "Lead" }, REAL));
+  expect("reason", j.reason, "trash_temporary");
+  expect("needs_reapply_reroute", j.needs_reapply_reroute, true);
+  expect("reapply_reroute_stage", j.reapply_reroute_stage, "Cold Rental Lead 1 month Hold");
 }
 
 section("1c. Identity Gate · reapply-reroute fields (test leads only)");
@@ -257,12 +276,13 @@ for (const [label, p, wantCleanup, wantExpired, wantKept] of cleanupCases) {
   expect("expired_tags", j.expired_tags, wantExpired);
   if (wantKept !== null) expect("cleaned_tags (survivors)", j.cleaned_tags, wantKept);
 }
-console.log("\n  Real (non-Test) lead with an expired tag -> gated, no cleanup fields");
+console.log("\n  Real (non-Test) lead with an expired tag -> cleanup runs for them too (test gate lifted)");
 {
   const j = runGate(person({ tags: ["No Response Trash"], trashDate: daysAgo(200), stage: ALLOWED_STAGE },
-    { firstName: "Carol", name: "Carol Pritchett" }));
-  expect("reason", j.reason, "not_test_mode");
-  expect("needs_tag_cleanup absent", j.needs_tag_cleanup, undefined);
+    { firstName: "Carol", name: "Carol Pritchett", lastName: "Pritchett" }));
+  expect("reason", j.reason, "ok");
+  expect("needs_tag_cleanup", j.needs_tag_cleanup, true);
+  expect("expired_tags", j.expired_tags, ["No Response Trash"]);
 }
 
 section("2. Catch-up sweep (UbO0l29GtILMm1sP) · Check & Build Message");

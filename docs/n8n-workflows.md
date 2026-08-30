@@ -1461,13 +1461,13 @@ node scripts/n8n-add-trash-tag-gate.mjs [--apply] [--revert --apply]   # TRASH_T
 node scripts/n8n-add-watcher-isolation.mjs [--apply] [--revert --apply] # WATCHER_ISOLATION_MARKER
 node scripts/n8n-add-watcher-scope.mjs [--apply] [--revert --apply]     # WATCHER_SCOPE_MARKER
 node scripts/n8n-add-zillow-search-include-trash.mjs [--apply]
-node scripts/trash-tag-gate-verify.mjs                                  # 323 assertions
+node scripts/trash-tag-gate-verify.mjs                                  # 377 assertions
 ```
 Backups: `n8n/BEFORE-trash-tag-gate/`, `n8n/BEFORE-watcher-isolation/`,
 `n8n/BEFORE-watcher-scope/`, `n8n/BEFORE-zillow-search-include-trash/`.
 **`trash-tag-gate-verify.mjs` is the
 cheap check to re-run after any edit to this logic** — it pulls the live `jsCode`
-from all six nodes plus the watcher and runs 323 assertions (16 policy cases, the
+from all six nodes plus the watcher and runs 377 assertions (16 policy cases, the
 watcher's transition/self-collision/loop/scoping cases, real non-tenant stages from
 this account). Sends nothing, writes nothing.
 
@@ -1599,7 +1599,8 @@ ago still does **not** block.
 ```bash
 node scripts/n8n-fix-dateless-trash-tag.mjs [--apply] [--revert --apply]
 ```
-Backup `n8n/BEFORE-dateless-trash-tag/`. Verifier now **335 assertions**.
+Backup `n8n/BEFORE-dateless-trash-tag/`. Verifier was **335 assertions** at
+this change (377 today — see the launch runbook's verifier-state section).
 
 ### Sheets quota after the early stage filter — measured 2026-08-30
 
@@ -2806,7 +2807,7 @@ nothing, write nothing, and touch no n8n state.
 | Script | Covers |
 |---|---|
 | `stage-gate-verify.mjs` | the three stage-gate nodes, both directions |
-| `trash-tag-gate-verify.mjs` | **323 assertions** — all 6 trash-tag nodes + the watcher |
+| `trash-tag-gate-verify.mjs` | **377 assertions** — all 6 trash-tag nodes + the watcher |
 | `new-inquiry-lead-alert-verify.mjs` | **47 assertions** — detection, wiring, isolation config |
 | `zillow-flow-verify.mjs` | parse + dedup against the **real** FUB search endpoint |
 | `doorloop-recon-verify.mjs` / `doorloop-recon-cases.mjs` | the report; `--live` diffs deployed jsCode |

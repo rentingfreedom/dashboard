@@ -350,21 +350,34 @@ Verified after: `Any Due? = 0` on the 17:50 and 17:55 ticks. **Nothing was sent.
 > would have destroyed the ability to revert the 8/20 clear. The prior journal was
 > copied to `journal.2026-08-20.json` first. Do the same next time.
 
-### Verifier state after launch — both failures are benign
+### Verifier state after launch — both failures were benign; one is now fixed
 
 `trash-tag-gate-verify.mjs` went 323/323 → **7 failures**, and
 `stage-gate-verify.mjs` reports **7 failures**. Different causes, neither a
 regression:
 
-1. **`trash-tag-gate-verify` — caused by the lift, by design.** All 7 are in the
+1. ~~**`trash-tag-gate-verify` — caused by the lift, by design.**~~
+   **REWRITTEN 2026-08-30 — now 377/377, green again.** All 7 were in the
    section titled *"1b. Identity Gate · not_test_mode ORDERING (the
-   launch-critical one)"*, which asserts a real non-Test lead short-circuits to
-   `not_test_mode`. **That is the gate we just removed.** The new results are the
-   correct post-launch behaviour: a real lead with `Permanent Trash` now returns
-   `trash_permanent` (and `proceed: false` **still passes** — real trashed leads
-   are still blocked); a drifted lead now gets real reroute fields; an expired tag
-   now triggers real cleanup. **This section needs rewriting for the launched
-   state, not "fixing".**
+   launch-critical one)"*, which asserted a real non-Test lead short-circuits
+   to `not_test_mode`. **That is the gate the launch removed**, so the
+   assertions were testing a behaviour that no longer existed.
+
+   The section is now *"1b. Identity Gate · the test gate is LIFTED
+   (post-launch invariant)"* and asserts the **stronger** property that
+   replaces it: `firstName` must have **no effect on the decision at all**.
+   Every policy case is run twice — once as `Test`, once as a real lead — and
+   the two results must be identical apart from the echoed identity fields
+   (`person_id`, `person_name`, `first_name`, which personalise the SMS rather
+   than decide anything). That catches a partially re-introduced test gate,
+   which is the realistic regression now, and it would also have failed under
+   the old behaviour. Assertion count rose 335 → **377** because the parity
+   check runs across all 16 policy cases.
+
+   > **The lesson worth keeping:** these sat as documented "expected failures"
+   > for days. A verifier that is expected to fail is a verifier nobody reads —
+   > the next real regression would have landed in the noise. Rewrite the
+   > assertion for the new truth, or delete it; do not annotate it as expected.
 2. **`stage-gate-verify` — pre-existing since 2026-08-13, unrelated to the lift.**
    It uses live person **2545 (Test Test9)** as its subject and sets
    `allowed_stages` to whatever stage that person is in. 2545 is now in stage
