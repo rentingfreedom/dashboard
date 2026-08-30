@@ -431,6 +431,8 @@ Verified live 2026-08-05: two events <1s apart now produce two surviving rows
 
 ### Settings keys
 
+- `stage_gate_recheck_days` — how recent a `skipped_stage_gate` row must be to be
+  recovered by the sweep (default `7`; `0` disables). See "Stage-gate race recovery".
 - `inquiry_flow_start_at` — inquiry events created before this are ignored, so
   turning the flow on never blasts the existing CRM.
 - `unmatched_inquiry_alert_phone` — **still Andrew's personal number.** One SMS the
@@ -1102,10 +1104,87 @@ Semantics worth knowing:
 - **Empty or missing `allowed_stages` means allow everything.** Deleting the row
   degrades to pre-gate behaviour rather than silently muting the system.
 - `skipped_stage_gate` takes precedence over `skipped_test_gate` when both apply —
-  the stage gate is the permanent policy. Both are equally inert to the sweep, which
-  only picks up `false`.
+  the stage gate is the permanent policy. `skipped_test_gate` is inert to the sweep;
+  `skipped_stage_gate` is **recoverable** as of 2026-08-30, see below.
 - **Unmatched-address alerts are deliberately NOT stage-gated.** A missing Properties
   row is a data gap worth knowing about regardless of who inquired.
+
+### Stage-gate race recovery — `STAGE_GATE_RACE_MARKER` (2026-08-30)
+
+**A `skipped_stage_gate` stamp can be a race artefact rather than a decision,
+and it used to be permanent.** Confirmed live, Deborah Bryant (2752):
+
+```
+14:11:45.885Z  inquiry event -> FUB person reads stage "Lead"
+               -> stage gate says no -> row stamped skipped_stage_gate
+14:11:46.516Z  next execution   -> stage is "Tenant Inquiry Lead (Do Not Contact)"
+15:10:29Z      Identity Gate    -> re-reads the stage -> proceed -> verification SMS
+```
+
+FUB created her in stage `Lead` and **its own lead-flow automation promoted her
+to a gated tenant stage ~600ms later**; our `eventsCreated` event landed inside
+that window. Every decision was correct on the data in front of it —
+`Resolve Inquiry` genuinely did read `Lead`. The defect was that the stamp was
+never re-evaluated, so the Identity Gate went on to ask her to verify while the
+row that would deliver her link sat inert. **She would have verified into
+silence.** Repaired by hand
+(`scripts/_oneoff-2026-08-30-deborah-repair.mjs`), then fixed properly.
+
+> Same class as the trash-gate finding, where FUB un-trashed a person
+> server-side seconds before our node read them (gotcha 18). **The trigger is
+> external and unavoidable; treating a momentary read as a durable verdict is
+> ours.** Expect more of these: any decision this system stamps from a single
+> read of a record FUB is concurrently mutating is suspect.
+
+**Fixed in the sweep, deliberately not in the Identity Gate.** The sweep already
+re-applies the *entire* gate at send time — `allowed_stages`, all three trash
+tags, the trash-family fallback — and bails, **above** the row selection. So
+"re-check the stage when it actually matters" was already built and running;
+this change only lets the row reach that check. Reaching the selector means the
+lead is allowed *right now*, which is the only moment that matters.
+
+| | Sheets ops added |
+|---|---|
+| **the sweep (chosen)** | **0** — it already reads Inquiries, Settings and Text Log, and already writes via `Mark Inquiry Sent` |
+| the Identity Gate | +1 read, +1 write, on the workflow that already bails ~17% on quota — and a new write-side-effect class in the one workflow that sends verification SMS, the same shape rejected for the reapply-reroute |
+
+> **It is TWO nodes, and widening only one is a silent no-op.**
+> `Check & Build Message` selects the rows; `Confirm Still Unsent` re-reads and
+> re-checks `=== "false"` immediately before sending, to fail closed against a
+> double send. Patch only the selector and the row is picked up and then
+> silently dropped — indistinguishable from the fix not working. The verifier
+> asserts both carry the marker.
+
+**Recency guard — `stage_gate_recheck_days`, default 7.** The race window is
+sub-second, so a recent stamp is a victim while an old one was a correct
+decision whose link is now stale. Only rows whose `inquired_at` is inside the
+window are recovered. `0` disables recovery entirely (the kill switch). An
+unparseable or empty `inquired_at` is **not** recovered — unknown age must never
+become "fire it", the same direction as the trash-date rule. A non-numeric
+setting falls back to 7, not to "always".
+
+`skipped_test_gate` is **not** recovered: that is a permanent fact about the
+pre-launch period, not a race. 45 live rows depend on it staying inert.
+
+> **This does NOT check whether the property is still available**, because the
+> sweep never has. A lead whose house was leased since they inquired can still
+> be sent its link — see Cheyla Zinck under "Verification is not coupled to
+> deliverability". Separate pre-existing gap, deliberately untouched here.
+
+```bash
+node scripts/n8n-add-stage-gate-race-recovery.mjs [--apply] [--revert --apply]
+node scripts/stage-gate-race-verify.mjs                    # 36 assertions
+```
+Backup `n8n/BEFORE-stage-gate-race/`. The builder **refuses to apply** if the
+stage gate no longer runs above the row selection — the entire safety argument
+rests on that ordering.
+
+**Backlog check against live data, at apply time: 0 messages.** The deployed
+code was run against all 7 real people owning a `skipped_stage_gate` row, with
+their real FUB records: every one is blocked *before* recency even matters
+(4 are Trash-invisible → `no_phone`, 1 `stage_not_allowed`, 1
+`trash_untagged_fallback`), and all 7 rows are older than the 7-day window
+anyway. Re-run that check before widening `stage_gate_recheck_days`.
 
 ### Testing vs launch value
 
@@ -2870,6 +2949,7 @@ nothing, write nothing, and touch no n8n state.
 | `doorloop-recon-verify.mjs` / `doorloop-recon-cases.mjs` | the report; `--live` diffs deployed jsCode |
 | `sheets-retry-verify.mjs` | **62 assertions** — the retry cap, the served-filter, the wiring |
 | `no-phone-skip-verify.mjs` | **53 assertions** — the sentinel allowlist, recipient keying |
+| `stage-gate-race-verify.mjs` | **36 assertions** — race recovery, recency guard, both nodes |
 | `launch-audit.mjs` | all 12 workflows, 16 hard gates, 3 alert phones |
 
 For a live negative stage-gate test, flip the setting, fire, and restore:
