@@ -11,6 +11,14 @@
  * Verifies each node twice: once with allowed_stages containing the subject's
  * stage, once without. The two runs must differ only in the gate outcome.
  *
+ * The subject is the live FUB record with the TRASH dimension neutralised —
+ * trash tags stripped, `customTrashDate` cleared, stage forced to a gated
+ * tenant stage. Without that this script silently stops testing the stage gate
+ * whenever someone moves the test contact: Test Test9 (2545) was moved to
+ * `Trash` and tagged by the 593-person backfill, after which the trash gate
+ * short-circuited above the stage logic and every assertion here failed for an
+ * unrelated reason. The trash dimension belongs to trash-tag-gate-verify.mjs.
+ *
  * The inquiry-flow case neutralises `inquiry_flow_start_at` and the duplicate
  * `event_id` check in the stubbed inputs, otherwise the historical test event
  * short-circuits before the stage logic is ever reached.
@@ -91,18 +99,53 @@ const [properties, inquiries, settingsRows, identity, textLog] = await Promise.a
   tab("Properties"), tab("Inquiries"), tab("Settings"), tab("Identity_Verifications"), tab("Text Log"),
 ]);
 
-const person = (await fub(`/people/${PERSON_ID}`));
+const livePerson = (await fub(`/people/${PERSON_ID}`));
 const eventRes = await fub(`/events/${EVENT_ID}`);
 
-console.log(`Subject: ${person.name} (${PERSON_ID}), stage = "${person.stage}"`);
+// ─── The subject is a live record with the TRASH dimension neutralised ───────
+//
+// This script tests the STAGE gate and nothing else. It used to take the live
+// subject exactly as FUB returned it and use `person.stage` as the "allowed"
+// value — which silently stopped testing anything the moment that contact was
+// moved. Test Test9 (2545) was moved to stage `Trash` and picked up a
+// `Temporary Trash` tag in the 593-person backfill, so from then on the trash
+// gate short-circuited ABOVE the stage logic and all 7 stage assertions failed
+// for reasons that had nothing to do with the stage gate.
+//
+// So: keep the live record for its realistic shape (id, phones, emails, custom
+// fields) and override only the two things that decide the trash verdict, plus
+// the stage itself. The trash dimension is owned by trash-tag-gate-verify.mjs
+// (377 assertions); duplicating it here only made this script fragile.
+const SUBJECT_STAGE = "Tenant Inquiry Lead (Do Not Contact)";
+const person = {
+  ...livePerson,
+  stage: SUBJECT_STAGE,
+  tags: (livePerson.tags ?? []).filter(
+    (t) => !["permanent trash", "no response trash", "denied credit", "temporary trash"]
+      .includes(String(t).trim().toLowerCase()),
+  ),
+  customTrashDate: "",
+  customTrashGateLastStage: "",
+};
+
+console.log(`Subject: ${person.name} (${PERSON_ID})`);
+console.log(`  live stage    : ${JSON.stringify(livePerson.stage)}  tags=${JSON.stringify(livePerson.tags ?? [])}`);
+console.log(`  tested as     : ${JSON.stringify(person.stage)}  tags=${JSON.stringify(person.tags)}  (trash dimension neutralised)`);
 console.log(`Event:   ${EVENT_ID} — ${eventRes.property?.street ?? "(no property)"}\n`);
 
 const liveAllowed = (settingsRows.find((r) => r.key === "allowed_stages") || {}).value ?? "";
 console.log(`Live allowed_stages = "${liveAllowed}"\n`);
 
-// Settings variants: subject's stage present vs absent.
-const withStage = person.stage;
-const withoutStage = "Tenant Still Looking For Rental,Tenant Inquiry Lead (Do Not Contact)";
+// Settings variants: subject's stage present vs absent. Both are realistic
+// production-shaped values — `withStage` is the exact production allow-list,
+// and `withoutStage` is that list minus the subject's stage, so the negative
+// case is "a genuine tenant stage the client did not gate" rather than an
+// invented one. `withoutStage` must NOT contain SUBJECT_STAGE.
+const withStage = "Tenant Inquiry Lead (Do Not Contact),Tenant Still Looking For Rental";
+const withoutStage = "Tenant Still Looking For Rental";
+if (withoutStage.split(",").map((s) => s.trim()).includes(SUBJECT_STAGE)) {
+  throw new Error(`withoutStage must exclude the subject's stage (${SUBJECT_STAGE}) or the negative case tests nothing`);
+}
 
 function settingsWith(allowedValue, overrides = {}) {
   const base = settingsRows.map((r) => ({ ...r }));
@@ -195,6 +238,36 @@ console.log("═".repeat(72));
 const sweepWf = await getWorkflow("UbO0l29GtILMm1sP");
 const sweepCode = codeOf(sweepWf, "Check & Build Message");
 
+// A synthetic pending inquiry row, injected into the stubbed `Read Inquiries`.
+//
+// Without it both cases passed VACUOUSLY: the subject has no unsent rows, so
+// the positive case bailed `no_pending_inquiries` and the assertion was only
+// "the reason isn't stage_not_allowed" — which would still have passed if the
+// gate were deleted. With a sendable row present, the positive case has to
+// actually produce a message and the negative case has to suppress a send that
+// would otherwise have happened. That is the difference between testing the
+// gate and testing that the function returns something.
+//
+// Nothing is written anywhere — `$items()` is entirely stubbed in this harness.
+// The cal_link is deliberately one that cannot appear in Text Log, so the
+// per-person/per-property dedup can never suppress it and the outcome does not
+// depend on `isTestMode`.
+const SYNTHETIC_CAL_LINK = "https://cal.com/rentingfreedom/__stage-gate-verifier-synthetic";
+const SYNTHETIC_ROW = {
+  person_id: String(PERSON_ID),
+  property_key: "__stage-gate-verifier-synthetic",
+  cal_link: SYNTHETIC_CAL_LINK,
+  inquired_at: new Date().toISOString(),
+  link_sent: "false",
+  link_sent_at: "",
+  source: "stage-gate-verify (synthetic, never written)",
+  event_id: "synthetic-stage-gate-verify",
+  property_address: "1 Verifier Way",
+  match_status: "matched",
+  phone: "", email: "", alert_sent: "",
+};
+const sweepInquiries = [...inquiries, SYNTHETIC_ROW];
+
 for (const [label, allowedValue, wantBlocked] of [
   ["stage IN allowed_stages", withStage, false],
   ["stage NOT in allowed_stages", withoutStage, true],
@@ -203,17 +276,32 @@ for (const [label, allowedValue, wantBlocked] of [
     "FUB - Get Person": [{ people: [person] }],
     "Read Text Log": textLog,
     "Read Settings": settingsWith(allowedValue),
-    "Read Inquiries": inquiries,
+    "Read Inquiries": sweepInquiries,
   });
   const j = out[0].json;
   console.log(`\n  ${label}`);
   if (wantBlocked) {
     expect("skipped", j.skipped, true);
     expect("reason", j.reason, "stage_not_allowed");
+    // The point of the negative case: it suppressed a row that WAS sendable.
+    expect("suppressed a row that would otherwise have sent", out.length, 1);
   } else {
-    const blockedByStage = j.skipped && j.reason === "stage_not_allowed";
-    expect("not blocked by stage gate", blockedByStage, false);
-    console.log(`     (outcome: ${j.skipped ? "skipped — " + j.reason : out.length + " message(s) to send"})`);
+    expect("skipped", j.skipped, false);
+    expect("built exactly one message for the pending row", out.length, 1);
+    expect("event_id", j.event_id, SYNTHETIC_ROW.event_id);
+    expect("cal_link", j.cal_link, SYNTHETIC_CAL_LINK);
+    expect("property_address", j.property_address, SYNTHETIC_ROW.property_address);
+    expect("person_id", j.person_id, String(PERSON_ID));
+    // The link handed to the lead must carry the metadata the Cal.com booking
+    // flow needs, or the booking arrives with no FUB person and no phone.
+    expect("enriched link carries fub_person_id",
+      j.enrichedCalLink.includes(`metadata%5Bfub_person_id%5D=${PERSON_ID}`), true);
+    expect("enriched link carries phone", j.enrichedCalLink.includes("metadata%5Bphone%5D="), true);
+    expect("phone is E.164", /^\+\d{10,15}$/.test(j.phone ?? ""), true);
+    expect("message is non-empty", (j.message ?? "").length > 0, true);
+    expect("message contains the enriched link", j.message.includes(j.enrichedCalLink), true);
+    expect("no unresolved template placeholders", /\{\{.*?\}\}/.test(j.message ?? ""), false);
+    console.log(`     message: ${JSON.stringify((j.message ?? "").slice(0, 90))}…`);
   }
 }
 

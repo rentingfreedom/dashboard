@@ -1,0 +1,3535 @@
+{
+  "updatedAt": "2026-08-30T15:25:24.461Z",
+  "createdAt": "2026-07-28T20:31:42.673Z",
+  "id": "X1lih7X05rpnTPmb",
+  "name": "RentingFreedom Production - Zillow Rental Application → Create FUB Person",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "filters": {
+          "q": "subject:\"new rental application\"",
+          "sender": "no-reply@comet.zillow.com"
+        }
+      },
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -256,
+        304
+      ],
+      "id": "025d19c6-69e4-431b-8383-b63d9209d679",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "8F2JkQuOKIKFO18Z",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Properties",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "name": "Read Properties",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -48,
+        192
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "id": "f4f11114-f467-444d-a10c-2238b0a86b6d",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Settings",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "name": "Read Settings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -48,
+        352
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "id": "ba1047bd-4c3f-4ffa-ad88-d4bcde62265d",
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Rental Applications",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "name": "Read Rental Applications",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -48,
+        512
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "id": "855291d8-515f-4bb8-b55c-e3c240f72f5f",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "name": "Wait For All",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        208,
+        352
+      ],
+      "id": "a24124d6-2788-4947-b595-bd8523fc4464"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction normalizeAddress(value) { return String(value ?? \"\").toLowerCase().replace(/\\b(apartment|apt|unit|suite|ste)\\b/g, \"\").replace(/\\b(street|st|road|rd|avenue|ave|drive|dr|court|ct|boulevard|blvd|lane|ln|circle|cir|place|pl|terrace|ter)\\b/g, \"\").replace(/[^a-z0-9]/g, \"\"); }\nfunction cleanSubject(s) { return String(s || \"\").replace(/^(\\s*(fwd|fw|re)\\s*:\\s*)+/i, \"\").trim(); }\n\nconst emails = $items(\"Gmail Trigger\").map(i => i.json || {});\nconst sheetRows = $items(\"Read Properties\").map(i => i.json || {});\nconst settingsRows = $items(\"Read Settings\").map(i => i.json || {});\nconst appRows = $items(\"Read Rental Applications\").map(i => i.json || {});\n\nconst settings = {};\nfor (const row of settingsRows) if (row.key) settings[row.key] = row.value;\n\nconst stage = settings.rental_application_stage || \"Tenant Inquiry Lead (Do Not Contact)\";\nconst alertPhone = settings.rental_application_alert_phone || \"\";\nconst fromNumber = settings.from_number || \"\";\n\nconst results = [];\n\nfor (const email of emails) {\n  const messageId = email.id || email.messageId || \"\";\n  const rawSubject = email.Subject || email.subject || \"\";\n\n  const skip = (reason, extra) => ({ json: { skip: true, reason, message_id: messageId, raw_subject: rawSubject, alert_phone: alertPhone, from_number: fromNumber, ...(extra || {}) } });\n\n  if (!messageId) { results.push(skip(\"no_message_id\")); continue; }\n\n  // Idempotency: a redelivered/re-synced Gmail item must not create a second\n  // FUB person. message_id is the natural key.\n  if (appRows.some(r => String(r.message_id ?? \"\") === messageId)) {\n    results.push(skip(\"duplicate_message\"));\n    continue;\n  }\n\n  const subject = cleanSubject(rawSubject);\n\n  // Defense in depth — the Gmail search query already filters sender +\n  // subject, this just guards against an unexpected match.\n  if (!/new rental application/i.test(subject)) {\n    results.push(skip(\"not_a_rental_application_email\"));\n    continue;\n  }\n\n  const body = String(email.textPlain || email.text || email.snippet || \"\").replace(/\\r\\n/g, \"\\n\");\n\n  let address = \"\";\n  const subjMatch = subject.match(/new rental application for\\s+(.+?)\\s*!?\\s*$/i);\n  if (subjMatch) address = subjMatch[1].trim();\n\n  let applicantName = \"\";\n  let bodyAddress = \"\";\n  const altMatch = body.match(/^([A-Z][^\\n.]*?) completed an application for\\s+([^\\n.]+)\\./m);\n  if (altMatch) { applicantName = altMatch[1].trim(); bodyAddress = altMatch[2].trim(); }\n  if (!applicantName) {\n    const bodyMatch = body.match(/([A-Z][^\\n.]*?) has completed their rental application for\\s+([^\\n,]+),/);\n    if (bodyMatch) { applicantName = bodyMatch[1].trim(); bodyAddress = bodyAddress || bodyMatch[2].trim(); }\n  }\n  if (!address) address = bodyAddress;\n\n  // A real rental-application email we failed to parse is a silent-loss risk\n  // (no FUB person, nobody notified). Don't drop it — flag it for a human\n  // instead, same discipline as the unmatched-address alert elsewhere.\n  if (!address || !applicantName) {\n    results.push(skip(\"no_address_or_name_parsed\"));\n    continue;\n  }\n\n  let reviewLink = \"\";\n  const linkMatch = body.match(/(https:\\/\\/www\\.zillow\\.com\\/rental-manager\\/applications\\/[^\\s>]+)/);\n  if (linkMatch) reviewLink = linkMatch[1];\n\n  const nameParts = applicantName.split(/\\s+/).filter(Boolean);\n  const firstName = nameParts[0] || \"Unknown\";\n  const lastName = nameParts.slice(1).join(\" \") || \"Applicant\";\n\n  // The single place the test gate is applied — same convention as the rest\n  // of the chain (see Resolve Inquiry / Check Guards). Making this always\n  // true is how the gate gets removed at launch.\n  const isTestLead = firstName === \"Test\";\n  const testGateOpen = true; // TEST GATE LIFTED (was: isTestLead)\n\n  // Match against Properties for logging/context only — never blocks\n  // creation. Andrew's ask was \"just create the person and reference the\n  // address\"; an unmatched address here just means Properties needs a row,\n  // same as the existing inquiry flow's unmatched case.\n  const normalizedAddr = normalizeAddress(address);\n  const matches = [];\n  for (const row of sheetRows) {\n    const naf = normalizeAddress(row.street_address || \"\");\n    const nak = normalizeAddress(row.property_key || \"\");\n    let score = 0;\n    if (naf && naf === normalizedAddr) score += 120;\n    else if (nak && nak === normalizedAddr) score += 90;\n    else if (naf && (naf.includes(normalizedAddr) || normalizedAddr.includes(naf))) score += 20;\n    if (score > 0) matches.push({ ...row, score });\n  }\n  matches.sort((a, b) => b.score - a.score);\n  const best = matches[0] || null;\n  const matched = !!best && best.score >= 80;\n  const match_status = matched ? \"matched\" : \"unmatched\";\n  const canonicalAddress = matched ? (best.street_address || address) : address;\n\n  results.push({ json: {\n    skip: false,\n    is_test_lead: isTestLead,\n    test_gate_open: testGateOpen,\n    message_id: messageId,\n    received_at: email.date || new Date().toISOString(),\n    applicant_name: applicantName,\n    first_name: firstName,\n    last_name: lastName,\n    property_address: address,\n    canonical_address: canonicalAddress,\n    property_key: matched ? (best.property_key || \"\") : \"\",\n    match_status,\n    review_link: reviewLink,\n    fub_source: \"Zillow Rental Manager\",\n    fub_stage: stage,\n    alert_phone: alertPhone,\n    from_number: fromNumber,\n    logged_at: new Date().toISOString(),\n  } });\n}\n\nreturn results;\n"
+      },
+      "name": "Parse & Resolve Application",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        352
+      ],
+      "id": "62466e11-6cb5-422e-89ce-e3ac8c19715a"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "leftValue": "={{ $json.test_gate_open }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Should Process?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        224
+      ],
+      "id": "b5c92757-e028-43c5-8179-54c912eaf140"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "leftValue": "={{ $json.reason }}",
+              "rightValue": "no_address_or_name_parsed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Parse Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        480
+      ],
+      "id": "d0dca62c-1ea5-436f-9adf-2e54b5db07ab"
+    },
+    {
+      "parameters": {
+        "url": "=https://api.followupboss.com/v1/people?name={{ encodeURIComponent($json.applicant_name) }}&includeTrash=true&fields=allFields",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "FUB - Search Existing Person",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        224
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "id": "b6237813-bf49-4889-85dc-153810ab8314",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst search = $json;\nconst people = search.people || [];\nconst existing = people[0] || null;\n// ── TRASH_TAG_GATE_MARKER: tag-based trash gate (replaces the old stage==\"trash\" check) ──\n// See docs/n8n-workflows.md \"FUB Trash-tag gate\".\n// Requires FUB - Search Existing Person's URL to include &fields=allFields so\n// tags/customTrashDate come through (tags alone already do on list endpoints;\n// customTrashDate does not without it).\nconst tagsLower = (existing?.tags || []).map((t) => String(t).trim().toLowerCase());\n// ── DATELESS_TRASH_TAG_MARKER ────────────────────────────────────────────────────────────\n// Same hole as the other trash-gate nodes; see the Identity Gate's copy.\nconst rawTrashDateMs = existing ? new Date(existing.customTrashDate || \"\").getTime() : NaN;\nconst hasAnyTrashTag = [\"permanent trash\", \"no response trash\", \"denied credit\"].some((t) => tagsLower.includes(t));\nconst trashDateMs = Number.isFinite(rawTrashDateMs) ? rawTrashDateMs : (existing && hasAnyTrashTag ? Date.now() : NaN);\nconst daysSinceTrash = Number.isFinite(trashDateMs) ? (Date.now() - trashDateMs) / 86400000 : Infinity;\nlet existingTrashReason = null;\nif (existing) {\n  if (tagsLower.includes(\"permanent trash\")) existingTrashReason = \"trash_permanent\";\n  else if (tagsLower.includes(\"denied credit\")) { if (daysSinceTrash <= 365) existingTrashReason = \"trash_denied_credit\"; }\n  else if (tagsLower.includes(\"no response trash\")) { if (daysSinceTrash <= 90) existingTrashReason = \"trash_temporary\"; } // TRASH_TAG_RENAME_MARKER: real tag is \"No Response Trash\"\n  // ── TRASH_FALLTHROUGH_MARKER: stage fallback must run whenever no TAG produced a block.\n  if (!existingTrashReason && [\"trash\", \"permanent trash\", \"cold rental lead 1 month hold\"].includes(String(existing.stage ?? \"\").trim().toLowerCase())) existingTrashReason = \"trash_untagged_fallback\";\n}\nconst existingTrashed = !!existingTrashReason;\nreturn [{ json: {\n  existing_found: !!existing,\n  existing_trashed: existingTrashed,\n  existing_trash_reason: existingTrashReason || \"\",\n  existing_person_id: existing ? String(existing.id) : \"\",\n  existing_stage: existing ? (existing.stage || \"\") : \"\",\n} }];\n"
+      },
+      "name": "Check Existing Match",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1088,
+        224
+      ],
+      "id": "22e2ea4d-86b2-4d2b-89d0-916adec18d20"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.existing_found }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "leftValue": "={{ $json.existing_trashed }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Existing Person Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        224
+      ],
+      "id": "b69a9e40-13eb-49c3-bac7-dfe2d4745f5a"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Check Existing Match').item.json.existing_person_id), subject: 'Zillow Rental Application (existing person match)', body: 'New Zillow rental application for ' + $('Parse & Resolve Application').item.json.property_address + ' came in under the name \\'' + $('Parse & Resolve Application').item.json.applicant_name + '\\', which matched this existing person by name. No duplicate FUB person was created — review and update stage/property manually if this is the same person.' + ($('Parse & Resolve Application').item.json.review_link ? ' Review application: ' + $('Parse & Resolve Application').item.json.review_link : '') }) }}",
+        "options": {}
+      },
+      "name": "FUB - Add Note To Existing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1488,
+        64
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "id": "3b06c4d8-9c71-480e-b17a-0378368f7da9",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "from": "={{ $json.from_number }}",
+        "to": "={{ $json.alert_phone }}",
+        "message": "={{ $json.message }}",
+        "options": {}
+      },
+      "name": "Send Existing-Match Alert",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        1712,
+        0
+      ],
+      "id": "9e059bb5-fb73-4c1f-90b8-8466d77b5cf0",
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Rental Applications",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "message_id": "={{ $('Parse & Resolve Application').item.json.message_id }}",
+            "received_at": "={{ $('Parse & Resolve Application').item.json.received_at }}",
+            "applicant_name": "={{ $('Parse & Resolve Application').item.json.applicant_name }}",
+            "property_address": "={{ $('Parse & Resolve Application').item.json.property_address }}",
+            "property_key": "={{ $('Parse & Resolve Application').item.json.property_key }}",
+            "match_status": "={{ $('Parse & Resolve Application').item.json.match_status }}",
+            "person_id": "={{ $('Check Existing Match').item.json.existing_person_id }}",
+            "fub_stage": "={{ $('Check Existing Match').item.json.existing_stage }}",
+            "review_link": "={{ $('Parse & Resolve Application').item.json.review_link }}",
+            "alert_phone": "={{ $('Parse & Resolve Application').item.json.alert_phone }}",
+            "alert_sent_at": "={{ $('Parse & Resolve Application').item.json.logged_at }}",
+            "existing_person_match": "TRUE"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "message_id",
+              "displayName": "message_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "received_at",
+              "displayName": "received_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "applicant_name",
+              "displayName": "applicant_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_address",
+              "displayName": "property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_key",
+              "displayName": "property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "match_status",
+              "displayName": "match_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "fub_stage",
+              "displayName": "fub_stage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "review_link",
+              "displayName": "review_link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alert_phone",
+              "displayName": "alert_phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alert_sent_at",
+              "displayName": "alert_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "existing_person_match",
+              "displayName": "existing_person_match",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "name": "Append Existing-Match Row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1712,
+        144
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "id": "8b2c5ffa-32a5-4a31-9de6-0f2fdbcfe881",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/people",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ source: $('Parse & Resolve Application').item.json.fub_source, firstName: $('Parse & Resolve Application').item.json.first_name, lastName: $('Parse & Resolve Application').item.json.last_name, stage: $('Parse & Resolve Application').item.json.fub_stage }) }}",
+        "options": {}
+      },
+      "name": "FUB - Create Person",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1488,
+        352
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "id": "af87f7c6-3f26-44dc-a970-5c327aad7f19",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: $json.id, subject: 'Zillow Rental Application', body: 'Applied for ' + $('Parse & Resolve Application').item.json.property_address + ' via Zillow Rental Manager (Properties match: ' + $('Parse & Resolve Application').item.json.match_status + '). No phone or email was included in the notification email — add the applicant\\'s phone number to this record to trigger the usual identity-verification flow.' + ($('Parse & Resolve Application').item.json.review_link ? ' Review application: ' + $('Parse & Resolve Application').item.json.review_link : '') }) }}",
+        "options": {}
+      },
+      "name": "FUB - Add Note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1712,
+        352
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "id": "89be54a5-8c75-4a61-99c8-8cc502a4aa51",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Rental Applications",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "message_id": "={{ $('Parse & Resolve Application').item.json.message_id }}",
+            "received_at": "={{ $('Parse & Resolve Application').item.json.received_at }}",
+            "applicant_name": "={{ $('Parse & Resolve Application').item.json.applicant_name }}",
+            "property_address": "={{ $('Parse & Resolve Application').item.json.property_address }}",
+            "property_key": "={{ $('Parse & Resolve Application').item.json.property_key }}",
+            "match_status": "={{ $('Parse & Resolve Application').item.json.match_status }}",
+            "person_id": "={{ $('FUB - Create Person').item.json.id }}",
+            "fub_stage": "={{ $('Parse & Resolve Application').item.json.fub_stage }}",
+            "review_link": "={{ $('Parse & Resolve Application').item.json.review_link }}",
+            "alert_phone": "={{ $('Parse & Resolve Application').item.json.alert_phone }}",
+            "alert_sent_at": "={{ $('Parse & Resolve Application').item.json.logged_at }}",
+            "existing_person_match": "FALSE"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "message_id",
+              "displayName": "message_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "received_at",
+              "displayName": "received_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "applicant_name",
+              "displayName": "applicant_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_address",
+              "displayName": "property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_key",
+              "displayName": "property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "match_status",
+              "displayName": "match_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "fub_stage",
+              "displayName": "fub_stage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "review_link",
+              "displayName": "review_link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alert_phone",
+              "displayName": "alert_phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alert_sent_at",
+              "displayName": "alert_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "existing_person_match",
+              "displayName": "existing_person_match",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "name": "Append Rental Application Row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1920,
+        240
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "id": "09753838-cac7-4beb-90dd-7e5cb26de34d",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "from": "={{ $json.from_number }}",
+        "to": "={{ $json.alert_phone }}",
+        "message": "={{ $json.message }}",
+        "options": {}
+      },
+      "name": "Send Phone-Needed SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        1920,
+        448
+      ],
+      "id": "a45affb5-d83b-4807-9836-cbfe8987ba49",
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "from": "={{ $json.from_number }}",
+        "to": "={{ $json.alert_phone }}",
+        "message": "={{ $json.message }}",
+        "options": {}
+      },
+      "name": "Send Parse-Failed Alert",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        880,
+        480
+      ],
+      "id": "8e580dd0-6834-4701-8113-7342f16fb3ef",
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Rental Applications",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "message_id": "={{ $json.message_id }}",
+            "received_at": "={{ new Date().toISOString() }}",
+            "applicant_name": "",
+            "property_address": "={{ $json.raw_subject }}",
+            "match_status": "parse_failed",
+            "alert_phone": "={{ $json.alert_phone }}",
+            "alert_sent_at": "={{ new Date().toISOString() }}",
+            "existing_person_match": ""
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "message_id",
+              "displayName": "message_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "received_at",
+              "displayName": "received_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "applicant_name",
+              "displayName": "applicant_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_address",
+              "displayName": "property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_key",
+              "displayName": "property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "match_status",
+              "displayName": "match_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "fub_stage",
+              "displayName": "fub_stage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "review_link",
+              "displayName": "review_link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alert_phone",
+              "displayName": "alert_phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alert_sent_at",
+              "displayName": "alert_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "existing_person_match",
+              "displayName": "existing_person_match",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "name": "Append Parse-Failed Row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1104,
+        480
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "id": "667b272e-1480-4c1c-acbe-9c362e981ef3",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "leftValue": "={{ $json.test_gate_open }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Test Gate Closed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        640
+      ],
+      "id": "f1a2b3c4-5678-4abc-9def-000000000001"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Rental Applications",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "message_id": "={{ $json.message_id }}",
+            "received_at": "={{ $json.received_at }}",
+            "applicant_name": "={{ $json.applicant_name }}",
+            "property_address": "={{ $json.property_address }}",
+            "property_key": "={{ $json.property_key }}",
+            "match_status": "={{ $json.match_status }}",
+            "person_id": "",
+            "fub_stage": "skipped_test_gate",
+            "review_link": "={{ $json.review_link }}",
+            "alert_phone": "={{ $json.alert_phone }}",
+            "alert_sent_at": "",
+            "existing_person_match": ""
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "message_id",
+              "displayName": "message_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "received_at",
+              "displayName": "received_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "applicant_name",
+              "displayName": "applicant_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_address",
+              "displayName": "property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_key",
+              "displayName": "property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "match_status",
+              "displayName": "match_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "fub_stage",
+              "displayName": "fub_stage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "review_link",
+              "displayName": "review_link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alert_phone",
+              "displayName": "alert_phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alert_sent_at",
+              "displayName": "alert_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "existing_person_match",
+              "displayName": "existing_person_match",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "name": "Append Test-Gate-Skipped Row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        880,
+        640
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "id": "f1a2b3c4-5678-4abc-9def-000000000002",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.existing_found }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "leftValue": "={{ $json.existing_trashed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Existing Person Trashed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        384
+      ],
+      "id": "b1a2c3d4-trsh-4abc-9def-000000000003"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Rental Applications",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "message_id": "={{ $('Parse & Resolve Application').item.json.message_id }}",
+            "received_at": "={{ $('Parse & Resolve Application').item.json.received_at }}",
+            "applicant_name": "={{ $('Parse & Resolve Application').item.json.applicant_name }}",
+            "property_address": "={{ $('Parse & Resolve Application').item.json.property_address }}",
+            "property_key": "={{ $('Parse & Resolve Application').item.json.property_key }}",
+            "match_status": "={{ $('Parse & Resolve Application').item.json.match_status }}",
+            "person_id": "={{ $('Check Existing Match').item.json.existing_person_id }}",
+            "fub_stage": "skipped_trash_gate",
+            "review_link": "={{ $('Parse & Resolve Application').item.json.review_link }}",
+            "alert_phone": "={{ $('Parse & Resolve Application').item.json.alert_phone }}",
+            "alert_sent_at": "",
+            "existing_person_match": "TRUE"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "message_id",
+              "displayName": "message_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "received_at",
+              "displayName": "received_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "applicant_name",
+              "displayName": "applicant_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_address",
+              "displayName": "property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_key",
+              "displayName": "property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "match_status",
+              "displayName": "match_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "fub_stage",
+              "displayName": "fub_stage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "review_link",
+              "displayName": "review_link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alert_phone",
+              "displayName": "alert_phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alert_sent_at",
+              "displayName": "alert_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "existing_person_match",
+              "displayName": "existing_person_match",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "name": "Append Trash-Skipped Row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1488,
+        384
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "id": "b1a2c3d4-trsh-4abc-9def-000000000004",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── APPLICATION_ALERT_CC_MARKER ────────────────────────────────────────────────────────────\n// One item per recipient: the Twilio node reads its IMMEDIATE input, so N\n// items make it send N texts. Never comma-separate a Twilio \"To\" (21211).\nconst ins = $input.all();\n// Index-align against the source node when the counts match (multi-email-per-\n// poll is possible but has never been observed); otherwise fall back to the\n// first item and say so, rather than silently pairing the wrong application.\nconst pick = (arr, i) => {\n  if (arr.length === ins.length) return arr[i];\n  if (i === 0 && arr.length !== ins.length) {\n    console.log(\"[application-alert-cc] item-count mismatch: input=\" + ins.length +\n      \" source=\" + arr.length + \" — falling back to the first source item\");\n  }\n  return arr[0];\n};\n\nconst settings = {};\n$('Read Settings').all().forEach((it) => { const r = it.json || {}; if (r.key) settings[r.key] = r.value; });\n\n// Nicole (alert_phone, resolved upstream) PLUS the CC list. An empty CC means\n// Nicole only — unlike Build Inquiry Alert, this alert has no off switch.\nconst last10 = (s) => String(s ?? \"\").replace(/[^0-9]/g, \"\").slice(-10);\nconst buildRecipients = (primary) => {\n  const cc = String(settings.alert_cc_phones || \"\").split(\",\").map((s) => s.trim()).filter(Boolean);\n  const out = [];\n  const seen = {};\n  [String(primary || \"\").trim()].concat(cc).forEach((p) => {\n    if (!p) return;\n    const k = last10(p);\n    if (!k || seen[k]) return;\n    seen[k] = 1;\n    out.push(p);\n  });\n  return out;\n};\n\nconst parsed = $('Parse & Resolve Application').all();\nconst matched = $('Check Existing Match').all();\nconst out = [];\n\nins.forEach((_, i) => {\n  const d = pick(parsed, i).json;\n  const m = pick(matched, i).json;\n  const recipients = buildRecipients(d.alert_phone);\n  const fromNumber = String(d.from_number || \"\").trim();\n  if (!recipients.length) { console.log(\"[application-alert-cc] existing-match: no recipients — not sending\"); return; }\n  if (!fromNumber) { console.log(\"[application-alert-cc] existing-match: no from_number — not sending (Twilio 21603)\"); return; }\n\n  // Template preserved verbatim from the original Twilio node.\n  const message =\n    \"RF: Zillow rental application from \" + d.applicant_name + \" for \" + d.canonical_address +\n    \" matches an EXISTING FUB person #\" + m.existing_person_id + \" (\\\"\" + m.existing_stage +\n    \"\\\"). No duplicate created — review manually.\" +\n    (d.review_link ? \" Review: \" + d.review_link : \"\");\n\n  console.log(\"[application-alert-cc] existing-match for \" + d.applicant_name + \" -> \" + recipients.length + \" recipient(s)\");\n  recipients.forEach((phone) => out.push({ json: {\n    message: message, alert_phone: phone, from_number: fromNumber,\n    applicant_name: d.applicant_name, alert_kind: \"existing_match\",\n    sent_at: new Date().toISOString(),\n  } }));\n});\nreturn out;"
+      },
+      "id": "app-alert-cc-build-existing-match-alert",
+      "name": "Build Existing-Match Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1532,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── APPLICATION_ALERT_CC_MARKER ────────────────────────────────────────────────────────────\n// One item per recipient: the Twilio node reads its IMMEDIATE input, so N\n// items make it send N texts. Never comma-separate a Twilio \"To\" (21211).\nconst ins = $input.all();\n// Index-align against the source node when the counts match (multi-email-per-\n// poll is possible but has never been observed); otherwise fall back to the\n// first item and say so, rather than silently pairing the wrong application.\nconst pick = (arr, i) => {\n  if (arr.length === ins.length) return arr[i];\n  if (i === 0 && arr.length !== ins.length) {\n    console.log(\"[application-alert-cc] item-count mismatch: input=\" + ins.length +\n      \" source=\" + arr.length + \" — falling back to the first source item\");\n  }\n  return arr[0];\n};\n\nconst settings = {};\n$('Read Settings').all().forEach((it) => { const r = it.json || {}; if (r.key) settings[r.key] = r.value; });\n\n// Nicole (alert_phone, resolved upstream) PLUS the CC list. An empty CC means\n// Nicole only — unlike Build Inquiry Alert, this alert has no off switch.\nconst last10 = (s) => String(s ?? \"\").replace(/[^0-9]/g, \"\").slice(-10);\nconst buildRecipients = (primary) => {\n  const cc = String(settings.alert_cc_phones || \"\").split(\",\").map((s) => s.trim()).filter(Boolean);\n  const out = [];\n  const seen = {};\n  [String(primary || \"\").trim()].concat(cc).forEach((p) => {\n    if (!p) return;\n    const k = last10(p);\n    if (!k || seen[k]) return;\n    seen[k] = 1;\n    out.push(p);\n  });\n  return out;\n};\n\nconst parsed = $('Parse & Resolve Application').all();\nconst created = $('FUB - Create Person').all();\nconst out = [];\n\nins.forEach((_, i) => {\n  const d = pick(parsed, i).json;\n  const p = pick(created, i).json;\n  const recipients = buildRecipients(d.alert_phone);\n  const fromNumber = String(d.from_number || \"\").trim();\n  if (!recipients.length) { console.log(\"[application-alert-cc] phone-needed: no recipients — not sending\"); return; }\n  if (!fromNumber) { console.log(\"[application-alert-cc] phone-needed: no from_number — not sending (Twilio 21603)\"); return; }\n\n  // Template preserved verbatim from the original Twilio node.\n  const message =\n    \"RF: Zillow rental application from \" + d.applicant_name + \" for \" + d.canonical_address +\n    \". Created FUB person #\" + p.id + \" in \\\"\" + d.fub_stage +\n    \"\\\" — add their phone number in FUB to kick off the usual verification flow.\" +\n    (d.review_link ? \" Review: \" + d.review_link : \"\");\n\n  console.log(\"[application-alert-cc] phone-needed for \" + d.applicant_name + \" -> \" + recipients.length + \" recipient(s)\");\n  recipients.forEach((phone) => out.push({ json: {\n    message: message, alert_phone: phone, from_number: fromNumber,\n    applicant_name: d.applicant_name, alert_kind: \"phone_needed\",\n    sent_at: new Date().toISOString(),\n  } }));\n});\nreturn out;"
+      },
+      "id": "app-alert-cc-build-phone-needed-alert",
+      "name": "Build Phone-Needed Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1740,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── APPLICATION_ALERT_CC_MARKER ────────────────────────────────────────────────────────────\n// One item per recipient: the Twilio node reads its IMMEDIATE input, so N\n// items make it send N texts. Never comma-separate a Twilio \"To\" (21211).\nconst ins = $input.all();\n// Index-align against the source node when the counts match (multi-email-per-\n// poll is possible but has never been observed); otherwise fall back to the\n// first item and say so, rather than silently pairing the wrong application.\nconst pick = (arr, i) => {\n  if (arr.length === ins.length) return arr[i];\n  if (i === 0 && arr.length !== ins.length) {\n    console.log(\"[application-alert-cc] item-count mismatch: input=\" + ins.length +\n      \" source=\" + arr.length + \" — falling back to the first source item\");\n  }\n  return arr[0];\n};\n\nconst settings = {};\n$('Read Settings').all().forEach((it) => { const r = it.json || {}; if (r.key) settings[r.key] = r.value; });\n\n// Nicole (alert_phone, resolved upstream) PLUS the CC list. An empty CC means\n// Nicole only — unlike Build Inquiry Alert, this alert has no off switch.\nconst last10 = (s) => String(s ?? \"\").replace(/[^0-9]/g, \"\").slice(-10);\nconst buildRecipients = (primary) => {\n  const cc = String(settings.alert_cc_phones || \"\").split(\",\").map((s) => s.trim()).filter(Boolean);\n  const out = [];\n  const seen = {};\n  [String(primary || \"\").trim()].concat(cc).forEach((p) => {\n    if (!p) return;\n    const k = last10(p);\n    if (!k || seen[k]) return;\n    seen[k] = 1;\n    out.push(p);\n  });\n  return out;\n};\n\n// This branch's immediate input IS Parse & Resolve's item (via the IF), so\n// index alignment is exact here; the named lookup keeps it uniform.\nconst parsed = $('Parse & Resolve Application').all();\nconst out = [];\n\nins.forEach((item, i) => {\n  const d = (parsed.length === ins.length ? parsed[i].json : (item.json || {}));\n  const recipients = buildRecipients(d.alert_phone);\n  const fromNumber = String(d.from_number || \"\").trim();\n  if (!recipients.length) { console.log(\"[application-alert-cc] parse-failed: no recipients — not sending\"); return; }\n  if (!fromNumber) { console.log(\"[application-alert-cc] parse-failed: no from_number — not sending (Twilio 21603)\"); return; }\n\n  // Template preserved verbatim from the original Twilio node.\n  const message =\n    \"RF: got a Zillow rental-application-looking email I could not parse — check manually. Subject: \\\"\" +\n    d.raw_subject + \"\\\"\";\n\n  console.log(\"[application-alert-cc] parse-failed -> \" + recipients.length + \" recipient(s)\");\n  recipients.forEach((phone) => out.push({ json: {\n    message: message, alert_phone: phone, from_number: fromNumber,\n    raw_subject: d.raw_subject, alert_kind: \"parse_failed\",\n    sent_at: new Date().toISOString(),\n  } }));\n});\nreturn out;"
+      },
+      "id": "app-alert-cc-build-parse-failed-alert",
+      "name": "Build Parse-Failed Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        480
+      ]
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Properties",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Settings",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Rental Applications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Properties": {
+      "main": [
+        [
+          {
+            "node": "Wait For All",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Settings": {
+      "main": [
+        [
+          {
+            "node": "Wait For All",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Read Rental Applications": {
+      "main": [
+        [
+          {
+            "node": "Wait For All",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Wait For All": {
+      "main": [
+        [
+          {
+            "node": "Parse & Resolve Application",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Resolve Application": {
+      "main": [
+        [
+          {
+            "node": "Should Process?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Parse Failed?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Test Gate Closed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Process?": {
+      "main": [
+        [
+          {
+            "node": "FUB - Search Existing Person",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Failed?": {
+      "main": [
+        [
+          {
+            "node": "Build Parse-Failed Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Append Parse-Failed Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Search Existing Person": {
+      "main": [
+        [
+          {
+            "node": "Check Existing Match",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Existing Match": {
+      "main": [
+        [
+          {
+            "node": "Existing Person Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Existing Person Found?": {
+      "main": [
+        [
+          {
+            "node": "Existing Person Trashed?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FUB - Create Person",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Add Note To Existing": {
+      "main": [
+        [
+          {
+            "node": "Build Existing-Match Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Append Existing-Match Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Create Person": {
+      "main": [
+        [
+          {
+            "node": "FUB - Add Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Add Note": {
+      "main": [
+        [
+          {
+            "node": "Append Rental Application Row",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Phone-Needed Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test Gate Closed?": {
+      "main": [
+        [
+          {
+            "node": "Append Test-Gate-Skipped Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Existing Person Trashed?": {
+      "main": [
+        [
+          {
+            "node": "Append Trash-Skipped Row",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FUB - Add Note To Existing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Existing-Match Alert": {
+      "main": [
+        [
+          {
+            "node": "Send Existing-Match Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Phone-Needed Alert": {
+      "main": [
+        [
+          {
+            "node": "Send Phone-Needed SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Parse-Failed Alert": {
+      "main": [
+        [
+          {
+            "node": "Send Parse-Failed Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "staticData": {
+    "node:Gmail Trigger": {
+      "Gmail Trigger": {
+        "lastTimeChecked": 1788179848,
+        "possibleDuplicates": [
+          "1a057d321a2324a7",
+          "1a04f899c96290b1"
+        ]
+      }
+    }
+  },
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": {
+    "Gmail Trigger": [
+      {
+        "json": {
+          "id": "mock-zillowsmscheck-20260807-02",
+          "threadId": "mock-zillowsmscheck-20260807-01",
+          "snippet": "Test ZillowSmsCheck completed an application for 102 Braeford. Brand logo Application received Hi Renting, Great news! Test ZillowSmsCheck has completed their rental application for 102 Braeford, including their credit and background check. Click below to review. https://www.zillow.com/rental-manager/applications/mock-sms-check-review",
+          "payload": {
+            "mimeType": "multipart/mixed"
+          },
+          "sizeEstimate": 16000,
+          "historyId": "1950999",
+          "internalDate": "1786000000000",
+          "labels": [
+            {
+              "id": "INBOX",
+              "name": "INBOX"
+            },
+            {
+              "id": "IMPORTANT",
+              "name": "IMPORTANT"
+            },
+            {
+              "id": "CATEGORY_UPDATES",
+              "name": "CATEGORY_UPDATES"
+            }
+          ],
+          "From": "Zillow Rentals <no-reply@comet.zillow.com>",
+          "To": "contact@rentingfreedom.com",
+          "Subject": "You have a new rental application for 102 Braeford!"
+        }
+      }
+    ]
+  },
+  "versionId": "61df8e41-fa6f-4e44-b019-26b44304278f",
+  "activeVersionId": "61df8e41-fa6f-4e44-b019-26b44304278f",
+  "versionCounter": 21,
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-07-28T20:31:42.673Z",
+      "createdAt": "2026-07-28T20:31:42.673Z",
+      "role": "workflow:owner",
+      "workflowId": "X1lih7X05rpnTPmb",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-08-30T15:25:24.463Z",
+    "createdAt": "2026-08-30T15:25:24.463Z",
+    "versionId": "61df8e41-fa6f-4e44-b019-26b44304278f",
+    "workflowId": "X1lih7X05rpnTPmb",
+    "nodes": [
+      {
+        "parameters": {
+          "pollTimes": {
+            "item": [
+              {
+                "mode": "everyMinute"
+              }
+            ]
+          },
+          "filters": {
+            "q": "subject:\"new rental application\"",
+            "sender": "no-reply@comet.zillow.com"
+          }
+        },
+        "name": "Gmail Trigger",
+        "type": "n8n-nodes-base.gmailTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          -256,
+          304
+        ],
+        "id": "025d19c6-69e4-431b-8383-b63d9209d679",
+        "credentials": {
+          "gmailOAuth2": {
+            "id": "8F2JkQuOKIKFO18Z",
+            "name": "Gmail account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Properties",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "name": "Read Properties",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          -48,
+          192
+        ],
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000,
+        "id": "f4f11114-f467-444d-a10c-2238b0a86b6d",
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "authentication": "serviceAccount",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Settings",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "name": "Read Settings",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          -48,
+          352
+        ],
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000,
+        "id": "ba1047bd-4c3f-4ffa-ad88-d4bcde62265d",
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Rental Applications",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "name": "Read Rental Applications",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          -48,
+          512
+        ],
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000,
+        "id": "855291d8-515f-4bb8-b55c-e3c240f72f5f",
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "numberInputs": 3
+        },
+        "name": "Wait For All",
+        "type": "n8n-nodes-base.merge",
+        "typeVersion": 3,
+        "position": [
+          208,
+          352
+        ],
+        "id": "a24124d6-2788-4947-b595-bd8523fc4464"
+      },
+      {
+        "parameters": {
+          "jsCode": "\nfunction normalizeAddress(value) { return String(value ?? \"\").toLowerCase().replace(/\\b(apartment|apt|unit|suite|ste)\\b/g, \"\").replace(/\\b(street|st|road|rd|avenue|ave|drive|dr|court|ct|boulevard|blvd|lane|ln|circle|cir|place|pl|terrace|ter)\\b/g, \"\").replace(/[^a-z0-9]/g, \"\"); }\nfunction cleanSubject(s) { return String(s || \"\").replace(/^(\\s*(fwd|fw|re)\\s*:\\s*)+/i, \"\").trim(); }\n\nconst emails = $items(\"Gmail Trigger\").map(i => i.json || {});\nconst sheetRows = $items(\"Read Properties\").map(i => i.json || {});\nconst settingsRows = $items(\"Read Settings\").map(i => i.json || {});\nconst appRows = $items(\"Read Rental Applications\").map(i => i.json || {});\n\nconst settings = {};\nfor (const row of settingsRows) if (row.key) settings[row.key] = row.value;\n\nconst stage = settings.rental_application_stage || \"Tenant Inquiry Lead (Do Not Contact)\";\nconst alertPhone = settings.rental_application_alert_phone || \"\";\nconst fromNumber = settings.from_number || \"\";\n\nconst results = [];\n\nfor (const email of emails) {\n  const messageId = email.id || email.messageId || \"\";\n  const rawSubject = email.Subject || email.subject || \"\";\n\n  const skip = (reason, extra) => ({ json: { skip: true, reason, message_id: messageId, raw_subject: rawSubject, alert_phone: alertPhone, from_number: fromNumber, ...(extra || {}) } });\n\n  if (!messageId) { results.push(skip(\"no_message_id\")); continue; }\n\n  // Idempotency: a redelivered/re-synced Gmail item must not create a second\n  // FUB person. message_id is the natural key.\n  if (appRows.some(r => String(r.message_id ?? \"\") === messageId)) {\n    results.push(skip(\"duplicate_message\"));\n    continue;\n  }\n\n  const subject = cleanSubject(rawSubject);\n\n  // Defense in depth — the Gmail search query already filters sender +\n  // subject, this just guards against an unexpected match.\n  if (!/new rental application/i.test(subject)) {\n    results.push(skip(\"not_a_rental_application_email\"));\n    continue;\n  }\n\n  const body = String(email.textPlain || email.text || email.snippet || \"\").replace(/\\r\\n/g, \"\\n\");\n\n  let address = \"\";\n  const subjMatch = subject.match(/new rental application for\\s+(.+?)\\s*!?\\s*$/i);\n  if (subjMatch) address = subjMatch[1].trim();\n\n  let applicantName = \"\";\n  let bodyAddress = \"\";\n  const altMatch = body.match(/^([A-Z][^\\n.]*?) completed an application for\\s+([^\\n.]+)\\./m);\n  if (altMatch) { applicantName = altMatch[1].trim(); bodyAddress = altMatch[2].trim(); }\n  if (!applicantName) {\n    const bodyMatch = body.match(/([A-Z][^\\n.]*?) has completed their rental application for\\s+([^\\n,]+),/);\n    if (bodyMatch) { applicantName = bodyMatch[1].trim(); bodyAddress = bodyAddress || bodyMatch[2].trim(); }\n  }\n  if (!address) address = bodyAddress;\n\n  // A real rental-application email we failed to parse is a silent-loss risk\n  // (no FUB person, nobody notified). Don't drop it — flag it for a human\n  // instead, same discipline as the unmatched-address alert elsewhere.\n  if (!address || !applicantName) {\n    results.push(skip(\"no_address_or_name_parsed\"));\n    continue;\n  }\n\n  let reviewLink = \"\";\n  const linkMatch = body.match(/(https:\\/\\/www\\.zillow\\.com\\/rental-manager\\/applications\\/[^\\s>]+)/);\n  if (linkMatch) reviewLink = linkMatch[1];\n\n  const nameParts = applicantName.split(/\\s+/).filter(Boolean);\n  const firstName = nameParts[0] || \"Unknown\";\n  const lastName = nameParts.slice(1).join(\" \") || \"Applicant\";\n\n  // The single place the test gate is applied — same convention as the rest\n  // of the chain (see Resolve Inquiry / Check Guards). Making this always\n  // true is how the gate gets removed at launch.\n  const isTestLead = firstName === \"Test\";\n  const testGateOpen = true; // TEST GATE LIFTED (was: isTestLead)\n\n  // Match against Properties for logging/context only — never blocks\n  // creation. Andrew's ask was \"just create the person and reference the\n  // address\"; an unmatched address here just means Properties needs a row,\n  // same as the existing inquiry flow's unmatched case.\n  const normalizedAddr = normalizeAddress(address);\n  const matches = [];\n  for (const row of sheetRows) {\n    const naf = normalizeAddress(row.street_address || \"\");\n    const nak = normalizeAddress(row.property_key || \"\");\n    let score = 0;\n    if (naf && naf === normalizedAddr) score += 120;\n    else if (nak && nak === normalizedAddr) score += 90;\n    else if (naf && (naf.includes(normalizedAddr) || normalizedAddr.includes(naf))) score += 20;\n    if (score > 0) matches.push({ ...row, score });\n  }\n  matches.sort((a, b) => b.score - a.score);\n  const best = matches[0] || null;\n  const matched = !!best && best.score >= 80;\n  const match_status = matched ? \"matched\" : \"unmatched\";\n  const canonicalAddress = matched ? (best.street_address || address) : address;\n\n  results.push({ json: {\n    skip: false,\n    is_test_lead: isTestLead,\n    test_gate_open: testGateOpen,\n    message_id: messageId,\n    received_at: email.date || new Date().toISOString(),\n    applicant_name: applicantName,\n    first_name: firstName,\n    last_name: lastName,\n    property_address: address,\n    canonical_address: canonicalAddress,\n    property_key: matched ? (best.property_key || \"\") : \"\",\n    match_status,\n    review_link: reviewLink,\n    fub_source: \"Zillow Rental Manager\",\n    fub_stage: stage,\n    alert_phone: alertPhone,\n    from_number: fromNumber,\n    logged_at: new Date().toISOString(),\n  } });\n}\n\nreturn results;\n"
+        },
+        "name": "Parse & Resolve Application",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          432,
+          352
+        ],
+        "id": "62466e11-6cb5-422e-89ce-e3ac8c19715a"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.skip }}",
+                "rightValue": false,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              },
+              {
+                "leftValue": "={{ $json.test_gate_open }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "name": "Should Process?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          640,
+          224
+        ],
+        "id": "b5c92757-e028-43c5-8179-54c912eaf140"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.skip }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              },
+              {
+                "leftValue": "={{ $json.reason }}",
+                "rightValue": "no_address_or_name_parsed",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "name": "Parse Failed?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          640,
+          480
+        ],
+        "id": "d0dca62c-1ea5-436f-9adf-2e54b5db07ab"
+      },
+      {
+        "parameters": {
+          "url": "=https://api.followupboss.com/v1/people?name={{ encodeURIComponent($json.applicant_name) }}&includeTrash=true&fields=allFields",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "name": "FUB - Search Existing Person",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          880,
+          224
+        ],
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 3000,
+        "id": "b6237813-bf49-4889-85dc-153810ab8314",
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "\nconst search = $json;\nconst people = search.people || [];\nconst existing = people[0] || null;\n// ── TRASH_TAG_GATE_MARKER: tag-based trash gate (replaces the old stage==\"trash\" check) ──\n// See docs/n8n-workflows.md \"FUB Trash-tag gate\".\n// Requires FUB - Search Existing Person's URL to include &fields=allFields so\n// tags/customTrashDate come through (tags alone already do on list endpoints;\n// customTrashDate does not without it).\nconst tagsLower = (existing?.tags || []).map((t) => String(t).trim().toLowerCase());\n// ── DATELESS_TRASH_TAG_MARKER ────────────────────────────────────────────────────────────\n// Same hole as the other trash-gate nodes; see the Identity Gate's copy.\nconst rawTrashDateMs = existing ? new Date(existing.customTrashDate || \"\").getTime() : NaN;\nconst hasAnyTrashTag = [\"permanent trash\", \"no response trash\", \"denied credit\"].some((t) => tagsLower.includes(t));\nconst trashDateMs = Number.isFinite(rawTrashDateMs) ? rawTrashDateMs : (existing && hasAnyTrashTag ? Date.now() : NaN);\nconst daysSinceTrash = Number.isFinite(trashDateMs) ? (Date.now() - trashDateMs) / 86400000 : Infinity;\nlet existingTrashReason = null;\nif (existing) {\n  if (tagsLower.includes(\"permanent trash\")) existingTrashReason = \"trash_permanent\";\n  else if (tagsLower.includes(\"denied credit\")) { if (daysSinceTrash <= 365) existingTrashReason = \"trash_denied_credit\"; }\n  else if (tagsLower.includes(\"no response trash\")) { if (daysSinceTrash <= 90) existingTrashReason = \"trash_temporary\"; } // TRASH_TAG_RENAME_MARKER: real tag is \"No Response Trash\"\n  // ── TRASH_FALLTHROUGH_MARKER: stage fallback must run whenever no TAG produced a block.\n  if (!existingTrashReason && [\"trash\", \"permanent trash\", \"cold rental lead 1 month hold\"].includes(String(existing.stage ?? \"\").trim().toLowerCase())) existingTrashReason = \"trash_untagged_fallback\";\n}\nconst existingTrashed = !!existingTrashReason;\nreturn [{ json: {\n  existing_found: !!existing,\n  existing_trashed: existingTrashed,\n  existing_trash_reason: existingTrashReason || \"\",\n  existing_person_id: existing ? String(existing.id) : \"\",\n  existing_stage: existing ? (existing.stage || \"\") : \"\",\n} }];\n"
+        },
+        "name": "Check Existing Match",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1088,
+          224
+        ],
+        "id": "22e2ea4d-86b2-4d2b-89d0-916adec18d20"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.existing_found }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              },
+              {
+                "leftValue": "={{ $json.existing_trashed }}",
+                "rightValue": false,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "name": "Existing Person Found?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          1280,
+          224
+        ],
+        "id": "b69a9e40-13eb-49c3-bac7-dfe2d4745f5a"
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.followupboss.com/v1/notes",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ personId: Number($('Check Existing Match').item.json.existing_person_id), subject: 'Zillow Rental Application (existing person match)', body: 'New Zillow rental application for ' + $('Parse & Resolve Application').item.json.property_address + ' came in under the name \\'' + $('Parse & Resolve Application').item.json.applicant_name + '\\', which matched this existing person by name. No duplicate FUB person was created — review and update stage/property manually if this is the same person.' + ($('Parse & Resolve Application').item.json.review_link ? ' Review application: ' + $('Parse & Resolve Application').item.json.review_link : '') }) }}",
+          "options": {}
+        },
+        "name": "FUB - Add Note To Existing",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1488,
+          64
+        ],
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 3000,
+        "id": "3b06c4d8-9c71-480e-b17a-0378368f7da9",
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "from": "={{ $json.from_number }}",
+          "to": "={{ $json.alert_phone }}",
+          "message": "={{ $json.message }}",
+          "options": {}
+        },
+        "name": "Send Existing-Match Alert",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          1712,
+          0
+        ],
+        "id": "9e059bb5-fb73-4c1f-90b8-8466d77b5cf0",
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        },
+        "onError": "continueRegularOutput"
+      },
+      {
+        "parameters": {
+          "operation": "append",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Rental Applications",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "message_id": "={{ $('Parse & Resolve Application').item.json.message_id }}",
+              "received_at": "={{ $('Parse & Resolve Application').item.json.received_at }}",
+              "applicant_name": "={{ $('Parse & Resolve Application').item.json.applicant_name }}",
+              "property_address": "={{ $('Parse & Resolve Application').item.json.property_address }}",
+              "property_key": "={{ $('Parse & Resolve Application').item.json.property_key }}",
+              "match_status": "={{ $('Parse & Resolve Application').item.json.match_status }}",
+              "person_id": "={{ $('Check Existing Match').item.json.existing_person_id }}",
+              "fub_stage": "={{ $('Check Existing Match').item.json.existing_stage }}",
+              "review_link": "={{ $('Parse & Resolve Application').item.json.review_link }}",
+              "alert_phone": "={{ $('Parse & Resolve Application').item.json.alert_phone }}",
+              "alert_sent_at": "={{ $('Parse & Resolve Application').item.json.logged_at }}",
+              "existing_person_match": "TRUE"
+            },
+            "matchingColumns": [],
+            "schema": [
+              {
+                "id": "message_id",
+                "displayName": "message_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "received_at",
+                "displayName": "received_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "applicant_name",
+                "displayName": "applicant_name",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_address",
+                "displayName": "property_address",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_key",
+                "displayName": "property_key",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "match_status",
+                "displayName": "match_status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_id",
+                "displayName": "person_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "fub_stage",
+                "displayName": "fub_stage",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "review_link",
+                "displayName": "review_link",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "alert_phone",
+                "displayName": "alert_phone",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "alert_sent_at",
+                "displayName": "alert_sent_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "existing_person_match",
+                "displayName": "existing_person_match",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ],
+            "attemptToConvertTypes": false,
+            "convertFieldsToString": true
+          },
+          "options": {}
+        },
+        "name": "Append Existing-Match Row",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          1712,
+          144
+        ],
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000,
+        "id": "8b2c5ffa-32a5-4a31-9de6-0f2fdbcfe881",
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.followupboss.com/v1/people",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ source: $('Parse & Resolve Application').item.json.fub_source, firstName: $('Parse & Resolve Application').item.json.first_name, lastName: $('Parse & Resolve Application').item.json.last_name, stage: $('Parse & Resolve Application').item.json.fub_stage }) }}",
+          "options": {}
+        },
+        "name": "FUB - Create Person",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1488,
+          352
+        ],
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 3000,
+        "id": "af87f7c6-3f26-44dc-a970-5c327aad7f19",
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.followupboss.com/v1/notes",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ personId: $json.id, subject: 'Zillow Rental Application', body: 'Applied for ' + $('Parse & Resolve Application').item.json.property_address + ' via Zillow Rental Manager (Properties match: ' + $('Parse & Resolve Application').item.json.match_status + '). No phone or email was included in the notification email — add the applicant\\'s phone number to this record to trigger the usual identity-verification flow.' + ($('Parse & Resolve Application').item.json.review_link ? ' Review application: ' + $('Parse & Resolve Application').item.json.review_link : '') }) }}",
+          "options": {}
+        },
+        "name": "FUB - Add Note",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1712,
+          352
+        ],
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 3000,
+        "id": "89be54a5-8c75-4a61-99c8-8cc502a4aa51",
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "operation": "append",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Rental Applications",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "message_id": "={{ $('Parse & Resolve Application').item.json.message_id }}",
+              "received_at": "={{ $('Parse & Resolve Application').item.json.received_at }}",
+              "applicant_name": "={{ $('Parse & Resolve Application').item.json.applicant_name }}",
+              "property_address": "={{ $('Parse & Resolve Application').item.json.property_address }}",
+              "property_key": "={{ $('Parse & Resolve Application').item.json.property_key }}",
+              "match_status": "={{ $('Parse & Resolve Application').item.json.match_status }}",
+              "person_id": "={{ $('FUB - Create Person').item.json.id }}",
+              "fub_stage": "={{ $('Parse & Resolve Application').item.json.fub_stage }}",
+              "review_link": "={{ $('Parse & Resolve Application').item.json.review_link }}",
+              "alert_phone": "={{ $('Parse & Resolve Application').item.json.alert_phone }}",
+              "alert_sent_at": "={{ $('Parse & Resolve Application').item.json.logged_at }}",
+              "existing_person_match": "FALSE"
+            },
+            "matchingColumns": [],
+            "schema": [
+              {
+                "id": "message_id",
+                "displayName": "message_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "received_at",
+                "displayName": "received_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "applicant_name",
+                "displayName": "applicant_name",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_address",
+                "displayName": "property_address",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_key",
+                "displayName": "property_key",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "match_status",
+                "displayName": "match_status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_id",
+                "displayName": "person_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "fub_stage",
+                "displayName": "fub_stage",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "review_link",
+                "displayName": "review_link",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "alert_phone",
+                "displayName": "alert_phone",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "alert_sent_at",
+                "displayName": "alert_sent_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "existing_person_match",
+                "displayName": "existing_person_match",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ],
+            "attemptToConvertTypes": false,
+            "convertFieldsToString": true
+          },
+          "options": {}
+        },
+        "name": "Append Rental Application Row",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          1920,
+          240
+        ],
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000,
+        "id": "09753838-cac7-4beb-90dd-7e5cb26de34d",
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "from": "={{ $json.from_number }}",
+          "to": "={{ $json.alert_phone }}",
+          "message": "={{ $json.message }}",
+          "options": {}
+        },
+        "name": "Send Phone-Needed SMS",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          1920,
+          448
+        ],
+        "id": "a45affb5-d83b-4807-9836-cbfe8987ba49",
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        },
+        "onError": "continueRegularOutput"
+      },
+      {
+        "parameters": {
+          "from": "={{ $json.from_number }}",
+          "to": "={{ $json.alert_phone }}",
+          "message": "={{ $json.message }}",
+          "options": {}
+        },
+        "name": "Send Parse-Failed Alert",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          880,
+          480
+        ],
+        "id": "8e580dd0-6834-4701-8113-7342f16fb3ef",
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        },
+        "onError": "continueRegularOutput"
+      },
+      {
+        "parameters": {
+          "operation": "append",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Rental Applications",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "message_id": "={{ $json.message_id }}",
+              "received_at": "={{ new Date().toISOString() }}",
+              "applicant_name": "",
+              "property_address": "={{ $json.raw_subject }}",
+              "match_status": "parse_failed",
+              "alert_phone": "={{ $json.alert_phone }}",
+              "alert_sent_at": "={{ new Date().toISOString() }}",
+              "existing_person_match": ""
+            },
+            "matchingColumns": [],
+            "schema": [
+              {
+                "id": "message_id",
+                "displayName": "message_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "received_at",
+                "displayName": "received_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "applicant_name",
+                "displayName": "applicant_name",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_address",
+                "displayName": "property_address",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_key",
+                "displayName": "property_key",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "match_status",
+                "displayName": "match_status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_id",
+                "displayName": "person_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "fub_stage",
+                "displayName": "fub_stage",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "review_link",
+                "displayName": "review_link",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "alert_phone",
+                "displayName": "alert_phone",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "alert_sent_at",
+                "displayName": "alert_sent_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "existing_person_match",
+                "displayName": "existing_person_match",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ],
+            "attemptToConvertTypes": false,
+            "convertFieldsToString": true
+          },
+          "options": {}
+        },
+        "name": "Append Parse-Failed Row",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          1104,
+          480
+        ],
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000,
+        "id": "667b272e-1480-4c1c-acbe-9c362e981ef3",
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.skip }}",
+                "rightValue": false,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              },
+              {
+                "leftValue": "={{ $json.test_gate_open }}",
+                "rightValue": false,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "name": "Test Gate Closed?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          640,
+          640
+        ],
+        "id": "f1a2b3c4-5678-4abc-9def-000000000001"
+      },
+      {
+        "parameters": {
+          "operation": "append",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Rental Applications",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "message_id": "={{ $json.message_id }}",
+              "received_at": "={{ $json.received_at }}",
+              "applicant_name": "={{ $json.applicant_name }}",
+              "property_address": "={{ $json.property_address }}",
+              "property_key": "={{ $json.property_key }}",
+              "match_status": "={{ $json.match_status }}",
+              "person_id": "",
+              "fub_stage": "skipped_test_gate",
+              "review_link": "={{ $json.review_link }}",
+              "alert_phone": "={{ $json.alert_phone }}",
+              "alert_sent_at": "",
+              "existing_person_match": ""
+            },
+            "matchingColumns": [],
+            "schema": [
+              {
+                "id": "message_id",
+                "displayName": "message_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "received_at",
+                "displayName": "received_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "applicant_name",
+                "displayName": "applicant_name",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_address",
+                "displayName": "property_address",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_key",
+                "displayName": "property_key",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "match_status",
+                "displayName": "match_status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_id",
+                "displayName": "person_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "fub_stage",
+                "displayName": "fub_stage",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "review_link",
+                "displayName": "review_link",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "alert_phone",
+                "displayName": "alert_phone",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "alert_sent_at",
+                "displayName": "alert_sent_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "existing_person_match",
+                "displayName": "existing_person_match",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ],
+            "attemptToConvertTypes": false,
+            "convertFieldsToString": true
+          },
+          "options": {}
+        },
+        "name": "Append Test-Gate-Skipped Row",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          880,
+          640
+        ],
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000,
+        "id": "f1a2b3c4-5678-4abc-9def-000000000002",
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.existing_found }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              },
+              {
+                "leftValue": "={{ $json.existing_trashed }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "name": "Existing Person Trashed?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          1280,
+          384
+        ],
+        "id": "b1a2c3d4-trsh-4abc-9def-000000000003"
+      },
+      {
+        "parameters": {
+          "operation": "append",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Rental Applications",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "message_id": "={{ $('Parse & Resolve Application').item.json.message_id }}",
+              "received_at": "={{ $('Parse & Resolve Application').item.json.received_at }}",
+              "applicant_name": "={{ $('Parse & Resolve Application').item.json.applicant_name }}",
+              "property_address": "={{ $('Parse & Resolve Application').item.json.property_address }}",
+              "property_key": "={{ $('Parse & Resolve Application').item.json.property_key }}",
+              "match_status": "={{ $('Parse & Resolve Application').item.json.match_status }}",
+              "person_id": "={{ $('Check Existing Match').item.json.existing_person_id }}",
+              "fub_stage": "skipped_trash_gate",
+              "review_link": "={{ $('Parse & Resolve Application').item.json.review_link }}",
+              "alert_phone": "={{ $('Parse & Resolve Application').item.json.alert_phone }}",
+              "alert_sent_at": "",
+              "existing_person_match": "TRUE"
+            },
+            "matchingColumns": [],
+            "schema": [
+              {
+                "id": "message_id",
+                "displayName": "message_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "received_at",
+                "displayName": "received_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "applicant_name",
+                "displayName": "applicant_name",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_address",
+                "displayName": "property_address",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_key",
+                "displayName": "property_key",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "match_status",
+                "displayName": "match_status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_id",
+                "displayName": "person_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "fub_stage",
+                "displayName": "fub_stage",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "review_link",
+                "displayName": "review_link",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "alert_phone",
+                "displayName": "alert_phone",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "alert_sent_at",
+                "displayName": "alert_sent_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "existing_person_match",
+                "displayName": "existing_person_match",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ],
+            "attemptToConvertTypes": false,
+            "convertFieldsToString": true
+          },
+          "options": {}
+        },
+        "name": "Append Trash-Skipped Row",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          1488,
+          384
+        ],
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000,
+        "id": "b1a2c3d4-trsh-4abc-9def-000000000004",
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "// ── APPLICATION_ALERT_CC_MARKER ────────────────────────────────────────────────────────────\n// One item per recipient: the Twilio node reads its IMMEDIATE input, so N\n// items make it send N texts. Never comma-separate a Twilio \"To\" (21211).\nconst ins = $input.all();\n// Index-align against the source node when the counts match (multi-email-per-\n// poll is possible but has never been observed); otherwise fall back to the\n// first item and say so, rather than silently pairing the wrong application.\nconst pick = (arr, i) => {\n  if (arr.length === ins.length) return arr[i];\n  if (i === 0 && arr.length !== ins.length) {\n    console.log(\"[application-alert-cc] item-count mismatch: input=\" + ins.length +\n      \" source=\" + arr.length + \" — falling back to the first source item\");\n  }\n  return arr[0];\n};\n\nconst settings = {};\n$('Read Settings').all().forEach((it) => { const r = it.json || {}; if (r.key) settings[r.key] = r.value; });\n\n// Nicole (alert_phone, resolved upstream) PLUS the CC list. An empty CC means\n// Nicole only — unlike Build Inquiry Alert, this alert has no off switch.\nconst last10 = (s) => String(s ?? \"\").replace(/[^0-9]/g, \"\").slice(-10);\nconst buildRecipients = (primary) => {\n  const cc = String(settings.alert_cc_phones || \"\").split(\",\").map((s) => s.trim()).filter(Boolean);\n  const out = [];\n  const seen = {};\n  [String(primary || \"\").trim()].concat(cc).forEach((p) => {\n    if (!p) return;\n    const k = last10(p);\n    if (!k || seen[k]) return;\n    seen[k] = 1;\n    out.push(p);\n  });\n  return out;\n};\n\nconst parsed = $('Parse & Resolve Application').all();\nconst matched = $('Check Existing Match').all();\nconst out = [];\n\nins.forEach((_, i) => {\n  const d = pick(parsed, i).json;\n  const m = pick(matched, i).json;\n  const recipients = buildRecipients(d.alert_phone);\n  const fromNumber = String(d.from_number || \"\").trim();\n  if (!recipients.length) { console.log(\"[application-alert-cc] existing-match: no recipients — not sending\"); return; }\n  if (!fromNumber) { console.log(\"[application-alert-cc] existing-match: no from_number — not sending (Twilio 21603)\"); return; }\n\n  // Template preserved verbatim from the original Twilio node.\n  const message =\n    \"RF: Zillow rental application from \" + d.applicant_name + \" for \" + d.canonical_address +\n    \" matches an EXISTING FUB person #\" + m.existing_person_id + \" (\\\"\" + m.existing_stage +\n    \"\\\"). No duplicate created — review manually.\" +\n    (d.review_link ? \" Review: \" + d.review_link : \"\");\n\n  console.log(\"[application-alert-cc] existing-match for \" + d.applicant_name + \" -> \" + recipients.length + \" recipient(s)\");\n  recipients.forEach((phone) => out.push({ json: {\n    message: message, alert_phone: phone, from_number: fromNumber,\n    applicant_name: d.applicant_name, alert_kind: \"existing_match\",\n    sent_at: new Date().toISOString(),\n  } }));\n});\nreturn out;"
+        },
+        "id": "app-alert-cc-build-existing-match-alert",
+        "name": "Build Existing-Match Alert",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1532,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// ── APPLICATION_ALERT_CC_MARKER ────────────────────────────────────────────────────────────\n// One item per recipient: the Twilio node reads its IMMEDIATE input, so N\n// items make it send N texts. Never comma-separate a Twilio \"To\" (21211).\nconst ins = $input.all();\n// Index-align against the source node when the counts match (multi-email-per-\n// poll is possible but has never been observed); otherwise fall back to the\n// first item and say so, rather than silently pairing the wrong application.\nconst pick = (arr, i) => {\n  if (arr.length === ins.length) return arr[i];\n  if (i === 0 && arr.length !== ins.length) {\n    console.log(\"[application-alert-cc] item-count mismatch: input=\" + ins.length +\n      \" source=\" + arr.length + \" — falling back to the first source item\");\n  }\n  return arr[0];\n};\n\nconst settings = {};\n$('Read Settings').all().forEach((it) => { const r = it.json || {}; if (r.key) settings[r.key] = r.value; });\n\n// Nicole (alert_phone, resolved upstream) PLUS the CC list. An empty CC means\n// Nicole only — unlike Build Inquiry Alert, this alert has no off switch.\nconst last10 = (s) => String(s ?? \"\").replace(/[^0-9]/g, \"\").slice(-10);\nconst buildRecipients = (primary) => {\n  const cc = String(settings.alert_cc_phones || \"\").split(\",\").map((s) => s.trim()).filter(Boolean);\n  const out = [];\n  const seen = {};\n  [String(primary || \"\").trim()].concat(cc).forEach((p) => {\n    if (!p) return;\n    const k = last10(p);\n    if (!k || seen[k]) return;\n    seen[k] = 1;\n    out.push(p);\n  });\n  return out;\n};\n\nconst parsed = $('Parse & Resolve Application').all();\nconst created = $('FUB - Create Person').all();\nconst out = [];\n\nins.forEach((_, i) => {\n  const d = pick(parsed, i).json;\n  const p = pick(created, i).json;\n  const recipients = buildRecipients(d.alert_phone);\n  const fromNumber = String(d.from_number || \"\").trim();\n  if (!recipients.length) { console.log(\"[application-alert-cc] phone-needed: no recipients — not sending\"); return; }\n  if (!fromNumber) { console.log(\"[application-alert-cc] phone-needed: no from_number — not sending (Twilio 21603)\"); return; }\n\n  // Template preserved verbatim from the original Twilio node.\n  const message =\n    \"RF: Zillow rental application from \" + d.applicant_name + \" for \" + d.canonical_address +\n    \". Created FUB person #\" + p.id + \" in \\\"\" + d.fub_stage +\n    \"\\\" — add their phone number in FUB to kick off the usual verification flow.\" +\n    (d.review_link ? \" Review: \" + d.review_link : \"\");\n\n  console.log(\"[application-alert-cc] phone-needed for \" + d.applicant_name + \" -> \" + recipients.length + \" recipient(s)\");\n  recipients.forEach((phone) => out.push({ json: {\n    message: message, alert_phone: phone, from_number: fromNumber,\n    applicant_name: d.applicant_name, alert_kind: \"phone_needed\",\n    sent_at: new Date().toISOString(),\n  } }));\n});\nreturn out;"
+        },
+        "id": "app-alert-cc-build-phone-needed-alert",
+        "name": "Build Phone-Needed Alert",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1740,
+          448
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// ── APPLICATION_ALERT_CC_MARKER ────────────────────────────────────────────────────────────\n// One item per recipient: the Twilio node reads its IMMEDIATE input, so N\n// items make it send N texts. Never comma-separate a Twilio \"To\" (21211).\nconst ins = $input.all();\n// Index-align against the source node when the counts match (multi-email-per-\n// poll is possible but has never been observed); otherwise fall back to the\n// first item and say so, rather than silently pairing the wrong application.\nconst pick = (arr, i) => {\n  if (arr.length === ins.length) return arr[i];\n  if (i === 0 && arr.length !== ins.length) {\n    console.log(\"[application-alert-cc] item-count mismatch: input=\" + ins.length +\n      \" source=\" + arr.length + \" — falling back to the first source item\");\n  }\n  return arr[0];\n};\n\nconst settings = {};\n$('Read Settings').all().forEach((it) => { const r = it.json || {}; if (r.key) settings[r.key] = r.value; });\n\n// Nicole (alert_phone, resolved upstream) PLUS the CC list. An empty CC means\n// Nicole only — unlike Build Inquiry Alert, this alert has no off switch.\nconst last10 = (s) => String(s ?? \"\").replace(/[^0-9]/g, \"\").slice(-10);\nconst buildRecipients = (primary) => {\n  const cc = String(settings.alert_cc_phones || \"\").split(\",\").map((s) => s.trim()).filter(Boolean);\n  const out = [];\n  const seen = {};\n  [String(primary || \"\").trim()].concat(cc).forEach((p) => {\n    if (!p) return;\n    const k = last10(p);\n    if (!k || seen[k]) return;\n    seen[k] = 1;\n    out.push(p);\n  });\n  return out;\n};\n\n// This branch's immediate input IS Parse & Resolve's item (via the IF), so\n// index alignment is exact here; the named lookup keeps it uniform.\nconst parsed = $('Parse & Resolve Application').all();\nconst out = [];\n\nins.forEach((item, i) => {\n  const d = (parsed.length === ins.length ? parsed[i].json : (item.json || {}));\n  const recipients = buildRecipients(d.alert_phone);\n  const fromNumber = String(d.from_number || \"\").trim();\n  if (!recipients.length) { console.log(\"[application-alert-cc] parse-failed: no recipients — not sending\"); return; }\n  if (!fromNumber) { console.log(\"[application-alert-cc] parse-failed: no from_number — not sending (Twilio 21603)\"); return; }\n\n  // Template preserved verbatim from the original Twilio node.\n  const message =\n    \"RF: got a Zillow rental-application-looking email I could not parse — check manually. Subject: \\\"\" +\n    d.raw_subject + \"\\\"\";\n\n  console.log(\"[application-alert-cc] parse-failed -> \" + recipients.length + \" recipient(s)\");\n  recipients.forEach((phone) => out.push({ json: {\n    message: message, alert_phone: phone, from_number: fromNumber,\n    raw_subject: d.raw_subject, alert_kind: \"parse_failed\",\n    sent_at: new Date().toISOString(),\n  } }));\n});\nreturn out;"
+        },
+        "id": "app-alert-cc-build-parse-failed-alert",
+        "name": "Build Parse-Failed Alert",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          700,
+          480
+        ]
+      }
+    ],
+    "connections": {
+      "Gmail Trigger": {
+        "main": [
+          [
+            {
+              "node": "Read Properties",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Read Settings",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Read Rental Applications",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Properties": {
+        "main": [
+          [
+            {
+              "node": "Wait For All",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Settings": {
+        "main": [
+          [
+            {
+              "node": "Wait For All",
+              "type": "main",
+              "index": 1
+            }
+          ]
+        ]
+      },
+      "Read Rental Applications": {
+        "main": [
+          [
+            {
+              "node": "Wait For All",
+              "type": "main",
+              "index": 2
+            }
+          ]
+        ]
+      },
+      "Wait For All": {
+        "main": [
+          [
+            {
+              "node": "Parse & Resolve Application",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse & Resolve Application": {
+        "main": [
+          [
+            {
+              "node": "Should Process?",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Parse Failed?",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Test Gate Closed?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Should Process?": {
+        "main": [
+          [
+            {
+              "node": "FUB - Search Existing Person",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse Failed?": {
+        "main": [
+          [
+            {
+              "node": "Build Parse-Failed Alert",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Append Parse-Failed Row",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Search Existing Person": {
+        "main": [
+          [
+            {
+              "node": "Check Existing Match",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check Existing Match": {
+        "main": [
+          [
+            {
+              "node": "Existing Person Found?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Existing Person Found?": {
+        "main": [
+          [
+            {
+              "node": "Existing Person Trashed?",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "FUB - Create Person",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Add Note To Existing": {
+        "main": [
+          [
+            {
+              "node": "Build Existing-Match Alert",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Append Existing-Match Row",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Create Person": {
+        "main": [
+          [
+            {
+              "node": "FUB - Add Note",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Add Note": {
+        "main": [
+          [
+            {
+              "node": "Append Rental Application Row",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Build Phone-Needed Alert",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Test Gate Closed?": {
+        "main": [
+          [
+            {
+              "node": "Append Test-Gate-Skipped Row",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Existing Person Trashed?": {
+        "main": [
+          [
+            {
+              "node": "Append Trash-Skipped Row",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "FUB - Add Note To Existing",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Existing-Match Alert": {
+        "main": [
+          [
+            {
+              "node": "Send Existing-Match Alert",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Phone-Needed Alert": {
+        "main": [
+          [
+            {
+              "node": "Send Phone-Needed SMS",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Parse-Failed Alert": {
+        "main": [
+          [
+            {
+              "node": "Send Parse-Failed Alert",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Justin Artis",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-08-30T15:25:24.489Z",
+        "id": 430,
+        "workflowId": "X1lih7X05rpnTPmb",
+        "versionId": "61df8e41-fa6f-4e44-b019-26b44304278f",
+        "event": "deactivated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      },
+      {
+        "createdAt": "2026-08-30T15:25:25.191Z",
+        "id": 431,
+        "workflowId": "X1lih7X05rpnTPmb",
+        "versionId": "61df8e41-fa6f-4e44-b019-26b44304278f",
+        "event": "activated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    ]
+  }
+}

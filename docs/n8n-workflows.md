@@ -36,6 +36,7 @@ workflows should read this file first.
 | `3hGnl6mPnu2AMbZ1` | Cal Reminder - Cron Poll | Every 5 min. Due reminders + follow-ups. **ACTIVE, test-gated.** `n8n/cal-reminder-cron.json`. |
 | `41HFRjgWiPEFJwTU` | Cal Reminder - Reconfirm Webhook | Webhook `reconfirm` (GET `?token=`). Marks `confirmed`, returns static HTML. **ACTIVE.** `n8n/cal-reconfirm-webhook.json`. |
 | `R3rhuCYEGoBFArBa` | Identity Verification Reminders | Hourly tick, sends only in the 10am ET hour. One reminder SMS/day for 4 days to leads who haven't verified. **CREATED INACTIVE 2026-08-25.** |
+| `5UvuzQwLjCB4D25A` | Cal Booking Reminders | Hourly tick, sends only in the 10am ET hour. One SMS **and** email per day for 4 days to a lead who was sent a per-property cal link and hasn't booked. **CREATED INACTIVE 2026-08-31.** |
 
 ## Pre-launch checklist
 
@@ -351,7 +352,8 @@ existing value.
 
 `person_id`, `property_key`, `cal_link`, `inquired_at`, `link_sent`,
 `link_sent_at`, `source`, `event_id`, `property_address`, `match_status`, `phone`,
-`email`, `alert_sent`.
+`email`, `alert_sent`, `booking_reminder_count`, `booking_reminder_last_at`,
+`booked_at`.
 
 `event_id` is the idempotency key — FUB retries deliveries and a retry must not
 re-append or re-send. `phone`/`email` are recorded so a later FUB merge (which
@@ -617,6 +619,25 @@ sends only when the current hour in `America/New_York` equals
 timezone** — every `settings` is just `{"executionOrder":"v1"}` — so a cron
 expression would inherit the instance default and drift with DST. Computing the
 ET hour in code is correct regardless of instance config.
+
+**Day count fixed 2026-08-30 — it was a rolling 24h count, not a calendar-day
+count.** `daysSince = Math.floor((now - anchorMs) / DAY)` meant a lead whose
+original SMS went out after 10am ET didn't get day 1 until the *second*
+calendar day: an anchor at 3pm is only 19h before the next day's 10am tick
+(`daysSince=0`, "too soon"), so the first reminder waited until 43h had
+elapsed. Client request 2026-08-30: reminders go out at 10am the very next
+calendar day regardless of what time the original fired. Fixed by comparing
+ET calendar dates (anchor's vs today's) instead of raw elapsed milliseconds —
+every other rule (window-over, one-per-day, the 20h floor) is unchanged, they
+just consume a more correct `daysSince`.
+
+```bash
+node scripts/n8n-fix-identity-reminder-day-calc.mjs [--apply] [--revert --apply]
+```
+Backup `n8n/BEFORE-identity-reminder-day-calc/`. Applied live 2026-08-30;
+`identity-reminders-verify.mjs`'s existing 41 assertions (all built on exact
+24h/48h/etc. offsets, which land on the correct calendar day outside a DST
+transition) still pass unchanged against the patched code.
 
 **Loop safety.** Every path rejoins `Loop Back`, so `SplitInBatches` always
 advances: a guard rejection, a failed Stripe call, and a failed Twilio send all
@@ -918,6 +939,102 @@ no new wiring, because `peopleUpdated` already fires on every phone add.
    Zillow review link) → `Append Rental Application Row` + `Send Phone-Needed SMS`.
 7. **Parse failure** → `Send Parse-Failed Alert` + `Append Parse-Failed Row`. No FUB
    person created.
+
+### An application now records an Inquiries row — `APPLICATION_INQUIRY_ROW_MARKER` (2026-08-31)
+
+**A rental application used to create no `Inquiries` row, so an applicant could
+verify their identity and receive nothing.** The Identity Gate fires on "gated
+stage + phone", but the cal link is only ever delivered by the sweep, which
+serves `Inquiries` rows that are `matched`, carry a `cal_link`, and are
+`link_sent = false`. Nothing coupled the two. This is the
+"verification is not coupled to deliverability" class, and it cost two real
+leads a hand repair — Cassandra Ferra (2748, 08-30) and Quantez Guest (2759,
+08-31), both for 121 Rockingham Way.
+
+```
+FUB - Add Note ─────────────┐
+                            ├─> Build Application Inquiry (Pre)      [runOnceForEachItem]
+FUB - Add Note To Existing ─┘              |
+                            Read Inquiries (App Dedup)               [executeOnce]
+                                           |
+                            Decide Application Inquiry Rows          [runOnceForAllItems]
+                                           |
+                            Append Application Inquiry Row
+```
+
+**Purely additive: 4 new nodes, 2 new edges, and NO edit to any existing
+`jsCode`.** `Parse & Resolve Application` already emits `property_key`,
+`match_status`, `message_id`, `received_at` and `property_address`. The only
+missing field was `cal_link` — and rather than patch the most critical and
+most-bugged node in this workflow, the new build node resolves it itself from
+`$items("Read Properties")`, which has always run by that point.
+
+**Both note nodes must be wired.** The existing-match branch is Omisha Burns'
+case and has the identical gap; wiring only the new-person branch would work
+for most applicants and silently skip the rest. Hanging off the *note* nodes
+rather than earlier also means the row is only created once the FUB person
+provably exists, and the trashed-existing path (`Existing Person Trashed?` →
+`Append Trash-Skipped Row`) never reaches a note node, so a trashed person is
+correctly excluded with no extra check.
+
+Nothing is inserted in front of an existing node (gotcha 19) — both new edges
+are additional outputs on connectors that already fanned out to two siblings.
+
+> **Item counts, because a polling trigger will eventually send two (gotcha 21).**
+> `Build Application Inquiry (Pre)` is `runOnceForEachItem` and resolves its
+> source with `$('Parse & Resolve Application').item` — the same paired-item
+> idiom `Append Rental Application Row` already uses — so if the still-unobserved
+> multi-email-per-poll case ever fires, each application pairs with its own
+> parsed data instead of collapsing onto the first (gotcha 11).
+> `Read Inquiries (App Dedup)` carries `executeOnce`, so it stays **one** Sheets
+> request however many applications arrive — deliberately not repeating the
+> fan-out defect that caused this incident in the first place.
+
+**Two dedup rules, both in `Decide Application Inquiry Rows`:** an existing row
+with the same `event_id` (`application-<message_id>`, so a Gmail redelivery is
+idempotent), and an existing row for the same `person_id` **and**
+`property_key` — a lead who inquired on a property *and* applied for it already
+has a row the sweep will serve, and a second one would text them the same link
+twice.
+
+> **It fails CLOSED.** `Read Inquiries (App Dedup)` carries
+> `onError: continueRegularOutput`, so a Sheets failure arrives as an item
+> holding `error`. Decide treats that as "cannot prove this is not a duplicate"
+> and appends **nothing**, logging loudly. Unknown must never become "fire it" —
+> same direction as the trash-date and `stage_gate_recheck_days` rules. The cost
+> is a missed row (repairable by hand, and Nicole's alert still goes out); the
+> alternative is texting a customer the same cal link twice.
+
+Both new Sheets nodes also carry `onError: continueRegularOutput`, so this
+branch can never abort the execution and cost the applicant the alert to
+Nicole — which is the only mechanism that moves an applicant forward.
+
+**Availability is deliberately NOT checked.** The sweep has never checked it
+(see Cheyla Zinck under "Verification is not coupled to deliverability"), and
+inventing that policy in this one place would make application-sourced rows
+behave unlike inquiry-sourced ones. The property's status is recorded in the
+execution log only.
+
+```bash
+node scripts/n8n-add-application-inquiry-row.mjs [--apply] [--revert --apply]
+node scripts/n8n-add-application-inquiry-row.mjs --emit-js <dir>
+node scripts/application-inquiry-row-verify.mjs [--js <dir>]   # 64 assertions
+```
+Backup `n8n/BEFORE-application-inquiry-row/`. `--emit-js` + `--js` lets the
+patch be unit-tested **before** it is pushed (39 behavioural assertions); the
+default mode reads the live deployed code and also asserts the `connections`
+graph, the onError/executeOnce/retry config, that the append carries an explicit
+`columns.schema` (gotcha 13), that neither new node sits on the Project-2
+credential, and that `Parse & Resolve Application` is still unmarked.
+
+**NOT yet live-verified.** n8n's public API cannot fire a Gmail Trigger
+(`POST /workflows/:id/run` → 405), so **the next real Zillow application is the
+live test.** Expect a new `Inquiries` row alongside the `Rental Applications`
+row, `link_sent = FALSE`, `source = Zillow Rental Application`.
+
+> `application-alert-cc-verify.mjs` asserts the **exact** sibling set on both
+> note connectors, so it was updated in the same change to expect the third
+> sibling. If you add a fourth, update it there too.
 
 ### Rental Applications tab
 
@@ -1835,6 +1952,84 @@ Test artifact: FUB person **2753**, moved to stage `Trash` after the run so the
 reminder workflow's guards block it — left in a gated stage it would have
 texted Andrew once a day for four days.
 
+### ROOT CAUSE of `sheets_unavailable`: the gate read 60 rows one at a time (2026-08-31)
+
+**Everything above this section treats Sheets quota as ambient bad luck. It was
+not. `Read Identity Verifications` was issuing 60 Google Sheets API requests
+per execution, against a quota of 60 read requests per minute per user.**
+
+`Read Settings` emits one item per Settings row, n8n runs the next node once
+per input item, and that node had no `executeOnce` (gotcha 4). Measured on live
+executions before the fix:
+
+```
+Read Settings                   425ms     60 items
+Read Identity Verifications   23227ms   3600 items      <- 60 x 60
+```
+
+3600 = 60 Settings rows × 60 Identity_Verifications rows. **One execution
+consumed the entire minute's budget by itself**, so two overlapping executions
+were a guaranteed 429 — and the automatic retry replays the same 60-request
+read, so `SHEETS_RETRY_MARKER` could not recover from a condition it was
+itself creating.
+
+> **The fan-out width equals the Settings row count.** Every Settings key added
+> cost one more request per gate execution. It crossed 60 on **2026-08-31**,
+> when `cal-booking-reminders-setup.mjs` added seven `cal_booking_reminder_*`
+> keys (53 → 60). **Adding a Settings key was a load change**, which is not
+> something anyone would have predicted from this document.
+
+This is the actual cause of the 66% bail rate before the early stage filter and
+the 17% after (the filter helped because it removes whole executions, i.e. 60
+requests at a time), of the Cassandra Ferra loss, of the Quantez Guest loss,
+and of the "SMS sent, no verification row" failures — the append node does a
+header **read** first, so the exhausted read bucket starves writes too.
+
+```
+Read Identity Verifications   23227ms  3600 items
+Send Verification SMS           335ms  SM4172f52…      <- delivered
+Log to Identity Verifications 20918ms  ERROR "Quota exceeded ... Read requests"
+```
+
+**Fixed with one node property**, `executeOnce: true` — 60 requests → 1.
+
+```bash
+node scripts/n8n-fix-gate-read-fanout.mjs [--apply] [--revert --apply]
+```
+Backup `n8n/BEFORE-gate-read-fanout/`. The script refuses to apply unless all
+of the following still hold, because they are the entire safety argument:
+`Check Guards` is the node's **only** consumer, it is Code v2 in
+`runOnceForAllItems` mode, and it reads the node **purely** by named reference
+(`$items("Read Identity Verifications")`, never `$json`/`$input`).
+
+> **Why this never produced a wrong verdict, only quota burn.** `Check Guards`
+> was receiving each real row 60 times over, and every check on that array is
+> `.some()` / `.find()` / `.filter()` — all of which give the same answer on
+> duplicates. The bug was invisible in `runData` for the same reason gotcha 11
+> is: the item *count* was wrong in a way that changed nothing about the
+> item *contents*.
+
+**Verified live 2026-08-31, execution 30603** (fired on a person holding a
+verification row, so it exercises the full read path and sends nothing):
+
+| | before | after |
+|---|---|---|
+| `Read Identity Verifications` | 23227ms, 3600 items | **791ms, 61 items** |
+| `Check Guards` | `already_sent` | `already_sent` |
+
+`trash-tag-gate-verify.mjs` (377) and `sheets-retry-verify.mjs` (62) both pass
+unchanged.
+
+> **The same audit found nothing else.** Item counts were measured on every
+> Sheets node across the eight active workflows: everywhere else either carries
+> `executeOnce` (the Cal Cron Poll's `Read Cal Bookings`, the Identity
+> Reminders' own `Read Identity Verifications`) or has a Code node collapsing
+> the stream first. **This was the only compounding fan-out in the estate.**
+> Re-run the measurement with `node scripts/sheets-fanout-audit.mjs` after
+> adding any Sheets node downstream of another. It reads recent executions and
+> prints each Sheets node's worst observed item count, so a fan-out shows up as
+> a number far larger than the tab it reads.
+
 ### Alert coverage gap: `alert_cc_phones` misses rental applications
 
 `alert_cc_phones` is read **only** by `Build Inquiry Alert` in the Inquiry flow,
@@ -2717,6 +2912,297 @@ scripts.
 - **Reconfirm/cancel links** point at `https://cal.com/booking/{uid}` rather than a
   bespoke deep link, to avoid inventing an unverified URL shape.
 
+## Cal.com Booking Reminders — `5UvuzQwLjCB4D25A` (2026-08-31)
+
+One SMS **and** one email per day, for **4 days**, to a lead who was sent a
+per-property cal.com showing link and hasn't booked a time. Client request
+2026-08-31, explicitly "the same cadence as the ID verification reminders".
+
+**Created INACTIVE. Activating is a separate, deliberate step** — run
+`cal-booking-reminders-preview.mjs` first and read the due list.
+
+Reminders on days **1–4** after the link (day 0), one per day, stopping the
+moment they book that property. Cadence, send hour, hourly-tick-plus-in-code-ET-hour
+check, 20h floor and calendar-day arithmetic are all deliberately identical to
+`R3rhuCYEGoBFArBa` — including the 2026-08-30 day-calc fix, so a link sent at
+3pm produces its first nudge at 10am the **next** morning rather than the one
+after.
+
+### "Have they booked?" — joined on event type id, never on address
+
+The obvious join is `Cal Bookings.property_address` against the Inquiries row's
+address. **It matches nothing.** Inquiries stores what FUB sent
+(`130 Sandtrap Rd`); Cal Bookings stores the cal.com event type title
+(`130 Sandtrap Road`). Every live showing booking differs from its inquiry by a
+street suffix, so exact compare fails and fuzzy compare means a fourth copy of
+the address matcher.
+
+The join runs `Cal Bookings.cal_event_type_id` → Properties → `property_key`
+instead. Verified live: all **73** Properties rows carry a `cal_event_type_id`,
+**no id is shared by two properties**, and every existing showing booking
+resolves to exactly one `property_key`. No address matching anywhere.
+
+The **person** side is deliberately permissive — `fub_person_id` **or** phone
+(last 10) **or** email. Missing a booking means nagging a customer who already
+booked; a false positive only cancels an optional nudge, so over-matching is
+the safe direction. Consequence worth knowing: several test contacts share
+Andrew's one phone number, so the phone arm can attribute a booking to the
+wrong test person. Harmless by construction, and real leads don't share phones.
+
+**A cancelled booking does not count as booked** — the lead is nudged again.
+
+### `fub_person_id` on Cal Bookings — `CAL_BOOKINGS_PERSON_ID_MARKER`
+
+New column, populated on every new booking by `Append Booking Row`. The value
+was **already in hand and thrown away**: the inquiry flow enriches every
+per-property cal link with `metadata[fub_person_id]`, `Parse Booking` already
+reads it into `personId`, and `Classify & Build Row` already spreads it. This
+adds the mapping only — no new lookup, no extra API call, no change to any send.
+
+Closes the gap recorded under "Message logging to FUB — Known gap", which named
+exactly this as the right shape.
+
+> Pre-existing bookings have an empty `fub_person_id` and always will —
+> nothing backfills it. They still resolve through the phone/email arms, which
+> is how the preview detects 3 real bookings today.
+
+The builder **refuses to apply** if `Parse Booking` stops emitting `personId`
+or `Classify & Build Row` stops spreading it, rather than silently mapping an
+empty column forever.
+
+### Go-forward only — `cal_booking_reminder_start_at`
+
+Same discipline as `inquiry_flow_start_at`: a row whose `link_sent_at` predates
+it is never nudged, so **activating the workflow messages nobody**. It defaults
+to the moment `cal-booking-reminders-setup.mjs` first runs. A missing or
+unparseable value fails **closed** (nothing due), not open.
+
+**Preview at setup time: 0 to nudge**, 19 rows `before_start_at`, 3 `booked`.
+
+> **Do not move it backwards without running the preview first.** It is the
+> only thing between activation and nudging the whole history of the tab —
+> 22 delivered links, most of them months old.
+
+### State lives on the Inquiries row, not in new rows
+
+`booking_reminder_count`, `booking_reminder_last_at`, `booked_at`, updated in
+place and matched on `event_id`.
+
+> **This is the opposite of the ID reminders, and the difference matters.**
+> That workflow appends a row per reminder because every Stripe `session_id`
+> it mints must stay findable by the Result Handler. Here there is no such
+> constraint, and appending would be **actively harmful**: the cal-link sweep
+> (`UbO0l29GtILMm1sP`) selects Inquiries rows on `link_sent === "false"`, so an
+> extra row per lead per day would put unsent-looking rows in front of the very
+> thing that sends cal links.
+
+`booked_at` is stamped by a parallel `Find Newly Booked` → `Any Booked?` →
+`Mark Booked` branch, so a booked row stops being re-evaluated and a human can
+see why it went quiet. It is idempotent — an already-stamped row is skipped.
+
+### Only rows that actually received a link
+
+Selection requires `link_sent === "true"`. Every `skipped_*` value is a
+**recorded non-send** — there is no link in that lead's hands, so nudging them
+about one would be incoherent. The verifier asserts this for `false`,
+`skipped_test_gate`, `skipped_stage_gate` and `skipped_trash_permanent`.
+
+### Guards, blunt on purpose
+
+Re-checked against FUB at send time, up to 4 days after the link. As with the
+ID reminders the guard may only ever **under**-send: any of the three trash
+tags with no expiry arithmetic, any trash-family stage, any stage outside
+`allowed_stages`, and an empty `allowed_stages` still means allow-everything.
+A Trash-invisible person (gotcha 18) returns `{}` and fails safe as
+`person_not_found`.
+
+**Phone and email are read LIVE from FUB, not from the Inquiries row.** Not
+polish — required. That row's `phone` is a snapshot taken at inquiry time and
+demonstrably goes stale: person **2738** has `phone=""` on the inquiry row yet
+booked with a real number.
+
+**A lead with only one channel still gets nudged on it** — `Has Phone?` /
+`Has Email?` route around the missing one rather than calling Twilio with an
+empty `To` (21604) or Gmail with an empty `to`. Only a lead with **neither**
+is skipped. In principle a phone always exists by this point (a cal link
+implies Stripe Identity, which implies a phone); the guard costs nothing and
+the live data shows the snapshot lying about it.
+
+### Sends are isolated, and every send is logged to FUB
+
+Both sends carry `onError: continueRegularOutput`, each followed by an
+`X Failed?` IF into a success or failure FUB note — the same four-note shape
+applied across the estate on 2026-08-30. Every note node also carries
+`onError: continueRegularOutput`: bookkeeping must never abort a send that
+already happened.
+
+The failure IFs are byte-shaped like the already-deployed `SMS Send Failed?`
+(`typeVersion 2.2`, `typeValidation: loose`, `rightValue` a **raw boolean**,
+no `singleValue`) — the shape an earlier attempt elsewhere got wrong, where
+the IF silently never matched.
+
+### Loop safety and quota
+
+The send chain is **strictly linear** — `Build Nudge → Has Phone? → SMS →
+note → Has Email? → email → note → Mark Nudge Sent → Loop Back` — so
+`SplitInBatches` receives exactly one advance per lead. Two parallel branches
+both rejoining `Loop Back` would advance it twice and silently skip a lead.
+A guard rejection, a Twilio failure, a Gmail failure and a failed
+`Mark Nudge Sent` all still reach `Loop Back`.
+
+**The three heavy Sheets reads sit BEHIND the send-hour gate.** `Check Send
+Window` runs on `Read Settings` alone and the out-of-window branch is
+terminal, so 23 of every 24 ticks cost **one** read rather than four. The ID
+reminders read everything first and decide after; that shape was not copied,
+because this estate has already lost real leads to Sheets quota.
+
+It runs on the **main-project** Sheets credential (`Nre1YnwWyB67bKje`), not
+Project 2 — Project 2 also carries the Identity Gate, documented at ~17%
+`sheets_unavailable` bails, and there is no reason to add to it.
+
+```bash
+node scripts/cal-booking-reminders-setup.mjs [--apply]        # columns + settings
+node scripts/n8n-add-cal-bookings-person-id.mjs [--apply] [--revert --apply]
+node scripts/n8n-create-cal-booking-reminders.mjs [--apply]   # creates it INACTIVE
+node scripts/n8n-create-cal-booking-reminders.mjs --emit-js <dir>
+node scripts/cal-booking-reminders-preview.mjs [--verbose]    # who would be nudged? read-only
+node scripts/cal-booking-reminders-verify.mjs                 # 108 synthetic assertions
+node scripts/n8n-fix-booking-join-live-identity.mjs [--apply] [--revert --apply]
+node scripts/cal-booking-reminders-preview.mjs --start-at <iso> --with-guards
+```
+
+Backups `n8n/BEFORE-cal-booking-reminders/`,
+`n8n/BEFORE-cal-bookings-person-id/`.
+
+`cal-booking-reminders-verify.mjs` exists because the workflow is
+go-forward-only, so for the first days **nothing can be due** and the preview
+necessarily reports zero. That proves the filter can say no and nothing about
+the day arithmetic, the cap, the one-per-day rule, the per-property join, or
+any guard — which are exactly what causes harm if wrong. Same reasoning as
+`identity-reminders-verify.mjs` and `doorloop-recon-cases.mjs`. It asserts the
+deployed `connections` graph and the onError/executeOnce config as well as
+behaviour.
+
+> **Setup had to widen the sheet grid, not just append headers.** The
+> `Inquiries` tab shipped with `columnCount` exactly 13, so writing `N1:P1`
+> failed `Range exceeds grid limits` before any value was written. The setup
+> script now issues an `appendDimension` batchUpdate first. Expect this on any
+> tab whose grid was never over-provisioned.
+
+### Live-identity backstop — `BOOKING_JOIN_LIVE_IDENTITY_MARKER` (2026-08-31)
+
+**Found in live data before a single nudge was sent, and it would have nagged
+a real customer.** Erick Silva (2738) booked 104 Hawthorne Landing Dr on
+08-30. `Find Due Nudges` did not notice, because every arm of the person join
+was reading the wrong copy of his identity:
+
+| Source | Phone | Email |
+|---|---|---|
+| Cal Bookings row | `12673449270` | `ericklagares.silva@gmail.com` (`fub_person_id` empty) |
+| Inquiries row | `""` — snapshot predates his phone | `1tvught…@convo.zillow.com` (Zillow relay) |
+| **FUB person 2738** | **`2673449270`** — matches the booking | the relay |
+
+He would have received four days of "your showing isn't booked yet" about a
+showing he had already booked.
+
+**Not a one-off.** Zillow leads systematically arrive with no phone and an
+anonymised relay email — 54 of 76 Inquiries rows carry a relay — and they
+book with their real details. The join was right; its inputs were stale.
+
+`Find Due Nudges` now passes the property's booked identity tokens out as
+`booked_tokens`, and `Check Nudge Guards` — which **already** fetches the live
+FUB person, at no extra cost — re-tests them against the live phone/email and
+skips `already_booked_live:*`.
+
+> Placed in the guard, not the selector, deliberately: the selector has no FUB
+> access, and adding one would mean a FUB call per candidate row on every
+> tick. The selector's own cheap check still runs first and still catches the
+> common case; the guard is the backstop for stale-snapshot leads.
+
+Verified live: the deployed guard now returns `already_booked_live:phone` for
+2738 while the two genuinely-unbooked leads still pass.
+
+### The backfill question — answered 2026-08-31, mostly "there is nobody"
+
+Client asked whether every already-ID-verified lead could start receiving
+these. Investigated before changing anything, and the intuitive change —
+moving `cal_booking_reminder_start_at` far back — **does almost nothing**,
+because the window is days 1–4 from `link_sent_at` and every older link is
+`window_over`. Widening to 2026-08-01 yields **3** candidate rows, not dozens.
+
+Of the 19 unbooked delivered links:
+
+- **16 belong to test contacts** — Test Test8/9/10/11/12/13 (persons 2525,
+  2545, 2633–2636), all now in stage `Trash`, all 25–32 days old. Blocked
+  three times over: `before_start_at`, `window_over`, and `trash_stage`.
+- **3 are real and recent**: 2738 Erick Silva (booked — now correctly
+  suppressed), 2747 Joseph Kincaid, 2748 Cassandra Ferra.
+
+So the cutoff was moved to **`2026-08-28T00:00:00.000Z`**, which reaches
+exactly those 3 and no test rows. Verified after the write:
+**2 would be messaged**, 1 blocked as already-booked.
+
+**Two verified leads are stranded in a different way, and reminders cannot
+help them** — they were never sent a link at all, so there is nothing to
+remind them about:
+
+| Lead | State | Action |
+|---|---|---|
+| 2712 Marchae McNair | verified, gated stage, row has a `cal_link` but `link_sent = skipped_test_gate` | genuinely owed her **original** link — a sweep repair, not a reminder |
+| 2726 Cheyla Zinck | verified, stage `Tenants Awaiting Move In` | **housed. Do not contact.** |
+
+Marchae is the "verification is not coupled to deliverability" class.
+**Repaired 2026-08-31** — see below. Cheyla is not, and must not be.
+
+#### Marchae McNair (2712) — repaired 2026-08-31
+
+She inquired on `165 River Hill Rd` at **08-21T18:38Z**, inside the pre-launch
+window (last `skipped_test_gate` inquiry 08-25T16:06, first delivered
+08-27T16:05), so `Resolve Inquiry` recorded the row and sent nothing. Working
+as designed — lifting a gate deliberately never fires a backlog.
+
+She then verified anyway, driven by the reminder workflow:
+
+```
+08-28 15:55  verification SMS   -> pending
+08-30 14:01  reminder #1        <- R3rhuCYEGoBFArBa converting a real lead
+08-31 11:54  VERIFIED           -> Result Handler replayed the sweep
+```
+
+Execution **30516** at 11:54:39 is that replay finding nothing: the sweep
+selects `link_sent === "false"` and hers read `skipped_test_gate`. **She
+verified into silence, that morning.**
+
+Repaired by flipping **one** row (`event_id 1835`) to `false` and re-POSTing
+her person uri to the sweep webhook — the same call the Result Handler makes,
+necessary because that handler had already fired and will not fire again.
+Execution **30560**: SMS to `+18392012646` and the cal-link email both sent,
+both `… Failed? items=0`, `Mark Inquiry Sent -> link_sent="true"`, FUB notes
+logged for both channels.
+
+```bash
+node scripts/_oneoff-2026-08-31-marchae-repair.mjs [--apply] [--revert --apply] [--no-trigger]
+```
+Journal `n8n/BEFORE-2026-08-31-marchae-repair/journal.json`.
+
+> **The script re-checks five preconditions live and refuses if any fails** —
+> notably *"is the property still vacant?"*. That is the Cheyla Zinck guard:
+> person 2726 is also verified with a `skipped_test_gate` row, and must NOT be
+> contacted because she is now `Tenants Awaiting Move In`. A bulk flip of
+> `skipped_test_gate` would have texted her about a house she already lives
+> in. **45 live rows depend on that value staying inert — never flip it in
+> bulk.**
+
+A useful consequence: her row now carries `link_sent_at` of 08-31, so she
+enters the booking-reminder track anchored today (`too_soon(0d)` on the
+08-31 preview) and becomes nudge #1 at 10am ET on 09-01 if she has not booked.
+
+**Not yet verified live.** The workflow is inactive and nothing has been due.
+Before activating: run the preview, confirm the due list is what you expect,
+then watch the first 10am ET tick. The first real nudge is also the first live
+proof of the FUB note logging, the Gmail send, and the booking join
+suppressing a lead who books mid-window.
+
 ## Backing Google Sheet
 
 - Spreadsheet ID: `1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw`
@@ -2949,8 +3435,60 @@ nothing, write nothing, and touch no n8n state.
 | `doorloop-recon-verify.mjs` / `doorloop-recon-cases.mjs` | the report; `--live` diffs deployed jsCode |
 | `sheets-retry-verify.mjs` | **62 assertions** — the retry cap, the served-filter, the wiring |
 | `no-phone-skip-verify.mjs` | **53 assertions** — the sentinel allowlist, recipient keying |
+| `application-inquiry-row-verify.mjs` | **64 assertions** — cal_link resolution, both dedup rules, fail-closed, wiring |
 | `stage-gate-race-verify.mjs` | **36 assertions** — race recovery, recency guard, both nodes |
+| `cal-booking-reminders-verify.mjs` | **108 assertions** — day arithmetic, per-property booking join, guards, wiring |
 | `launch-audit.mjs` | all 12 workflows, 16 hard gates, 3 alert phones |
+
+> **Two verifiers were silently testing nothing, and were repaired 2026-08-31.**
+> Both had pinned expectations to **mutable CRM state**, so they began failing
+> for reasons unrelated to the code they exist to check. Worth knowing as a
+> pattern, because it is the failure mode of every verifier here that reads
+> live data.
+>
+> - `stage-gate-verify.mjs` (7 failures) took the live **Test Test9 (2545)**
+>   record as-is and used `person.stage` as its "allowed" value. That contact
+>   was later moved to `Trash` and tagged by the 593-person backfill, so the
+>   trash gate short-circuited **above** the stage logic being asserted — the
+>   script was no longer testing the stage gate at all. Fixed by neutralising
+>   the trash dimension on the subject (tags stripped, `customTrashDate`
+>   cleared, stage forced to a gated tenant stage) while keeping the live record
+>   for its shape. It now throws if `withoutStage` ever stops excluding the
+>   subject's stage, which would make the negative case vacuous.
+> - `zillow-flow-verify.mjs` (2 failures) asserted that `"Test ZillowFlowCheck"`
+>   matched **nothing** in FUB — which broke the moment a 2026-08-07 test run
+>   created person **2649** under exactly that name and left it in place — and
+>   that person **2607** was untrashed, which stopped being true. Case A now
+>   randomises the name per run so no previous run can have created it. Case B
+>   keeps the live search (it proves the real endpoint and parsing) but asserts
+>   only what is invariant — found, and the right id — and checks the verdict is
+>   *coherent* with whatever the live record says. The trash **decision** moved
+>   to a new synthetic **Case B2**: 14 cases over `Check Existing Match` on data
+>   nobody can move, covering the dateless tag, both expiry windows,
+>   `Denied Credit` precedence, the untagged stage fallback, and tag-casing
+>   normalisation. Net: more coverage of the branch that was unexercised until
+>   2026-08-28, and no drift.
+>
+> **The lesson: a fixture pinned to a live CRM record is a test that expires.**
+> Pin behaviour to synthetic data; use live data to prove the plumbing.
+>
+> **`stage-gate-verify.mjs`'s sweep section was also passing vacuously**, and was
+> tightened in the same change. The subject has no unsent `Inquiries` rows, so
+> the positive case bailed `no_pending_inquiries` and the only assertion was
+> "the reason isn't `stage_not_allowed`" — which would still have passed with
+> the gate deleted. It now injects a synthetic pending row into the stubbed
+> `Read Inquiries` (nothing is written; `$items()` is fully stubbed), so the
+> positive case must actually build a message — asserting the enriched
+> `metadata[fub_person_id]` / `metadata[phone]`, an E.164 `to`, and **no
+> unresolved `{{ }}` placeholders** in the rendered SMS — and the negative case
+> must *suppress a send that would otherwise have happened*. The synthetic
+> `cal_link` is one that cannot appear in `Text Log`, so the per-property dedup
+> can never mask the result and the outcome does not depend on `isTestMode`.
+>
+> Non-vacuity was confirmed by removing the row and checking the new assertions
+> fail (`skipped=true reason="no_pending_inquiries"`). **Worth doing to any
+> assertion whose subject comes from live data** — a green verifier proves
+> nothing until you have seen it go red.
 
 For a live negative stage-gate test, flip the setting, fire, and restore:
 
@@ -2966,6 +3504,86 @@ node scripts/stage-gate-setup.mjs --apply                # restore
 > The **positive** path on that webhook creates a Stripe session and sends a real SMS
 > to Andrew's personal phone. The negative path sends nothing, which makes it the safe
 > one to re-run.
+
+## Message logging to FUB — every lead-facing send, success or failure (2026-08-30)
+
+Client request: log all messages we send in general, not just the verification SMS.
+Every lead-facing send now writes a FUB Note (success **and** failure) across four
+workflows. Two Cal.com workflows (Immediate Sends, Cron Poll) are **deliberately
+excluded** — see "Known gap" below.
+
+| Workflow | Send | Before | After |
+|---|---|---|---|
+| `L13GUyrWbjSJwn8p` Identity Gate | verification SMS | success only, no `onError` | success + failure |
+| `R3rhuCYEGoBFArBa` Identity Reminders | reminder SMS | not logged at all | success + failure |
+| `UbO0l29GtILMm1sP` Sweep | cal-link SMS | success only, no `onError` | success + failure |
+| `UbO0l29GtILMm1sP` Sweep | cal-link email | not logged at all (dead end) | success + failure |
+| `ztUEx7Htu620SLbj` Access Code Dispatch | access-code SMS | success only, no `onError` | success + failure |
+
+**The shape, everywhere:** `Send X (now onError: continueRegularOutput)` →
+`X Failed? (IF !!$json.error)` → true: a new `FUB - Log Note (X Failed)` node;
+false: the existing/new success note. Every new note node reads the pre-send data
+via a NAMED node reference (`.item` where a lead can have >1 item on the path —
+the sweep's two-property case, gotcha 11 — `.first()` only where the loop's
+`SplitInBatches` batch size is 1) and carries `onError: continueRegularOutput`
+itself, so bookkeeping can never abort a send that already happened.
+
+**Three of the four sends previously had NO `onError` at all**, meaning a Twilio
+failure aborted the whole execution before anything downstream ran — not just no
+note, no sheet row either. Adding `onError` there is a genuine behaviour change
+(crash → continue), approved 2026-08-30, matching the isolation pattern already
+used elsewhere in this system (Cron Poll's send isolation, the access-gate). The
+sweep's SMS branch needed one extra layer of care: a naive `onError` addition
+would have let the existing unconditional 3-way fan-out (`Log to Text Log`,
+`FUB - Log Note`, `Mark Inquiry Sent`) fire on the failure path too —
+`Mark Inquiry Sent` would have stamped `link_sent = true` for a message that was
+never delivered, permanently hiding that inquiry from every future sweep. The
+failure branch is therefore terminal (just the note), leaving `link_sent = false`
+so a failed send is retried by the next sweep, same as if nothing had run. The
+access-dispatch SMS gets the same treatment: a failed send skips
+`Update Showings Row (Cron)` (so `status` never becomes `code_sent`) and goes
+straight to `Loop Back`, letting the next 5-minute tick retry it.
+
+**Known limitation, surfaced not fixed.** `Log to Identity Verifications` /
+`Log Reminder Row` hardcode `status: "pending"` regardless of which branch ran,
+so a failed initial verification SMS or reminder still logs a `pending` sheet
+row — the closest existing status, but not literally true (nothing was ever
+sent). Before this change, a failed *initial* verification SMS produced **no
+row at all** (the execution aborted first), so this is strictly more visible
+than before, just not perfectly labeled. A dedicated failure status (and
+whether it needs its own alert) is a separate decision, out of scope here.
+
+**Known gap — Cal.com Immediate Sends / Cron Poll are NOT logged.** Neither
+workflow ever calls the FUB API, and `Cal Bookings` has no `fub_person_id`
+column — there is no person to attach a note to. Client decision 2026-08-30:
+skip these for now rather than add a live per-send FUB lookup (an extra API
+call per message, with a soft-match misattribution risk in the same class as
+gotcha 17) or a schema change to backfill a person id at booking time. Revisit
+if this becomes a priority — the right shape would be populating
+`fub_person_id` wherever a `Cal Bookings` row is created (Booking Handler's
+`Build Showing Row` / Immediate Sends' `Classify & Build Row`), not a lookup
+per message.
+
+```bash
+node scripts/n8n-add-send-failure-note-identity-gate.mjs      [--apply] [--revert --apply]
+node scripts/n8n-add-note-logging-identity-reminders.mjs      [--apply] [--revert --apply]
+node scripts/n8n-add-send-failure-note-sweep.mjs              [--apply] [--revert --apply]
+node scripts/n8n-add-send-failure-note-access-dispatch.mjs    [--apply] [--revert --apply]
+```
+Backups: `n8n/BEFORE-send-failure-note-identity-gate/`,
+`n8n/BEFORE-note-logging-identity-reminders/`,
+`n8n/BEFORE-send-failure-note-sweep/`,
+`n8n/BEFORE-send-failure-note-access-dispatch/`. All four applied live
+2026-08-30; `identity-reminders-verify.mjs` (41), `cal-link-email-verify.mjs`
+(31, updated — the email branch is no longer a dead end), `inquiry-alert-verify.mjs`
+(36), `stage-gate-race-verify.mjs` (36), and `trash-tag-gate-verify.mjs` (377)
+all still pass unchanged against the patched workflows. **Not yet observed on a
+real send** — the IF node's condition shape was cross-checked against the
+already-deployed `Send Failed?` node in the Cron Poll workflow
+(`typeVersion: 2.2`, `rightValue: true` as a raw boolean, no `singleValue`) after
+an initial version got that shape wrong; watch the next real verification SMS,
+reminder, sweep send, and access-code dispatch to confirm the note actually
+lands in FUB.
 
 ## Full system context
 
