@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import type { Property, Lockbox, DoorLoopReconReport } from "@/lib/types";
 import { useRole } from "@/lib/auth/use-role";
+import { fetchJson } from "@/lib/fetch-json";
 import { DoorLoopReconPanel } from "@/components/properties/doorloop-recon-panel";
 
 export default function PropertiesPage() {
@@ -47,9 +48,9 @@ export default function PropertiesPage() {
     else setRefreshing(true);
     setError(null);
     try {
-      const res = await fetch("/api/properties");
-      if (!res.ok) throw new Error((await res.json()).error ?? "Failed to load");
-      const data = await res.json();
+      const data = await fetchJson<{ properties: Property[]; lockboxes: Lockbox[] }>(
+        "/api/properties"
+      );
       setProperties(data.properties);
       setLockboxes(data.lockboxes);
     } catch (err) {
@@ -70,16 +71,10 @@ export default function PropertiesPage() {
     try {
       // The route now waits for the workflow and returns its reconciliation
       // report, so this resolves once the sync has actually finished writing.
-      const res = await fetch("/api/properties/sync-doorloop", { method: "POST" });
-      if (!res.ok) {
-        const { error } = await res.json();
-        toast.error(error ?? "Failed to trigger sync");
-        return;
-      }
-      const { report, timedOut } = (await res.json()) as {
+      const { report, timedOut } = await fetchJson<{
         report: DoorLoopReconReport | null;
         timedOut?: boolean;
-      };
+      }>("/api/properties/sync-doorloop", { method: "POST" });
 
       if (timedOut) {
         // The sync is still running in n8n; only the report was abandoned.

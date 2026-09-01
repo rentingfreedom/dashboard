@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { fetchJson } from "@/lib/fetch-json";
 import type { AuditLogEntry } from "@/lib/types";
 
 const ACTION_STYLES: Record<string, string> = {
@@ -60,9 +61,7 @@ export default function ActivityPage() {
     else setRefreshing(true);
     setError(null);
     try {
-      const res = await fetch("/api/activity");
-      if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
-      const data = await res.json();
+      const data = await fetchJson<{ entries: AuditLogEntry[] }>("/api/activity");
       setEntries(data.entries);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to load activity";

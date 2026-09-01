@@ -10,6 +10,7 @@ import { LockboxesTable } from "@/components/lockboxes/lockboxes-table";
 import { AddLockboxDialog } from "@/components/lockboxes/add-lockbox-dialog";
 import type { Lockbox } from "@/lib/types";
 import { useRole } from "@/lib/auth/use-role";
+import { fetchJson } from "@/lib/fetch-json";
 
 export default function LockboxesPage() {
   const { canWrite } = useRole();
@@ -24,9 +25,7 @@ export default function LockboxesPage() {
     else setRefreshing(true);
     setError(null);
     try {
-      const res = await fetch("/api/lockboxes");
-      if (!res.ok) throw new Error((await res.json()).error ?? "Failed to load");
-      const data = await res.json();
+      const data = await fetchJson<{ lockboxes: Lockbox[] }>("/api/lockboxes");
       setLockboxes(data.lockboxes);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to load lockboxes";

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { ShowingsTable } from "@/components/showings/showings-table";
+import { fetchJson } from "@/lib/fetch-json";
 import type { Showing } from "@/lib/types";
 
 export default function ShowingsPage() {
@@ -19,9 +20,7 @@ export default function ShowingsPage() {
     else setRefreshing(true);
     setError(null);
     try {
-      const res = await fetch("/api/showings");
-      if (!res.ok) throw new Error((await res.json()).error ?? "Failed to load");
-      const data = await res.json();
+      const data = await fetchJson<{ showings: Showing[] }>("/api/showings");
       setShowings(data.showings);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to load showings";

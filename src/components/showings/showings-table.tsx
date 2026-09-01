@@ -35,6 +35,19 @@ interface ShowingsTableProps {
 export function ShowingsTable({ showings }: ShowingsTableProps) {
   const [sorting, setSorting] = useState<SortingState>([{ id: "showing_time", desc: true }]);
   const [globalFilter, setGlobalFilter] = useState("");
+  const [showCancelled, setShowCancelled] = useState(false);
+
+  // Cancelled showings are history, not work — hidden by default so the table
+  // shows what is actually upcoming. They are kept rather than deleted because
+  // a cancelled row still records that an access code was issued and revoked.
+  const cancelledCount = useMemo(
+    () => showings.filter((s) => s.status === "cancelled").length,
+    [showings]
+  );
+  const visibleShowings = useMemo(
+    () => (showCancelled ? showings : showings.filter((s) => s.status !== "cancelled")),
+    [showings, showCancelled]
+  );
 
   const columns = useMemo(() => [
     col.accessor("property_address", {
@@ -90,7 +103,7 @@ export function ShowingsTable({ showings }: ShowingsTableProps) {
   ], []);
 
   const table = useReactTable({
-    data: showings,
+    data: visibleShowings,
     columns,
     state: { sorting, globalFilter },
     onSortingChange: setSorting,
@@ -119,6 +132,17 @@ export function ShowingsTable({ showings }: ShowingsTableProps) {
           onChange={(e) => setGlobalFilter(e.target.value)}
           className="h-8 w-64 text-sm"
         />
+        {cancelledCount > 0 && (
+          <label className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 select-none cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showCancelled}
+              onChange={(e) => setShowCancelled(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-gray-300 dark:border-gray-600 accent-blue-600 cursor-pointer"
+            />
+            Show cancelled ({cancelledCount})
+          </label>
+        )}
         <span className="ml-auto text-xs text-gray-400">
           {table.getFilteredRowModel().rows.length} showings
         </span>

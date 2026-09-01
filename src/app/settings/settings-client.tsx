@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TeamPanel } from "@/components/settings/team-panel";
 import { cn } from "@/lib/utils";
+import { fetchJson } from "@/lib/fetch-json";
 
 interface Automation {
   key: string;
@@ -55,8 +56,7 @@ export function SettingsClient({ currentUserId }: { currentUserId: string }) {
   async function load() {
     setLoading(true);
     try {
-      const res = await fetch("/api/settings");
-      setData(await res.json());
+      setData(await fetchJson<DiagnosticsResult>("/api/settings"));
     } catch {
       setData(null);
     } finally {
