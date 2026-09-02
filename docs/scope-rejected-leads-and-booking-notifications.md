@@ -6,8 +6,13 @@ n8n and the Sheet on 2026-09-01 — but re-verify before editing, because severa
 earlier "these need changing" lists in this project turned out to be wrong for
 exactly the reason that nobody re-derived them.
 
-Two independent pieces of work. B is the one with a customer-visible failure
-behind it; A is mostly a decision plus a small deletion.
+Two independent pieces of work.
+
+**A grew on 2026-09-01.** It started as "retire a dead setting" and is now
+also **A-2: cancel a rejected lead's booking**, which reverses a documented
+decision, adds a capability this system has never had (writing a cancellation to
+Cal.com), and has three blocking client questions. A-2 is the larger of the two
+pieces of work in this document.
 
 ---
 
@@ -101,20 +106,92 @@ and `TRASH_TAGS = ["permanent trash", "no response trash", "denied credit"]`,
 and re-fetch the FUB person at send time. So **the moment Nicole tags a lead and
 moves them, every nudge and reminder stops** — no change needed.
 
-> **The residual gap, and it is a real one for this process.** A rejected lead
-> who **already holds a confirmed booking** still receives their door code and
-> Cal.com's own reminder and follow-up emails. Access Code Dispatch is
-> deliberately stage-ungated (decision 2026-07-28: a booking can only exist if
-> the lead already passed both gates, and stranding a verified tenant at the
-> door was judged worse), and the three Cal.com workflows have no FUB person in
-> scope at all. **Nothing cancels a booking when someone is rejected.**
->
-> This is not a defect to fix silently — it is a question for the client:
-> *if you deny someone's credit and they have a self-guided showing booked for
-> tomorrow, should they still get the lockbox code?* If the answer is no, the
-> cheapest fix is a stage/tag re-check in `Find Ready Showings`, which would
-> reverse a documented decision and must not be done without sign-off. Today
-> the answer is "cancel the Cal.com booking by hand."
+**But that leaves a gap the client has now closed by decision (2026-09-01):**
+
+> "If they get rejected, they should not get any more notifications period — no
+> reminder updates, no code sent, and the appointment should be cancelled."
+
+This **reverses the 2026-07-28 decision** that Access Code Dispatch stays
+stage-ungated. That decision is recorded in `docs/n8n-workflows.md` under
+"Access Code Dispatch stays stage-ungated — decided", and its reasoning (a
+booking implies both gates were already passed, and stranding a verified tenant
+at the door is worse) does not survive the case where the lead has since been
+rejected. **Update that section when this ships**, or the next reader will
+"fix" the new gate back out.
+
+### A-2. Rejected lead → cancel the booking and stop everything
+
+**Cancelling the Cal.com booking is the single action that satisfies the whole
+requirement**, because every downstream stop already exists and is tested.
+Verified by reading the live code 2026-09-01:
+
+| Consequence of cancelling | Mechanism | Verified |
+|---|---|---|
+| Cal Bookings row flips to `cancelled` | Immediate Sends CANCELLED branch | existing |
+| All Cal.com reminders + follow-ups stop | `Find Due Notifications` line 64: `if (status === 'cancelled') continue;` | **read live** |
+| Showings row flips to `cancelled` | Booking Handler `Update Showings Row (Cancelled)` | existing |
+| Populife code revoked (cloud record) | `Has Code? (Cancel)` → `Populife - Delete Code (Cancel)` | existing |
+| No access code SMS | `Find Ready Showings`: `if (r.status !== 'scheduled') return false;` | **read live** |
+| Booking nudges stop | `Check Nudge Guards` already blocks on tag/stage | **read live** |
+| ID verification reminders stop | `Check Reminder Guards` already blocks on tag/stage | **read live** |
+
+So: **do not add gates to five workflows.** Cancel the booking and the existing
+machinery does the rest.
+
+**Build two layers, not one.**
+
+1. **Primary — a new workflow, `Rejected Lead → Cancel Bookings`.** A cron, not
+   a webhook: both FUB `peopleUpdated` slots are full. Every N minutes read
+   `Cal Bookings` for rows with `status = scheduled` and `start_time` in the
+   future — a small set — resolve the FUB person, and cancel if rejected.
+
+   **Reuse `Check Nudge Guards` from `5UvuzQwLjCB4D25A` verbatim.** It already
+   implements exactly the right person join (`fub_person_id` **or** phone
+   last-10 **or** email, deliberately permissive) and exactly the right policy
+   (`TRASH_TAGS` = the three tags; `TRASH_STAGES` including
+   `cold rental lead 1 month hold`). Copying it keeps one definition of
+   "rejected" rather than introducing a fourth.
+
+2. **Backstop — gate `Find Ready Showings` anyway.** A door code is the
+   highest-consequence send in the system, and layer 1 can fail: Cal.com API
+   down, cron behind, person join misses. Insert a live FUB check between
+   `Process One at a Time` and `Read Settings (Cron)`, routing a rejected lead
+   straight to `Loop Back`. Volume is trivial — only showings inside the next
+   hour. Access Dispatch calls FUB today **only to write notes**, so this adds
+   its first person *read*; `Showings.person_id` is already on the row.
+
+   > Check what `Read Settings (Cron)` and `Calc Code Window (Cron)` read before
+   > inserting. If either reads `$json`/`$input` rather than a named node, the
+   > insertion breaks it — gotcha 19, which has bitten this project twice.
+
+**New capability, never done before: cancelling a Cal.com booking.** Nothing in
+this system has ever written a cancellation to Cal.com. `POST
+/v2/bookings/{uid}/cancel` (`cal-api-version: 2024-08-13`) is the endpoint, but
+**prove it against a throwaway booking before wiring it in** — the same
+discipline used for the Wait node, which had no precedent in this instance and
+was proved in a scratch workflow first.
+
+#### Three questions for the client, all blocking
+
+1. **Which tags cancel a booking?** `Denied Credit` alone (43 people), or all
+   three? `No Response Trash` carries **608 people** and means "unresponsive",
+   not "rejected". This decides the blast radius.
+2. **The lead will receive Cal.com's standard cancellation email**, because
+   cancelling fires the existing CANCELLED branch. That contradicts "no more
+   notifications period" — but the alternative is a rejected lead driving to a
+   house they cannot enter. Recommend keeping it; needs an explicit yes.
+3. **Go-forward cutoff.** 626 people sit in `Trash` and 608 carry a trash tag. A
+   first run with no cutoff could cancel a large backlog at once. Add
+   `rejection_cancel_start_at`, same discipline as `inquiry_flow_start_at`, and
+   run a preview script before activating.
+
+> **Hard limitation the client must be told about — gotcha 8.** If the access
+> code has **already been sent** (it goes at T-60min), cancelling only deletes
+> the Populife *cloud* record. On Bluetooth-only lockboxes the lock generates
+> codes algorithmically from time + serial, so **the physical door code keeps
+> working until its window expires.** Cancelling inside the last hour stops the
+> notifications but does **not** revoke physical access. Only a WiFi gateway, or
+> changing the lockbox, does that.
 
 ### Proposed change
 
@@ -149,10 +226,19 @@ Both send nothing and write nothing. Run both before and after.
 
 ### Risk
 
-Low. Removing a branch that provably never executes cannot change behaviour.
-The only real risk is editing `Check Guards`, which is the single most critical
-node in the system — so: idempotent script, `BEFORE-` backup, and re-run both
-verifiers.
+**A-1 (retire the dead guard): low.** Removing a branch that provably never
+executes cannot change behaviour. The only real risk is editing `Check Guards`,
+the single most critical node in the system — so: idempotent script, `BEFORE-`
+backup, and re-run both verifiers.
+
+**A-2 (cancel bookings): high, and the highest in this document.** It is the
+first thing in this system that *cancels* a customer's appointment, driven by a
+CRM state that a human sets by hand. A wrong "rejected" verdict cancels a real
+showing for a real tenant, and cancellation is not reversible from our side —
+the lead has to rebook. Mitigations: reuse the already-proven guard rather than
+writing a fourth copy; a `rejection_cancel_start_at` cutoff; a preview script
+that lists what *would* be cancelled and is run before activating; and create
+the workflow **inactive**, the same way the Cal Booking Reminders shipped.
 
 ---
 
