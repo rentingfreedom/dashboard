@@ -1,0 +1,1455 @@
+{
+  "updatedAt": "2026-08-25T20:09:52.618Z",
+  "createdAt": "2026-08-25T19:45:11.887Z",
+  "id": "R3rhuCYEGoBFArBa",
+  "name": "RentingFreedom Production - Identity Verification Reminders",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "ir-trigger",
+      "name": "Every Hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Settings",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "ir-settings",
+      "name": "Read Settings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        20,
+        300
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "eB6JrDkriJ1BATPy",
+          "name": "RF Dashboard Service Account (Project 2, Sheets)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Identity_Verifications",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "ir-read-iv",
+      "name": "Read Identity Verifications",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        240,
+        300
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "eB6JrDkriJ1BATPy",
+          "name": "RF Dashboard Service Account (Project 2, Sheets)"
+        }
+      },
+      "executeOnce": true,
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "parameters": {
+        "jsCode": "const settingsRows = $items(\"Read Settings\").map(i => i.json || {});\nconst settings = {};\nfor (const row of settingsRows) { if (row.key) settings[row.key] = row.value; }\n\nconst enabled = String(settings.identity_reminder_enabled ?? \"\").trim().toLowerCase() === \"true\";\nconst MAX = Number(settings.identity_reminder_max ?? 4) || 4;\nconst HOUR = Number(settings.identity_reminder_hour_et ?? 10);\n\nconst now = new Date();\n// No workflow-level timezone is configured on this instance, so derive the ET\n// hour explicitly rather than trusting the cron's own clock. Handles DST.\nconst etHour = Number(new Intl.DateTimeFormat(\"en-US\", {\n  timeZone: \"America/New_York\", hour: \"numeric\", hour12: false,\n}).format(now));\nconst etDay = new Intl.DateTimeFormat(\"en-CA\", {\n  timeZone: \"America/New_York\", year: \"numeric\", month: \"2-digit\", day: \"2-digit\",\n}).format(now);\n\nif (!enabled) {\n  console.log(\"[identity-reminders] disabled via identity_reminder_enabled\");\n  return [{ json: { due: false, reason: \"disabled\" } }];\n}\nif (etHour !== HOUR) {\n  return [{ json: { due: false, reason: \"outside_send_hour\", et_hour: etHour, want_hour: HOUR } }];\n}\n\nconst rows = $items(\"Read Identity Verifications\").map(i => i.json || {});\nconst byLead = new Map();\nfor (const r of rows) {\n  const id = String(r.lead_id ?? \"\").trim();\n  if (!id) continue;\n  if (!byLead.has(id)) byLead.set(id, []);\n  byLead.get(id).push(r);\n}\n\nconst DAY = 86400000;\nconst due = [];\nconst skipped = [];\n\nfor (const [leadId, group] of byLead) {\n  const statuses = group.map(r => String(r.status ?? \"\").trim().toLowerCase()).filter(Boolean);\n\n  // \"pending only\" — client decision 2026-08-25. verified needs nothing;\n  // requires_input/failed already sends the failed-SMS and hands off to a human.\n  const nonPending = statuses.filter(s => s !== \"pending\");\n  if (nonPending.length) { skipped.push(leadId + \":status_\" + nonPending.join(\"/\")); continue; }\n\n  const times = group.map(r => Date.parse(r.sent_at)).filter(n => Number.isFinite(n));\n  if (!times.length) { skipped.push(leadId + \":no_parseable_sent_at\"); continue; }\n  const anchorMs = Math.min.apply(null, times);\n\n  const reminderRows = group.filter(r => Number(r.reminder_number ?? 0) >= 1);\n  const remindersSent = reminderRows.length;\n  if (remindersSent >= MAX) { skipped.push(leadId + \":max_reached\"); continue; }\n\n  const daysSince = Math.floor((now.getTime() - anchorMs) / DAY);\n  if (daysSince < 1) { skipped.push(leadId + \":too_soon(\" + daysSince + \"d)\"); continue; }\n  if (daysSince > MAX) { skipped.push(leadId + \":window_over(\" + daysSince + \"d)\"); continue; }\n  // One per day: having sent N reminders, we owe one only once day N+1 arrives.\n  if (remindersSent >= daysSince) { skipped.push(leadId + \":day_\" + daysSince + \"_already_sent\"); continue; }\n\n  // Belt and braces against two runs inside one send hour.\n  const lastTimes = reminderRows.map(r => Date.parse(r.sent_at)).filter(n => Number.isFinite(n));\n  if (lastTimes.length) {\n    const last = Math.max.apply(null, lastTimes);\n    if (now.getTime() - last < 20 * 3600000) { skipped.push(leadId + \":reminded_within_20h\"); continue; }\n  }\n\n  const latest = group[group.length - 1];\n  due.push({ json: {\n    due: true,\n    lead_id: leadId,\n    lead_name: latest.lead_name || \"\",\n    phone: String(latest.phone || \"\"),\n    original_webhook_body: latest.original_webhook_body || \"\",\n    reminder_number: remindersSent + 1,\n    reminder_anchor_at: new Date(anchorMs).toISOString(),\n    days_since_anchor: daysSince,\n    et_day: etDay,\n    from_number: settings.from_number || \"\",\n    template: settings.identity_reminder_sms_template || \"\",\n    allowed_stages: settings.allowed_stages || \"\",\n  }});\n}\n\nconsole.log(\"[identity-reminders] et_day=\" + etDay + \" due=\" + due.length + \" skipped=\" + skipped.length);\nif (skipped.length) console.log(\"[identity-reminders] skipped: \" + skipped.join(\" | \"));\nif (!due.length) return [{ json: { due: false, reason: \"none_due\" } }];\nreturn due;"
+      },
+      "id": "ir-find-due",
+      "name": "Find Due Reminders",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "any-due",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.due }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ir-any-due",
+      "name": "Any Due?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "ir-split",
+      "name": "Process One at a Time",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.followupboss.com/v1/people/{{ $json.lead_id }}?fields=allFields",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ir-get-person",
+      "name": "FUB - Get Person",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        380
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Re-checks the lead at reminder time. Up to 4 days pass between the original\n// verification SMS and the last reminder — plenty of time to be trashed, move\n// stage, or lose a phone number.\n//\n// $json here is FUB's response; the due-item is read by named node. Safe to\n// use .first() ONLY because Process One at a Time has batchSize 1, so there is\n// exactly one item per iteration (cf. gotcha 11).\nconst d = $('Process One at a Time').first().json;\nconst resp = $json || {};\nconst person = (resp.people && resp.people[0]) ? resp.people[0] : resp;\n\nconst norm = (s) => String(s ?? \"\").trim().toLowerCase();\nconst TRASH_TAGS = [\"permanent trash\", \"no response trash\", \"denied credit\"];\nconst TRASH_STAGES = [\"trash\", \"permanent trash\", \"cold rental lead 1 month hold\"];\n\nconst skip = (reason) => {\n  console.log(\"[identity-reminders] lead \" + d.lead_id + \" SKIP \" + reason);\n  return [{ json: Object.assign({}, d, { send_ok: false, skip_reason: reason }) }];\n};\n\nif (!person || !person.id) return skip(\"person_not_found\");\n\nconst stage = norm(person.stage);\nconst tags = (person.tags || []).map(norm);\nconst phone = (person.phones && person.phones[0] && person.phones[0].value) || d.phone;\n\nif (!phone) return skip(\"no_phone\");\n\nconst hitTags = tags.filter(t => TRASH_TAGS.indexOf(t) !== -1);\n// No expiry-window arithmetic on purpose: for an optional nudge, ANY trash tag\n// is a reason to stay quiet. Under-sending is free here.\nif (hitTags.length) return skip(\"trash_tag:\" + hitTags.join(\"/\"));\nif (TRASH_STAGES.indexOf(stage) !== -1) return skip(\"trash_stage:\" + stage);\n\nconst allowed = String(d.allowed_stages || \"\").split(\",\").map(norm).filter(Boolean);\n// Empty allowed_stages means \"allow everything\", matching the stage gate.\nif (allowed.length && allowed.indexOf(stage) === -1) return skip(\"stage_not_allowed:\" + stage);\n\nreturn [{ json: Object.assign({}, d, {\n  send_ok: true,\n  phone: phone,\n  person_name: person.name || d.lead_name || \"\",\n  first_name: person.firstName || \"\",\n  // MUST be undefined, never \"\". create-session validates with\n  // z.string().email().optional(), which tolerates a missing key but runs\n  // .email() against an empty string and throws. That exact bug silently\n  // blocked every lead with no email until 2026-08-08.\n  email: (person.emails && person.emails[0] && person.emails[0].value) || undefined,\n  stage: person.stage || \"\",\n}) }];"
+      },
+      "id": "ir-guards",
+      "name": "Check Reminder Guards",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "should-remind",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.send_ok }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ir-should",
+      "name": "Should Remind?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1560,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://dashboard.rentingfreedom.com/api/identity/create-session",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead_id: $json.lead_id, lead_name: $json.person_name, phone: $json.phone, email: $json.email, stage: $json.stage, source: \"identity_reminder\" }) }}",
+        "options": {}
+      },
+      "id": "ir-stripe",
+      "name": "Create Stripe Identity Session",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1780,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "LstfkvTtbGOIQdtO",
+          "name": "RF Dashboard Internal API"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $('Check Reminder Guards').first().json;\nconst session = $json || {};\nconst url = session.url || \"\";\n\nif (!url) {\n  console.log(\"[identity-reminders] lead \" + d.lead_id + \" no session url — not sending\");\n  return [{ json: Object.assign({}, d, { send_ok: false, skip_reason: \"no_session_url\" }) }];\n}\n\nconst template = d.template ||\n  \"Hi {{first_name}}, a quick reminder from Renting Freedom - we still need to verify your ID before we can schedule your showing. It only takes a minute: {{verify_link}}\";\n\nconst message = template\n  .replace(/\\{\\{first_name\\}\\}/g, d.first_name || \"\")\n  .replace(/\\{\\{verify_link\\}\\}/g, url);\n\nconsole.log(\"[identity-reminders] lead \" + d.lead_id + \" reminder #\" + d.reminder_number + \" session \" + session.sessionId);\n\nreturn [{ json: Object.assign({}, d, {\n  send_ok: true,\n  message: message,\n  session_id: session.sessionId,\n  sent_at: new Date().toISOString(),\n}) }];"
+      },
+      "id": "ir-build",
+      "name": "Build Reminder SMS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "send-needed",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.send_ok }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ir-send-needed",
+      "name": "Send Needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "from": "={{ $('Build Reminder SMS').first().json.from_number }}",
+        "to": "={{ $('Build Reminder SMS').first().json.phone }}",
+        "message": "={{ $('Build Reminder SMS').first().json.message }}",
+        "options": {}
+      },
+      "id": "ir-send",
+      "name": "Send Reminder SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        2440,
+        220
+      ],
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Identity_Verifications",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "session_id": "={{ $('Build Reminder SMS').first().json.session_id }}",
+            "lead_id": "={{ $('Build Reminder SMS').first().json.lead_id }}",
+            "lead_name": "={{ $('Build Reminder SMS').first().json.person_name }}",
+            "phone": "={{ $('Build Reminder SMS').first().json.phone }}",
+            "original_webhook_body": "={{ $('Build Reminder SMS').first().json.original_webhook_body }}",
+            "status": "pending",
+            "sent_at": "={{ $('Build Reminder SMS').first().json.sent_at }}",
+            "resolved_at": "",
+            "error_code": "",
+            "error_reason": "",
+            "reminder_number": "={{ $('Build Reminder SMS').first().json.reminder_number }}",
+            "reminder_anchor_at": "={{ $('Build Reminder SMS').first().json.reminder_anchor_at }}"
+          },
+          "schema": [
+            {
+              "id": "session_id",
+              "displayName": "session_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "lead_id",
+              "displayName": "lead_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "lead_name",
+              "displayName": "lead_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "original_webhook_body",
+              "displayName": "original_webhook_body",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sent_at",
+              "displayName": "sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "resolved_at",
+              "displayName": "resolved_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "error_code",
+              "displayName": "error_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "error_reason",
+              "displayName": "error_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reminder_number",
+              "displayName": "reminder_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reminder_anchor_at",
+              "displayName": "reminder_anchor_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "ir-log",
+      "name": "Log Reminder Row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2660,
+        220
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "eB6JrDkriJ1BATPy",
+          "name": "RF Dashboard Service Account (Project 2, Sheets)"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "parameters": {},
+      "id": "ir-loop",
+      "name": "Loop Back",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2880,
+        380
+      ]
+    }
+  ],
+  "connections": {
+    "Every Hour": {
+      "main": [
+        [
+          {
+            "node": "Read Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Settings": {
+      "main": [
+        [
+          {
+            "node": "Read Identity Verifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Identity Verifications": {
+      "main": [
+        [
+          {
+            "node": "Find Due Reminders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Due Reminders": {
+      "main": [
+        [
+          {
+            "node": "Any Due?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Due?": {
+      "main": [
+        [
+          {
+            "node": "Process One at a Time",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Process One at a Time": {
+      "main": [
+        [],
+        [
+          {
+            "node": "FUB - Get Person",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Get Person": {
+      "main": [
+        [
+          {
+            "node": "Check Reminder Guards",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Reminder Guards": {
+      "main": [
+        [
+          {
+            "node": "Should Remind?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Remind?": {
+      "main": [
+        [
+          {
+            "node": "Create Stripe Identity Session",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Stripe Identity Session": {
+      "main": [
+        [
+          {
+            "node": "Build Reminder SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Reminder SMS": {
+      "main": [
+        [
+          {
+            "node": "Send Needed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Needed?": {
+      "main": [
+        [
+          {
+            "node": "Send Reminder SMS",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Reminder SMS": {
+      "main": [
+        [
+          {
+            "node": "Log Reminder Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Reminder Row": {
+      "main": [
+        [
+          {
+            "node": "Loop Back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Back": {
+      "main": [
+        [
+          {
+            "node": "Process One at a Time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {
+    "node:Every Hour": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "ee67299c-5323-4fbe-8ad2-b2066f45b889",
+  "activeVersionId": "ee67299c-5323-4fbe-8ad2-b2066f45b889",
+  "versionCounter": 2,
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-08-25T19:45:11.887Z",
+      "createdAt": "2026-08-25T19:45:11.887Z",
+      "role": "workflow:owner",
+      "workflowId": "R3rhuCYEGoBFArBa",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-08-25T20:09:52.619Z",
+    "createdAt": "2026-08-25T20:09:52.619Z",
+    "versionId": "ee67299c-5323-4fbe-8ad2-b2066f45b889",
+    "workflowId": "R3rhuCYEGoBFArBa",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "hours",
+                "hoursInterval": 1
+              }
+            ]
+          }
+        },
+        "id": "ir-trigger",
+        "name": "Every Hour",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          -200,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "authentication": "serviceAccount",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Settings",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "id": "ir-settings",
+        "name": "Read Settings",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          20,
+          300
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "eB6JrDkriJ1BATPy",
+            "name": "RF Dashboard Service Account (Project 2, Sheets)"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000
+      },
+      {
+        "parameters": {
+          "authentication": "serviceAccount",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Identity_Verifications",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "id": "ir-read-iv",
+        "name": "Read Identity Verifications",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          240,
+          300
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "eB6JrDkriJ1BATPy",
+            "name": "RF Dashboard Service Account (Project 2, Sheets)"
+          }
+        },
+        "executeOnce": true,
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000
+      },
+      {
+        "parameters": {
+          "jsCode": "const settingsRows = $items(\"Read Settings\").map(i => i.json || {});\nconst settings = {};\nfor (const row of settingsRows) { if (row.key) settings[row.key] = row.value; }\n\nconst enabled = String(settings.identity_reminder_enabled ?? \"\").trim().toLowerCase() === \"true\";\nconst MAX = Number(settings.identity_reminder_max ?? 4) || 4;\nconst HOUR = Number(settings.identity_reminder_hour_et ?? 10);\n\nconst now = new Date();\n// No workflow-level timezone is configured on this instance, so derive the ET\n// hour explicitly rather than trusting the cron's own clock. Handles DST.\nconst etHour = Number(new Intl.DateTimeFormat(\"en-US\", {\n  timeZone: \"America/New_York\", hour: \"numeric\", hour12: false,\n}).format(now));\nconst etDay = new Intl.DateTimeFormat(\"en-CA\", {\n  timeZone: \"America/New_York\", year: \"numeric\", month: \"2-digit\", day: \"2-digit\",\n}).format(now);\n\nif (!enabled) {\n  console.log(\"[identity-reminders] disabled via identity_reminder_enabled\");\n  return [{ json: { due: false, reason: \"disabled\" } }];\n}\nif (etHour !== HOUR) {\n  return [{ json: { due: false, reason: \"outside_send_hour\", et_hour: etHour, want_hour: HOUR } }];\n}\n\nconst rows = $items(\"Read Identity Verifications\").map(i => i.json || {});\nconst byLead = new Map();\nfor (const r of rows) {\n  const id = String(r.lead_id ?? \"\").trim();\n  if (!id) continue;\n  if (!byLead.has(id)) byLead.set(id, []);\n  byLead.get(id).push(r);\n}\n\nconst DAY = 86400000;\nconst due = [];\nconst skipped = [];\n\nfor (const [leadId, group] of byLead) {\n  const statuses = group.map(r => String(r.status ?? \"\").trim().toLowerCase()).filter(Boolean);\n\n  // \"pending only\" — client decision 2026-08-25. verified needs nothing;\n  // requires_input/failed already sends the failed-SMS and hands off to a human.\n  const nonPending = statuses.filter(s => s !== \"pending\");\n  if (nonPending.length) { skipped.push(leadId + \":status_\" + nonPending.join(\"/\")); continue; }\n\n  const times = group.map(r => Date.parse(r.sent_at)).filter(n => Number.isFinite(n));\n  if (!times.length) { skipped.push(leadId + \":no_parseable_sent_at\"); continue; }\n  const anchorMs = Math.min.apply(null, times);\n\n  const reminderRows = group.filter(r => Number(r.reminder_number ?? 0) >= 1);\n  const remindersSent = reminderRows.length;\n  if (remindersSent >= MAX) { skipped.push(leadId + \":max_reached\"); continue; }\n\n  const daysSince = Math.floor((now.getTime() - anchorMs) / DAY);\n  if (daysSince < 1) { skipped.push(leadId + \":too_soon(\" + daysSince + \"d)\"); continue; }\n  if (daysSince > MAX) { skipped.push(leadId + \":window_over(\" + daysSince + \"d)\"); continue; }\n  // One per day: having sent N reminders, we owe one only once day N+1 arrives.\n  if (remindersSent >= daysSince) { skipped.push(leadId + \":day_\" + daysSince + \"_already_sent\"); continue; }\n\n  // Belt and braces against two runs inside one send hour.\n  const lastTimes = reminderRows.map(r => Date.parse(r.sent_at)).filter(n => Number.isFinite(n));\n  if (lastTimes.length) {\n    const last = Math.max.apply(null, lastTimes);\n    if (now.getTime() - last < 20 * 3600000) { skipped.push(leadId + \":reminded_within_20h\"); continue; }\n  }\n\n  const latest = group[group.length - 1];\n  due.push({ json: {\n    due: true,\n    lead_id: leadId,\n    lead_name: latest.lead_name || \"\",\n    phone: String(latest.phone || \"\"),\n    original_webhook_body: latest.original_webhook_body || \"\",\n    reminder_number: remindersSent + 1,\n    reminder_anchor_at: new Date(anchorMs).toISOString(),\n    days_since_anchor: daysSince,\n    et_day: etDay,\n    from_number: settings.from_number || \"\",\n    template: settings.identity_reminder_sms_template || \"\",\n    allowed_stages: settings.allowed_stages || \"\",\n  }});\n}\n\nconsole.log(\"[identity-reminders] et_day=\" + etDay + \" due=\" + due.length + \" skipped=\" + skipped.length);\nif (skipped.length) console.log(\"[identity-reminders] skipped: \" + skipped.join(\" | \"));\nif (!due.length) return [{ json: { due: false, reason: \"none_due\" } }];\nreturn due;"
+        },
+        "id": "ir-find-due",
+        "name": "Find Due Reminders",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          460,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "loose",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "any-due",
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true",
+                  "singleValue": true
+                },
+                "leftValue": "={{ $json.due }}",
+                "rightValue": ""
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "ir-any-due",
+        "name": "Any Due?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          680,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "batchSize": 1,
+          "options": {}
+        },
+        "id": "ir-split",
+        "name": "Process One at a Time",
+        "type": "n8n-nodes-base.splitInBatches",
+        "typeVersion": 3,
+        "position": [
+          900,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "url": "=https://api.followupboss.com/v1/people/{{ $json.lead_id }}?fields=allFields",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "ir-get-person",
+        "name": "FUB - Get Person",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1120,
+          380
+        ],
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        },
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": true,
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 5000
+      },
+      {
+        "parameters": {
+          "jsCode": "// Re-checks the lead at reminder time. Up to 4 days pass between the original\n// verification SMS and the last reminder — plenty of time to be trashed, move\n// stage, or lose a phone number.\n//\n// $json here is FUB's response; the due-item is read by named node. Safe to\n// use .first() ONLY because Process One at a Time has batchSize 1, so there is\n// exactly one item per iteration (cf. gotcha 11).\nconst d = $('Process One at a Time').first().json;\nconst resp = $json || {};\nconst person = (resp.people && resp.people[0]) ? resp.people[0] : resp;\n\nconst norm = (s) => String(s ?? \"\").trim().toLowerCase();\nconst TRASH_TAGS = [\"permanent trash\", \"no response trash\", \"denied credit\"];\nconst TRASH_STAGES = [\"trash\", \"permanent trash\", \"cold rental lead 1 month hold\"];\n\nconst skip = (reason) => {\n  console.log(\"[identity-reminders] lead \" + d.lead_id + \" SKIP \" + reason);\n  return [{ json: Object.assign({}, d, { send_ok: false, skip_reason: reason }) }];\n};\n\nif (!person || !person.id) return skip(\"person_not_found\");\n\nconst stage = norm(person.stage);\nconst tags = (person.tags || []).map(norm);\nconst phone = (person.phones && person.phones[0] && person.phones[0].value) || d.phone;\n\nif (!phone) return skip(\"no_phone\");\n\nconst hitTags = tags.filter(t => TRASH_TAGS.indexOf(t) !== -1);\n// No expiry-window arithmetic on purpose: for an optional nudge, ANY trash tag\n// is a reason to stay quiet. Under-sending is free here.\nif (hitTags.length) return skip(\"trash_tag:\" + hitTags.join(\"/\"));\nif (TRASH_STAGES.indexOf(stage) !== -1) return skip(\"trash_stage:\" + stage);\n\nconst allowed = String(d.allowed_stages || \"\").split(\",\").map(norm).filter(Boolean);\n// Empty allowed_stages means \"allow everything\", matching the stage gate.\nif (allowed.length && allowed.indexOf(stage) === -1) return skip(\"stage_not_allowed:\" + stage);\n\nreturn [{ json: Object.assign({}, d, {\n  send_ok: true,\n  phone: phone,\n  person_name: person.name || d.lead_name || \"\",\n  first_name: person.firstName || \"\",\n  // MUST be undefined, never \"\". create-session validates with\n  // z.string().email().optional(), which tolerates a missing key but runs\n  // .email() against an empty string and throws. That exact bug silently\n  // blocked every lead with no email until 2026-08-08.\n  email: (person.emails && person.emails[0] && person.emails[0].value) || undefined,\n  stage: person.stage || \"\",\n}) }];"
+        },
+        "id": "ir-guards",
+        "name": "Check Reminder Guards",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1340,
+          380
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "loose",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "should-remind",
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true",
+                  "singleValue": true
+                },
+                "leftValue": "={{ $json.send_ok }}",
+                "rightValue": ""
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "ir-should",
+        "name": "Should Remind?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          1560,
+          380
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://dashboard.rentingfreedom.com/api/identity/create-session",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ lead_id: $json.lead_id, lead_name: $json.person_name, phone: $json.phone, email: $json.email, stage: $json.stage, source: \"identity_reminder\" }) }}",
+          "options": {}
+        },
+        "id": "ir-stripe",
+        "name": "Create Stripe Identity Session",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1780,
+          300
+        ],
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "LstfkvTtbGOIQdtO",
+            "name": "RF Dashboard Internal API"
+          }
+        },
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": true
+      },
+      {
+        "parameters": {
+          "jsCode": "const d = $('Check Reminder Guards').first().json;\nconst session = $json || {};\nconst url = session.url || \"\";\n\nif (!url) {\n  console.log(\"[identity-reminders] lead \" + d.lead_id + \" no session url — not sending\");\n  return [{ json: Object.assign({}, d, { send_ok: false, skip_reason: \"no_session_url\" }) }];\n}\n\nconst template = d.template ||\n  \"Hi {{first_name}}, a quick reminder from Renting Freedom - we still need to verify your ID before we can schedule your showing. It only takes a minute: {{verify_link}}\";\n\nconst message = template\n  .replace(/\\{\\{first_name\\}\\}/g, d.first_name || \"\")\n  .replace(/\\{\\{verify_link\\}\\}/g, url);\n\nconsole.log(\"[identity-reminders] lead \" + d.lead_id + \" reminder #\" + d.reminder_number + \" session \" + session.sessionId);\n\nreturn [{ json: Object.assign({}, d, {\n  send_ok: true,\n  message: message,\n  session_id: session.sessionId,\n  sent_at: new Date().toISOString(),\n}) }];"
+        },
+        "id": "ir-build",
+        "name": "Build Reminder SMS",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2000,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "loose",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "send-needed",
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true",
+                  "singleValue": true
+                },
+                "leftValue": "={{ $json.send_ok }}",
+                "rightValue": ""
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "ir-send-needed",
+        "name": "Send Needed?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          2220,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "from": "={{ $('Build Reminder SMS').first().json.from_number }}",
+          "to": "={{ $('Build Reminder SMS').first().json.phone }}",
+          "message": "={{ $('Build Reminder SMS').first().json.message }}",
+          "options": {}
+        },
+        "id": "ir-send",
+        "name": "Send Reminder SMS",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          2440,
+          220
+        ],
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        },
+        "onError": "continueRegularOutput"
+      },
+      {
+        "parameters": {
+          "authentication": "serviceAccount",
+          "operation": "append",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Identity_Verifications",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "session_id": "={{ $('Build Reminder SMS').first().json.session_id }}",
+              "lead_id": "={{ $('Build Reminder SMS').first().json.lead_id }}",
+              "lead_name": "={{ $('Build Reminder SMS').first().json.person_name }}",
+              "phone": "={{ $('Build Reminder SMS').first().json.phone }}",
+              "original_webhook_body": "={{ $('Build Reminder SMS').first().json.original_webhook_body }}",
+              "status": "pending",
+              "sent_at": "={{ $('Build Reminder SMS').first().json.sent_at }}",
+              "resolved_at": "",
+              "error_code": "",
+              "error_reason": "",
+              "reminder_number": "={{ $('Build Reminder SMS').first().json.reminder_number }}",
+              "reminder_anchor_at": "={{ $('Build Reminder SMS').first().json.reminder_anchor_at }}"
+            },
+            "schema": [
+              {
+                "id": "session_id",
+                "displayName": "session_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "lead_id",
+                "displayName": "lead_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "lead_name",
+                "displayName": "lead_name",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "phone",
+                "displayName": "phone",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "original_webhook_body",
+                "displayName": "original_webhook_body",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "status",
+                "displayName": "status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "sent_at",
+                "displayName": "sent_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "resolved_at",
+                "displayName": "resolved_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "error_code",
+                "displayName": "error_code",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "error_reason",
+                "displayName": "error_reason",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "reminder_number",
+                "displayName": "reminder_number",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "reminder_anchor_at",
+                "displayName": "reminder_anchor_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ],
+            "matchingColumns": [],
+            "attemptToConvertTypes": false,
+            "convertFieldsToString": true
+          },
+          "options": {}
+        },
+        "id": "ir-log",
+        "name": "Log Reminder Row",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          2660,
+          220
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "eB6JrDkriJ1BATPy",
+            "name": "RF Dashboard Service Account (Project 2, Sheets)"
+          }
+        },
+        "onError": "continueRegularOutput",
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000
+      },
+      {
+        "parameters": {},
+        "id": "ir-loop",
+        "name": "Loop Back",
+        "type": "n8n-nodes-base.noOp",
+        "typeVersion": 1,
+        "position": [
+          2880,
+          380
+        ]
+      }
+    ],
+    "connections": {
+      "Every Hour": {
+        "main": [
+          [
+            {
+              "node": "Read Settings",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Settings": {
+        "main": [
+          [
+            {
+              "node": "Read Identity Verifications",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Identity Verifications": {
+        "main": [
+          [
+            {
+              "node": "Find Due Reminders",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Find Due Reminders": {
+        "main": [
+          [
+            {
+              "node": "Any Due?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Any Due?": {
+        "main": [
+          [
+            {
+              "node": "Process One at a Time",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      },
+      "Process One at a Time": {
+        "main": [
+          [],
+          [
+            {
+              "node": "FUB - Get Person",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Get Person": {
+        "main": [
+          [
+            {
+              "node": "Check Reminder Guards",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check Reminder Guards": {
+        "main": [
+          [
+            {
+              "node": "Should Remind?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Should Remind?": {
+        "main": [
+          [
+            {
+              "node": "Create Stripe Identity Session",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Loop Back",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Create Stripe Identity Session": {
+        "main": [
+          [
+            {
+              "node": "Build Reminder SMS",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Reminder SMS": {
+        "main": [
+          [
+            {
+              "node": "Send Needed?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Send Needed?": {
+        "main": [
+          [
+            {
+              "node": "Send Reminder SMS",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Loop Back",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Send Reminder SMS": {
+        "main": [
+          [
+            {
+              "node": "Log Reminder Row",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Log Reminder Row": {
+        "main": [
+          [
+            {
+              "node": "Loop Back",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Loop Back": {
+        "main": [
+          [
+            {
+              "node": "Process One at a Time",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Justin Artis",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-08-25T20:09:52.794Z",
+        "id": 391,
+        "workflowId": "R3rhuCYEGoBFArBa",
+        "versionId": "ee67299c-5323-4fbe-8ad2-b2066f45b889",
+        "event": "activated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    ]
+  }
+}

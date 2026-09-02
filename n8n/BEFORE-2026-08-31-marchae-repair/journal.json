@@ -1,0 +1,23 @@
+{
+  "captured_at": "2026-08-31T12:42:39.660Z",
+  "sheet_row": 66,
+  "before": {
+    "__row": 66,
+    "person_id": "2712",
+    "property_key": "165-river-hill-road",
+    "cal_link": "cal.com/rentingfreedom/165-river-hill-road",
+    "inquired_at": "2026-08-21T18:38:15Z",
+    "link_sent": "skipped_test_gate",
+    "link_sent_at": "",
+    "source": "Zillow Rentals",
+    "event_id": "1835",
+    "property_address": "165 River Hill Rd",
+    "match_status": "matched",
+    "phone": "",
+    "email": "3qw67a19skadzi1f3sthsqm7fnm@convo.zillow.com",
+    "alert_sent": "",
+    "booking_reminder_count": "",
+    "booking_reminder_last_at": "",
+    "booked_at": ""
+  }
+}

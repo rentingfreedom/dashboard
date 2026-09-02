@@ -1,0 +1,18 @@
+{
+  "written_at": "2026-08-31T13:23:08.844Z",
+  "execution": "30594",
+  "appended": {
+    "session_id": "vs_1UAV9BBgJfPX83bqGXzFrnNQ",
+    "lead_id": "2759",
+    "lead_name": "Quantez Guest",
+    "phone": "+18542645944",
+    "original_webhook_body": "{\"event\":\"peopleUpdated\",\"resourceIds\":[2759],\"uri\":\"https://api.followupboss.com/v1/people?id=2759\"}",
+    "status": "pending",
+    "sent_at": "2026-08-31T13:21:14.180Z",
+    "resolved_at": "",
+    "error_code": "",
+    "error_reason": "",
+    "reminder_number": "",
+    "reminder_anchor_at": ""
+  }
+}

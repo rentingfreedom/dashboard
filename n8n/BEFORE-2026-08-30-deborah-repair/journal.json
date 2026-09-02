@@ -1,0 +1,8 @@
+{
+  "when": "2026-08-30T20:30:49.353Z",
+  "person_id": "2752",
+  "cell": "Inquiries!E84",
+  "before": "skipped_stage_gate",
+  "after": "FALSE",
+  "reason": "stage-gate race with FUB lead flow; stamped skipped_stage_gate at 14:11:45.885Z while stage was 'Lead'"
+}

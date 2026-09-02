@@ -1,0 +1,1561 @@
+{
+  "updatedAt": "2026-08-31T12:19:45.909Z",
+  "createdAt": "2026-08-31T12:19:45.909Z",
+  "id": "5UvuzQwLjCB4D25A",
+  "name": "RentingFreedom Production - Cal Booking Reminders",
+  "description": null,
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "id": "every-hour",
+      "name": "Every Hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -620,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Settings",
+          "mode": "name"
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "id": "read-settings",
+      "name": "Read Settings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -420,
+        300
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "executeOnce": true,
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "parameters": {
+        "jsCode": "const settingsRows = $items(\"Read Settings\").map(i => i.json || {});\nconst settings = {};\nfor (const row of settingsRows) { if (row.key) settings[row.key] = row.value; }\n\nconst enabled = String(settings.cal_booking_reminder_enabled ?? \"\").trim().toLowerCase() === \"true\";\nconst HOUR = Number(settings.cal_booking_reminder_hour_et ?? 10);\n\nconst now = new Date();\nconst etHour = Number(new Intl.DateTimeFormat(\"en-US\", {\n  timeZone: \"America/New_York\", hour: \"numeric\", hour12: false,\n}).format(now));\n\nif (!enabled) {\n  console.log(\"[cal-booking-reminders] disabled via cal_booking_reminder_enabled\");\n  return [{ json: { in_window: false, reason: \"disabled\" } }];\n}\nif (etHour !== HOUR) {\n  return [{ json: { in_window: false, reason: \"outside_send_hour\", et_hour: etHour, want_hour: HOUR } }];\n}\nconsole.log(\"[cal-booking-reminders] in send window (ET hour \" + etHour + \")\");\nreturn [{ json: { in_window: true, et_hour: etHour } }];"
+      },
+      "id": "check-send-window",
+      "name": "Check Send Window",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "in-send-window-",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.in_window }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "in-send-window-",
+      "name": "In Send Window?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -20,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Inquiries",
+          "mode": "name"
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "id": "read-inquiries",
+      "name": "Read Inquiries",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        180,
+        300
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "executeOnce": true,
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Cal Bookings",
+          "mode": "name"
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "id": "read-cal-bookings",
+      "name": "Read Cal Bookings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        380,
+        300
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "executeOnce": true,
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Properties",
+          "mode": "name"
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "id": "read-properties",
+      "name": "Read Properties",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        580,
+        300
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "executeOnce": true,
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "parameters": {
+        "jsCode": "const norm = (s) => String(s ?? \"\").trim().toLowerCase();\nconst last10 = (s) => String(s ?? \"\").replace(/\\D/g, \"\").slice(-10);\n\n// cal_event_type_id -> property_key. Exact and unique: verified live that no\n// two Properties rows share an event type id. This replaces address matching\n// entirely (Inquiries says \"130 Sandtrap Rd\", Cal Bookings says \"130 Sandtrap\n// Road\" — they never compare equal).\nconst etypeToKey = new Map();\nfor (const p of $items(\"Read Properties\").map(i => i.json || {})) {\n  const et = String(p.cal_event_type_id ?? \"\").trim();\n  const key = norm(p.property_key);\n  if (et && key) etypeToKey.set(et, key);\n}\n\n// property_key -> Set of identity tokens that have booked it.\nconst bookedBy = new Map();\nfor (const b of $items(\"Read Cal Bookings\").map(i => i.json || {})) {\n  if (norm(b.status) === \"cancelled\") continue;\n  const key = etypeToKey.get(String(b.cal_event_type_id ?? \"\").trim());\n  if (!key) continue;\n  if (!bookedBy.has(key)) bookedBy.set(key, new Set());\n  const set = bookedBy.get(key);\n  const pid = String(b.fub_person_id ?? \"\").trim();\n  if (pid) set.add(\"p:\" + pid);\n  const ph = last10(b.invitee_phone);\n  if (ph.length === 10) set.add(\"t:\" + ph);\n  const em = norm(b.invitee_email);\n  if (em) set.add(\"e:\" + em);\n}\n\n// Permissive on purpose: a missed booking means nagging someone who already\n// booked; a false positive only cancels an optional nudge.\nconst hasBooked = (row) => {\n  const set = bookedBy.get(norm(row.property_key));\n  if (!set) return false;\n  const pid = String(row.person_id ?? \"\").trim();\n  if (pid && set.has(\"p:\" + pid)) return true;\n  const ph = last10(row.phone);\n  if (ph.length === 10 && set.has(\"t:\" + ph)) return true;\n  const em = norm(row.email);\n  if (em && set.has(\"e:\" + em)) return true;\n  return false;\n};\n\nconst settingsRows = $items(\"Read Settings\").map(i => i.json || {});\nconst settings = {};\nfor (const row of settingsRows) { if (row.key) settings[row.key] = row.value; }\n\nconst MAX = Number(settings.cal_booking_reminder_max ?? 4) || 4;\nconst startAtMs = Date.parse(settings.cal_booking_reminder_start_at ?? \"\");\n\nconst now = new Date();\nconst DAY = 86400000;\nconst etDay = new Intl.DateTimeFormat(\"en-CA\", {\n  timeZone: \"America/New_York\", year: \"numeric\", month: \"2-digit\", day: \"2-digit\",\n}).format(now);\n\nconst due = [];\nconst skipped = [];\n\nfor (const row of $items(\"Read Inquiries\").map(i => i.json || {})) {\n  const eventId = String(row.event_id ?? \"\").trim();\n  const label = eventId || (\"p\" + row.person_id + \"/\" + row.property_key);\n\n  // Only rows the sweep actually delivered. \"skipped_*\" values are recorded\n  // non-sends and must never be nudged — there is no link in the lead's hands.\n  if (norm(row.link_sent) !== \"true\") continue;\n  if (!eventId) { skipped.push(label + \":no_event_id\"); continue; }\n  if (!String(row.cal_link ?? \"\").trim()) { skipped.push(label + \":no_cal_link\"); continue; }\n  if (!String(row.property_key ?? \"\").trim()) { skipped.push(label + \":no_property_key\"); continue; }\n\n  if (String(row.booked_at ?? \"\").trim()) { skipped.push(label + \":already_booked\"); continue; }\n  if (hasBooked(row)) { skipped.push(label + \":booked\"); continue; }\n\n  const anchorMs = Date.parse(row.link_sent_at);\n  // Unknown age must never become \"fire it\" — same direction as the trash-date\n  // rule and the stage-gate recency guard.\n  if (!Number.isFinite(anchorMs)) { skipped.push(label + \":unparseable_link_sent_at\"); continue; }\n\n  // Go-forward only. Without this, activating the workflow would nudge every\n  // unbooked lead in the tab's history at once.\n  if (!Number.isFinite(startAtMs)) { skipped.push(label + \":no_start_at_configured\"); continue; }\n  if (anchorMs < startAtMs) { skipped.push(label + \":before_start_at\"); continue; }\n\n  const sent = Number(row.booking_reminder_count ?? 0) || 0;\n  if (sent >= MAX) { skipped.push(label + \":max_reached\"); continue; }\n\n  // ET calendar-day diff, not a rolling 24h count (day-calc fix 2026-08-30):\n  // a link sent at ANY time on day 0 is due its first nudge at the next 10am.\n  const anchorEtDay = new Intl.DateTimeFormat(\"en-CA\", {\n    timeZone: \"America/New_York\", year: \"numeric\", month: \"2-digit\", day: \"2-digit\",\n  }).format(new Date(anchorMs));\n  const daysSince = Math.round((Date.parse(etDay + \"T00:00:00Z\") - Date.parse(anchorEtDay + \"T00:00:00Z\")) / DAY);\n\n  if (daysSince < 1) { skipped.push(label + \":too_soon(\" + daysSince + \"d)\"); continue; }\n  if (daysSince > MAX) { skipped.push(label + \":window_over(\" + daysSince + \"d)\"); continue; }\n  if (sent >= daysSince) { skipped.push(label + \":day_\" + daysSince + \"_already_sent\"); continue; }\n\n  // Belt and braces against two runs inside one send hour.\n  const lastMs = Date.parse(row.booking_reminder_last_at);\n  if (Number.isFinite(lastMs) && now.getTime() - lastMs < 20 * 3600000) {\n    skipped.push(label + \":nudged_within_20h\"); continue;\n  }\n\n  due.push({ json: {\n    due: true,\n    event_id: eventId,\n    person_id: String(row.person_id ?? \"\").trim(),\n    property_key: row.property_key,\n    property_address: row.property_address || row.property_key,\n    cal_link: row.cal_link,\n    row_phone: String(row.phone ?? \"\"),\n    row_email: String(row.email ?? \"\"),\n    reminder_number: sent + 1,\n    days_since_anchor: daysSince,\n    anchor_at: new Date(anchorMs).toISOString(),\n    et_day: etDay,\n    from_number: settings.from_number || \"\",\n    sms_template: settings.cal_booking_reminder_sms_template || \"\",\n    email_subject_template: settings.cal_booking_reminder_email_subject || \"\",\n    email_body_template: settings.cal_booking_reminder_email_body || \"\",\n    allowed_stages: settings.allowed_stages || \"\",\n  }});\n}\n\nconsole.log(\"[cal-booking-reminders] et_day=\" + etDay + \" due=\" + due.length + \" skipped=\" + skipped.length);\nif (skipped.length) console.log(\"[cal-booking-reminders] skipped: \" + skipped.join(\" | \"));\nif (!due.length) return [{ json: { due: false, reason: \"none_due\" } }];\nreturn due;"
+      },
+      "id": "find-due-nudges",
+      "name": "Find Due Nudges",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "any-due-",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.due }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "any-due-",
+      "name": "Any Due?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        980,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "process-one-at-a-time",
+      "name": "Process One at a Time",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1180,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://api.followupboss.com/v1/people/' + $json.person_id + '?fields=allFields' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fub-get-person",
+      "name": "FUB - Get Person",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1380,
+        200
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// $json is FUB's response; the due-item is read by named node. .first() is\n// safe ONLY because Process One at a Time has batchSize 1 (cf. gotcha 11).\nconst d = $('Process One at a Time').first().json;\nconst resp = $json || {};\nconst person = (resp.people && resp.people[0]) ? resp.people[0] : resp;\n\nconst norm = (s) => String(s ?? \"\").trim().toLowerCase();\nconst TRASH_TAGS = [\"permanent trash\", \"no response trash\", \"denied credit\"];\nconst TRASH_STAGES = [\"trash\", \"permanent trash\", \"cold rental lead 1 month hold\"];\n\nconst skip = (reason) => {\n  console.log(\"[cal-booking-reminders] \" + d.event_id + \" SKIP \" + reason);\n  return [{ json: Object.assign({}, d, { send_ok: false, skip_reason: reason }) }];\n};\n\n// A Trash-stage person is invisible to FUB's ?id= lookup and comes back empty\n// (gotcha 18), so this also fails safe for them.\nif (!person || !person.id) return skip(\"person_not_found\");\n\nconst stage = norm(person.stage);\nconst tags = (person.tags || []).map(norm);\n\nconst hitTags = tags.filter(t => TRASH_TAGS.indexOf(t) !== -1);\n// No expiry-window arithmetic on purpose: for an optional nudge, ANY trash tag\n// is reason enough to stay quiet. Under-sending is free here.\nif (hitTags.length) return skip(\"trash_tag:\" + hitTags.join(\"/\"));\nif (TRASH_STAGES.indexOf(stage) !== -1) return skip(\"trash_stage:\" + stage);\n\nconst allowed = String(d.allowed_stages || \"\").split(\",\").map(norm).filter(Boolean);\n// Empty allowed_stages means \"allow everything\", matching the stage gate.\nif (allowed.length && allowed.indexOf(stage) === -1) return skip(\"stage_not_allowed:\" + stage);\n\n// Live values beat the Inquiries snapshot, which demonstrably goes stale.\nconst phone = (person.phones && person.phones[0] && person.phones[0].value) || d.row_phone || \"\";\nconst email = (person.emails && person.emails[0] && person.emails[0].value) || d.row_email || \"\";\n\n// Nothing to send on either channel — not an error, just nobody to reach.\nif (!phone && !email) return skip(\"no_phone_or_email\");\n\nreturn [{ json: Object.assign({}, d, {\n  send_ok: true,\n  phone: String(phone),\n  email: String(email),\n  has_phone: !!phone,\n  has_email: !!email,\n  person_name: person.name || \"\",\n  first_name: person.firstName || \"\",\n  stage: person.stage || \"\",\n}) }];"
+      },
+      "id": "check-nudge-guards",
+      "name": "Check Nudge Guards",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1580,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "send-needed-",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.send_ok }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "send-needed-",
+      "name": "Send Needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1780,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $('Check Nudge Guards').first().json;\n\nconst render = (tpl, fallback) => String(tpl || fallback)\n  .replace(/\\{\\{first_name\\}\\}/g, d.first_name || \"there\")\n  .replace(/\\{\\{property_address\\}\\}/g, d.property_address || \"\")\n  .replace(/\\{\\{cal_link\\}\\}/g, d.cal_link || \"\");\n\nconst message = render(d.sms_template,\n  \"Hi {{first_name}}, just a reminder from Renting Freedom - your self-guided showing for {{property_address}} isn't booked yet. Pick a time that works for you: {{cal_link}}\");\nconst subject = render(d.email_subject_template,\n  \"Your showing for {{property_address}} isn't booked yet\");\nconst body = render(d.email_body_template,\n  \"Hi {{first_name}},\\n\\nYou asked about {{property_address}} and we sent over a link to book a self-guided showing, but we don't have a time on the calendar yet.\\n\\nPick whatever works for you here: {{cal_link}}\\n\\n- Renting Freedom\");\n\nconsole.log(\"[cal-booking-reminders] \" + d.event_id + \" nudge #\" + d.reminder_number +\n            \" day \" + d.days_since_anchor + \" sms=\" + d.has_phone + \" email=\" + d.has_email);\n\nreturn [{ json: Object.assign({}, d, {\n  message: message,\n  subject: subject,\n  body: body,\n  sent_at: new Date().toISOString(),\n}) }];"
+      },
+      "id": "build-nudge",
+      "name": "Build Nudge",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "has-phone-",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.has_phone }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "has-phone-",
+      "name": "Has Phone?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2180,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "from": "={{ $('Build Nudge').first().json.from_number }}",
+        "to": "={{ $('Build Nudge').first().json.phone }}",
+        "message": "={{ $('Build Nudge').first().json.message }}",
+        "options": {}
+      },
+      "id": "send-nudge-sms",
+      "name": "Send Nudge SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        2380,
+        40
+      ],
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ !!$json.error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "nudge-sms-failed-",
+      "name": "Nudge SMS Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2580,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Build Nudge').first().json.person_id), body: \"Automated booking-reminder SMS FAILED\" + ' (nudge #' + $('Build Nudge').first().json.reminder_number + ' for ' + $('Build Nudge').first().json.property_address + ')\\n\\n' + $('Build Nudge').first().json.message }) }}",
+        "options": {}
+      },
+      "id": "fub-log-note-nudge-sms-failed-",
+      "name": "FUB - Log Note (Nudge SMS Failed)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2780,
+        -60
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Build Nudge').first().json.person_id), body: \"Automated booking-reminder SMS sent\" + ' (nudge #' + $('Build Nudge').first().json.reminder_number + ' for ' + $('Build Nudge').first().json.property_address + ')\\n\\n' + $('Build Nudge').first().json.message }) }}",
+        "options": {}
+      },
+      "id": "fub-log-note-nudge-sms-sent-",
+      "name": "FUB - Log Note (Nudge SMS Sent)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2780,
+        140
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "has-email-",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $('Build Nudge').first().json.has_email }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "has-email-",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2980,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Build Nudge').first().json.email }}",
+        "subject": "={{ $('Build Nudge').first().json.subject }}",
+        "message": "={{ $('Build Nudge').first().json.body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "send-nudge-email",
+      "name": "Send Nudge Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        3180,
+        40
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "8F2JkQuOKIKFO18Z",
+          "name": "Gmail account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "c925c881-298a-44ac-a71a-70f4e07a0ae6"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ !!$json.error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "nudge-email-failed-",
+      "name": "Nudge Email Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3380,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Build Nudge').first().json.person_id), body: \"Automated booking-reminder EMAIL FAILED\" + ' (nudge #' + $('Build Nudge').first().json.reminder_number + ' for ' + $('Build Nudge').first().json.property_address + ')\\n\\n' + $('Build Nudge').first().json.body }) }}",
+        "options": {}
+      },
+      "id": "fub-log-note-nudge-email-failed-",
+      "name": "FUB - Log Note (Nudge Email Failed)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3580,
+        -60
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Build Nudge').first().json.person_id), body: \"Automated booking-reminder email sent\" + ' (nudge #' + $('Build Nudge').first().json.reminder_number + ' for ' + $('Build Nudge').first().json.property_address + ')\\n\\n' + $('Build Nudge').first().json.body }) }}",
+        "options": {}
+      },
+      "id": "fub-log-note-nudge-email-sent-",
+      "name": "FUB - Log Note (Nudge Email Sent)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3580,
+        140
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Inquiries",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "event_id": "={{ $('Build Nudge').first().json.event_id }}",
+            "booking_reminder_count": "={{ $('Build Nudge').first().json.reminder_number }}",
+            "booking_reminder_last_at": "={{ $('Build Nudge').first().json.sent_at }}"
+          },
+          "matchingColumns": [
+            "event_id"
+          ],
+          "schema": [
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_key",
+              "displayName": "property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cal_link",
+              "displayName": "cal_link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "inquired_at",
+              "displayName": "inquired_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "link_sent",
+              "displayName": "link_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "link_sent_at",
+              "displayName": "link_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_id",
+              "displayName": "event_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_address",
+              "displayName": "property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "match_status",
+              "displayName": "match_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alert_sent",
+              "displayName": "alert_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "booking_reminder_count",
+              "displayName": "booking_reminder_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "booking_reminder_last_at",
+              "displayName": "booking_reminder_last_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "booked_at",
+              "displayName": "booked_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "id": "mark-nudge-sent",
+      "name": "Mark Nudge Sent",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3780,
+        120
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {},
+      "id": "loop-back",
+      "name": "Loop Back",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3980,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const norm = (s) => String(s ?? \"\").trim().toLowerCase();\nconst last10 = (s) => String(s ?? \"\").replace(/\\D/g, \"\").slice(-10);\n\n// cal_event_type_id -> property_key. Exact and unique: verified live that no\n// two Properties rows share an event type id. This replaces address matching\n// entirely (Inquiries says \"130 Sandtrap Rd\", Cal Bookings says \"130 Sandtrap\n// Road\" — they never compare equal).\nconst etypeToKey = new Map();\nfor (const p of $items(\"Read Properties\").map(i => i.json || {})) {\n  const et = String(p.cal_event_type_id ?? \"\").trim();\n  const key = norm(p.property_key);\n  if (et && key) etypeToKey.set(et, key);\n}\n\n// property_key -> Set of identity tokens that have booked it.\nconst bookedBy = new Map();\nfor (const b of $items(\"Read Cal Bookings\").map(i => i.json || {})) {\n  if (norm(b.status) === \"cancelled\") continue;\n  const key = etypeToKey.get(String(b.cal_event_type_id ?? \"\").trim());\n  if (!key) continue;\n  if (!bookedBy.has(key)) bookedBy.set(key, new Set());\n  const set = bookedBy.get(key);\n  const pid = String(b.fub_person_id ?? \"\").trim();\n  if (pid) set.add(\"p:\" + pid);\n  const ph = last10(b.invitee_phone);\n  if (ph.length === 10) set.add(\"t:\" + ph);\n  const em = norm(b.invitee_email);\n  if (em) set.add(\"e:\" + em);\n}\n\n// Permissive on purpose: a missed booking means nagging someone who already\n// booked; a false positive only cancels an optional nudge.\nconst hasBooked = (row) => {\n  const set = bookedBy.get(norm(row.property_key));\n  if (!set) return false;\n  const pid = String(row.person_id ?? \"\").trim();\n  if (pid && set.has(\"p:\" + pid)) return true;\n  const ph = last10(row.phone);\n  if (ph.length === 10 && set.has(\"t:\" + ph)) return true;\n  const em = norm(row.email);\n  if (em && set.has(\"e:\" + em)) return true;\n  return false;\n};\n\nconst nowIso = new Date().toISOString();\nconst out = [];\nfor (const row of $items(\"Read Inquiries\").map(i => i.json || {})) {\n  const eventId = String(row.event_id ?? \"\").trim();\n  if (!eventId) continue;\n  if (norm(row.link_sent) !== \"true\") continue;\n  if (String(row.booked_at ?? \"\").trim()) continue;   // already stamped\n  if (!hasBooked(row)) continue;\n  out.push({ json: { any_booked: true, event_id: eventId, booked_at: nowIso,\n                     person_id: row.person_id, property_key: row.property_key } });\n}\n\nconsole.log(\"[cal-booking-reminders] newly booked rows to stamp: \" + out.length +\n            (out.length ? \" (\" + out.map(o => o.json.event_id).join(\", \") + \")\" : \"\"));\nif (!out.length) return [{ json: { any_booked: false } }];\nreturn out;"
+      },
+      "id": "find-newly-booked",
+      "name": "Find Newly Booked",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "any-booked-",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.any_booked }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "any-booked-",
+      "name": "Any Booked?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        980,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Inquiries",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "event_id": "={{ $json.event_id }}",
+            "booked_at": "={{ $json.booked_at }}"
+          },
+          "matchingColumns": [
+            "event_id"
+          ],
+          "schema": [
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_key",
+              "displayName": "property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cal_link",
+              "displayName": "cal_link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "inquired_at",
+              "displayName": "inquired_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "link_sent",
+              "displayName": "link_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "link_sent_at",
+              "displayName": "link_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_id",
+              "displayName": "event_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_address",
+              "displayName": "property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "match_status",
+              "displayName": "match_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alert_sent",
+              "displayName": "alert_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "booking_reminder_count",
+              "displayName": "booking_reminder_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "booking_reminder_last_at",
+              "displayName": "booking_reminder_last_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "booked_at",
+              "displayName": "booked_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "id": "mark-booked",
+      "name": "Mark Booked",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1180,
+        460
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Every Hour": {
+      "main": [
+        [
+          {
+            "node": "Read Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Settings": {
+      "main": [
+        [
+          {
+            "node": "Check Send Window",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Send Window": {
+      "main": [
+        [
+          {
+            "node": "In Send Window?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "In Send Window?": {
+      "main": [
+        [
+          {
+            "node": "Read Inquiries",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Read Inquiries": {
+      "main": [
+        [
+          {
+            "node": "Read Cal Bookings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Cal Bookings": {
+      "main": [
+        [
+          {
+            "node": "Read Properties",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Properties": {
+      "main": [
+        [
+          {
+            "node": "Find Due Nudges",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Find Newly Booked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Due Nudges": {
+      "main": [
+        [
+          {
+            "node": "Any Due?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Due?": {
+      "main": [
+        [
+          {
+            "node": "Process One at a Time",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Process One at a Time": {
+      "main": [
+        [],
+        [
+          {
+            "node": "FUB - Get Person",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Get Person": {
+      "main": [
+        [
+          {
+            "node": "Check Nudge Guards",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Nudge Guards": {
+      "main": [
+        [
+          {
+            "node": "Send Needed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Needed?": {
+      "main": [
+        [
+          {
+            "node": "Build Nudge",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Nudge": {
+      "main": [
+        [
+          {
+            "node": "Has Phone?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Phone?": {
+      "main": [
+        [
+          {
+            "node": "Send Nudge SMS",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Nudge SMS": {
+      "main": [
+        [
+          {
+            "node": "Nudge SMS Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nudge SMS Failed?": {
+      "main": [
+        [
+          {
+            "node": "FUB - Log Note (Nudge SMS Failed)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FUB - Log Note (Nudge SMS Sent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Log Note (Nudge SMS Failed)": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Log Note (Nudge SMS Sent)": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Send Nudge Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark Nudge Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Nudge Email": {
+      "main": [
+        [
+          {
+            "node": "Nudge Email Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nudge Email Failed?": {
+      "main": [
+        [
+          {
+            "node": "FUB - Log Note (Nudge Email Failed)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FUB - Log Note (Nudge Email Sent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Log Note (Nudge Email Failed)": {
+      "main": [
+        [
+          {
+            "node": "Mark Nudge Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Log Note (Nudge Email Sent)": {
+      "main": [
+        [
+          {
+            "node": "Mark Nudge Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Nudge Sent": {
+      "main": [
+        [
+          {
+            "node": "Loop Back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Back": {
+      "main": [
+        [
+          {
+            "node": "Process One at a Time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Newly Booked": {
+      "main": [
+        [
+          {
+            "node": "Any Booked?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Booked?": {
+      "main": [
+        [
+          {
+            "node": "Mark Booked",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "645133f1-6602-43b1-b0d2-bf56663e656e",
+  "activeVersionId": null,
+  "versionCounter": 1,
+  "triggerCount": 0,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-08-31T12:19:45.909Z",
+      "createdAt": "2026-08-31T12:19:45.909Z",
+      "role": "workflow:owner",
+      "workflowId": "5UvuzQwLjCB4D25A",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "parentFolder": null,
+  "activeVersion": null
+}

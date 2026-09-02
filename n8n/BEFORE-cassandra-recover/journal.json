@@ -1,0 +1,18 @@
+{
+  "written_at": "2026-08-30T13:06:50.724Z",
+  "appended": {
+    "person_id": "2748",
+    "property_key": "121-rockingham-way",
+    "cal_link": "cal.com/rentingfreedom/121-rockingham-way",
+    "inquired_at": "2026-08-30T13:06:50.720Z",
+    "link_sent": "FALSE",
+    "link_sent_at": "",
+    "source": "manual_recovery_rental_application",
+    "event_id": "manual-recovery-2748-121-rockingham-way",
+    "property_address": "121 Rockingham Way",
+    "match_status": "matched",
+    "phone": "8144903808",
+    "email": "cferra0423@gmail.com",
+    "alert_sent": ""
+  }
+}

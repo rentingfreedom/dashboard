@@ -1,0 +1,20 @@
+{
+  "written_at": "2026-08-26T13:32:18.532Z",
+  "person_id": "2729",
+  "deleted_row": {
+    "_row": 17,
+    "session_id": "vs_1U8facBgJfPX83bqZoGBtmtE",
+    "lead_id": "2729",
+    "lead_name": "Harmony Althoff",
+    "phone": "18433124707",
+    "original_webhook_body": "{\"eventId\":\"2587842c-1cda-4e9a-98da-fa0b3ceed8c7\",\"eventCreated\":\"2026-08-26T12:05:39+00:00\",\"event\":\"peopleUpdated\",\"resourceIds\":[2729],\"uri\":\"https://api.followupboss.com/v1/people?id=2729\"}",
+    "status": "pending",
+    "sent_at": "2026-08-26T12:06:00.074Z",
+    "resolved_at": "",
+    "error_code": "",
+    "error_reason": "",
+    "reminder_number": "",
+    "reminder_anchor_at": ""
+  },
+  "original_template": "Hi {{first_name}}, this is Nicole with Renting Freedom.  Before we can schedule your showing we need to quickly verify your ID. Please complete this short verification: {{verify_link}}"
+}

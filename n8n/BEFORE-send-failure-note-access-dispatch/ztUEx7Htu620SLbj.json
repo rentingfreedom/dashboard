@@ -1,0 +1,1385 @@
+{
+  "updatedAt": "2026-08-31T00:00:47.803Z",
+  "createdAt": "2026-07-09T13:04:35.705Z",
+  "id": "ztUEx7Htu620SLbj",
+  "name": "RentingFreedom - Access Code Dispatch",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "3bebc731-0c30-45d4-bd16-d37d3290a957"
+    },
+    {
+      "name": "Read Showings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Showings",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "fe27fbd5-bc31-4edb-85cc-8a02d59aeb32",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "name": "Find Ready Showings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst now = Date.now();\nconst oneHour = 60 * 60 * 1000;\nconst rows = $input.all().map(i => i.json);\n\nconst ready = rows.filter(r => {\n  if (r.status !== 'scheduled') return false;\n  if (!r.showing_time) return false;\n  const showingMs = new Date(r.showing_time).getTime();\n  // Window: showing is between now and 1h from now (send when T-60min to T)\n  return showingMs >= now && showingMs <= now + oneHour;\n});\n\nif (ready.length === 0) return [{ json: { hasReady: false } }];\nreturn ready.map(r => ({ json: { ...r, hasReady: true } }));\n"
+      },
+      "id": "da3ab4ee-55b1-485f-b504-07d67814ba38"
+    },
+    {
+      "name": "Any Ready?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.hasReady }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "67429cf1-a0fe-4f96-8f2e-eadcac15bdb2"
+    },
+    {
+      "name": "Process One at a Time",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        880,
+        200
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "d38daf4d-a8b1-4b7f-af57-ad07f2b3d24e"
+    },
+    {
+      "name": "Read Settings (Cron)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1100,
+        200
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "Nre1YnwWyB67bKje",
+          "name": "RF Dashboard Service Account (Sheets)"
+        }
+      },
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Settings",
+          "mode": "name"
+        },
+        "options": {},
+        "authentication": "serviceAccount"
+      },
+      "id": "9ecadf95-929a-4cb5-bcbc-4c203e6b5b71",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "name": "Calc Code Window (Cron)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        200
+      ],
+      "parameters": {
+        "jsCode": "\nfunction calcWindow(showingTimeISO, availableBeforeMinutes) {\n  const dt = new Date(showingTimeISO);\n  const pad = n => String(n).padStart(2, '0');\n\n  const effectiveStart = new Date(dt.getTime() - availableBeforeMinutes * 60 * 1000);\n  const startUtc = new Date(effectiveStart);\n  startUtc.setUTCMinutes(0, 0, 0);\n\n  const showingFloor = new Date(dt);\n  showingFloor.setUTCMinutes(0, 0, 0);\n  const endUtc = new Date(showingFloor.getTime() + 3600 * 1000);\n\n  const fmt = d => `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:00`;\n  return { startDate: fmt(startUtc), endDate: fmt(endUtc), tzOffset: '0' };\n}\n\nconst row = $('Find Ready Showings').first().json;\nconst settings = {};\n$('Read Settings (Cron)').all().forEach(i => {\n  if (i.json.key && i.json.value) settings[i.json.key] = i.json.value;\n});\n\nconst appKey    = settings.populife_app_key ?? '';\nconst appSecret = settings.populife_app_secret ?? '';\nif (!appKey || !appSecret) throw new Error('Populife credentials missing from Settings sheet');\n\nconst availableBeforeMinutes = parseInt(settings.available_before_minutes || '0');\nconst { startDate, endDate, tzOffset } = calcWindow(row.showing_time, availableBeforeMinutes);\n\nconst populifeLockId = row.populife_lock_id ?? row.populifeLockId ?? '';\nif (!populifeLockId) throw new Error('populife_lock_id missing on row ' + row.booking_uid);\n\n// Pass SMS-related settings through for downstream Build SMS\nconst smsTemplate = settings.access_code_sms_template ?? 'Your access code for {{address}} is: {{code}}';\nconst fromNumber  = settings.from_number ?? '';\n\nreturn [{ json: {\n  ...row,\n  appKey, appSecret,\n  startDate, endDate, tzOffset,\n  populifeLockId,\n  smsTemplate, fromNumber,\n} }];\n"
+      },
+      "id": "1e65083b-2c54-4241-96c3-e1f9af1dc503"
+    },
+    {
+      "name": "Populife - Get Token (Cron)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        200
+      ],
+      "parameters": {
+        "url": "={{ 'https://open.populife.co/api/auth/access_token/get?appKey=' + $json.appKey + '&appSecret=' + $json.appSecret }}",
+        "options": {}
+      },
+      "id": "4287dff0-6fd1-4325-af1e-fdac120a1afc"
+    },
+    {
+      "name": "Populife - Generate Code (Cron)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://open.populife.co/api/password/generate/deadline",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/x-www-form-urlencoded;charset=utf-8"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "string",
+        "body": "={{ 'appKey=' + encodeURIComponent($('Calc Code Window (Cron)').first().json.appKey) + '&accessToken=' + encodeURIComponent($('Populife - Get Token (Cron)').first().json.data.accessToken) + '&lockId=' + encodeURIComponent($('Calc Code Window (Cron)').first().json.populifeLockId) + '&startDate=' + encodeURIComponent($('Calc Code Window (Cron)').first().json.startDate) + '&endDate=' + encodeURIComponent($('Calc Code Window (Cron)').first().json.endDate) + '&timeZone=' + encodeURIComponent($('Calc Code Window (Cron)').first().json.tzOffset) + '&alias=' + encodeURIComponent($('Calc Code Window (Cron)').first().json.person_name || 'Showing') }}",
+        "options": {}
+      },
+      "id": "19602a41-eb3e-4ba0-afdc-62179f0003ef"
+    },
+    {
+      "name": "Build SMS (Cron)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        200
+      ],
+      "parameters": {
+        "jsCode": "\nfunction fmtShowingSlot(showingTimeISO) {\n  const start = new Date(showingTimeISO);\n  const end   = new Date(start.getTime() + 15 * 60 * 1000);\n  const timeFmt = new Intl.DateTimeFormat('en-US', {\n    timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true\n  });\n  const dateFmt = new Intl.DateTimeFormat('en-US', {\n    timeZone: 'America/New_York', month: 'short', day: 'numeric', year: 'numeric'\n  });\n  return 'Valid from ' + timeFmt.format(start) + ' through ' + timeFmt.format(end) + ', ' + dateFmt.format(start);\n}\n\nfunction fmtTime(iso) {\n  try {\n    return new Intl.DateTimeFormat('en-US', {\n      timeZone: 'America/New_York',\n      weekday: 'short', month: 'short', day: 'numeric',\n      hour: 'numeric', minute: '2-digit', hour12: true\n    }).format(new Date(iso));\n  } catch(e) { return iso; }\n}\n\nconst row    = $('Calc Code Window (Cron)').first().json;\nconst code   = $('Populife - Generate Code (Cron)').first().json.data?.keyboardPwd ?? '';\nconst codeId = String($('Populife - Generate Code (Cron)').first().json.data?.keyboardPwdId ?? '');\n\nconst validWindow = fmtShowingSlot(row.showing_time);\n\nconst message = row.smsTemplate\n  .replace('{{first_name}}',   (row.person_name ?? '').split(' ')[0] ?? '')\n  .replace('{{name}}',         row.person_name ?? '')\n  .replace('{{address}}',      row.property_address ?? row.property_key ?? '')\n  .replace('{{date}}',         fmtTime(row.showing_time))\n  .replace('{{code}}',         code)\n  .replace('{{valid_window}}', validWindow)\n  .replace('{{start}}',        row.startDate ?? '')\n  .replace('{{end}}',          row.endDate ?? '');\n\nreturn [{ json: {\n  ...row,\n  code, codeId, message,\n  from_number: row.fromNumber,\n  phone: row.person_phone,\n  sent_at: new Date().toISOString(),\n} }];\n"
+      },
+      "id": "b9333055-2c60-4d39-9268-ddbd14ebf205"
+    },
+    {
+      "name": "Send Access Code SMS (Cron)",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        2200,
+        200
+      ],
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      },
+      "parameters": {
+        "from": "={{ $json.from_number }}",
+        "to": "={{ $json.phone }}",
+        "message": "={{ $json.message }}",
+        "options": {}
+      },
+      "id": "a61ad606-d002-4acb-ab53-c577a7adcb3d"
+    },
+    {
+      "name": "Update Showings Row (Cron)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2420,
+        200
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Showings",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "booking_uid": "={{ $('Find Ready Showings').first().json.booking_uid }}",
+            "status": "code_sent",
+            "access_code": "={{ $('Populife - Generate Code (Cron)').first().json.data.keyboardPwd }}",
+            "access_code_id": "={{ String($('Populife - Generate Code (Cron)').first().json.data.keyboardPwdId) }}",
+            "code_sent_at": "={{ new Date().toISOString() }}",
+            "updated_at": "={{ new Date().toISOString() }}"
+          },
+          "matchingColumns": [
+            "booking_uid"
+          ],
+          "schema": [
+            {
+              "id": "booking_uid",
+              "displayName": "booking_uid",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_key",
+              "displayName": "property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "property_address",
+              "displayName": "property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_name",
+              "displayName": "person_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_email",
+              "displayName": "person_email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_phone",
+              "displayName": "person_phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "showing_time",
+              "displayName": "showing_time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "populife_lock_id",
+              "displayName": "populife_lock_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "access_code",
+              "displayName": "access_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "access_code_id",
+              "displayName": "access_code_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "code_sent_at",
+              "displayName": "code_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cd001e4c-52d1-40b0-afb0-cf1d34a78aa8",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "name": "FUB - Note Code Sent (Cron)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        200
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Build SMS (Cron)').first().json.person_id || 0), body: 'Access code sent for showing at ' + $('Build SMS (Cron)').first().json.property_address + ': ' + $('Build SMS (Cron)').first().json.code + ' (valid ' + $('Calc Code Window (Cron)').first().json.startDate + '\\u2013' + $('Calc Code Window (Cron)').first().json.endDate + ' ET)' }) }}",
+        "options": {}
+      },
+      "id": "487399b2-0df6-4866-8d57-f4c15900271f"
+    },
+    {
+      "name": "Loop Back",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2860,
+        200
+      ],
+      "parameters": {},
+      "id": "df4b0960-a6aa-4c52-aa69-0b963b96ebf1"
+    },
+    {
+      "id": "0e1c0f5c-4363-4a1c-b433-a7df084c7ad4",
+      "name": "Webhook: Immediate Dispatch",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        480
+      ],
+      "webhookId": "00e6f010-4a39-4f52-9df5-14201a4161c7",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "immediate-dispatch-showings",
+        "responseMode": "onReceived",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Read Showings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Showings": {
+      "main": [
+        [
+          {
+            "node": "Find Ready Showings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Ready Showings": {
+      "main": [
+        [
+          {
+            "node": "Any Ready?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Ready?": {
+      "main": [
+        [
+          {
+            "node": "Process One at a Time",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Process One at a Time": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Read Settings (Cron)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Settings (Cron)": {
+      "main": [
+        [
+          {
+            "node": "Calc Code Window (Cron)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calc Code Window (Cron)": {
+      "main": [
+        [
+          {
+            "node": "Populife - Get Token (Cron)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Populife - Get Token (Cron)": {
+      "main": [
+        [
+          {
+            "node": "Populife - Generate Code (Cron)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Populife - Generate Code (Cron)": {
+      "main": [
+        [
+          {
+            "node": "Build SMS (Cron)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build SMS (Cron)": {
+      "main": [
+        [
+          {
+            "node": "Send Access Code SMS (Cron)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Access Code SMS (Cron)": {
+      "main": [
+        [
+          {
+            "node": "Update Showings Row (Cron)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Showings Row (Cron)": {
+      "main": [
+        [
+          {
+            "node": "FUB - Note Code Sent (Cron)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Note Code Sent (Cron)": {
+      "main": [
+        [
+          {
+            "node": "Loop Back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Back": {
+      "main": [
+        [
+          {
+            "node": "Process One at a Time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook: Immediate Dispatch": {
+      "main": [
+        [
+          {
+            "node": "Read Showings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {
+    "node:Every 5 Minutes": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": {},
+  "versionId": "0fd90012-7b15-402e-9df9-fceee1e70f17",
+  "activeVersionId": "0fd90012-7b15-402e-9df9-fceee1e70f17",
+  "versionCounter": 19,
+  "triggerCount": 2,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-07-09T13:04:35.705Z",
+      "createdAt": "2026-07-09T13:04:35.705Z",
+      "role": "workflow:owner",
+      "workflowId": "ztUEx7Htu620SLbj",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-08-31T00:00:47.804Z",
+    "createdAt": "2026-08-31T00:00:47.804Z",
+    "versionId": "0fd90012-7b15-402e-9df9-fceee1e70f17",
+    "workflowId": "ztUEx7Htu620SLbj",
+    "nodes": [
+      {
+        "name": "Every 5 Minutes",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          0,
+          300
+        ],
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "minutes",
+                "minutesInterval": 5
+              }
+            ]
+          }
+        },
+        "id": "3bebc731-0c30-45d4-bd16-d37d3290a957"
+      },
+      {
+        "name": "Read Showings",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          220,
+          300
+        ],
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Showings",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "id": "fe27fbd5-bc31-4edb-85cc-8a02d59aeb32",
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000
+      },
+      {
+        "name": "Find Ready Showings",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          440,
+          300
+        ],
+        "parameters": {
+          "jsCode": "\nconst now = Date.now();\nconst oneHour = 60 * 60 * 1000;\nconst rows = $input.all().map(i => i.json);\n\nconst ready = rows.filter(r => {\n  if (r.status !== 'scheduled') return false;\n  if (!r.showing_time) return false;\n  const showingMs = new Date(r.showing_time).getTime();\n  // Window: showing is between now and 1h from now (send when T-60min to T)\n  return showingMs >= now && showingMs <= now + oneHour;\n});\n\nif (ready.length === 0) return [{ json: { hasReady: false } }];\nreturn ready.map(r => ({ json: { ...r, hasReady: true } }));\n"
+        },
+        "id": "da3ab4ee-55b1-485f-b504-07d67814ba38"
+      },
+      {
+        "name": "Any Ready?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          660,
+          300
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.hasReady }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true"
+                }
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "67429cf1-a0fe-4f96-8f2e-eadcac15bdb2"
+      },
+      {
+        "name": "Process One at a Time",
+        "type": "n8n-nodes-base.splitInBatches",
+        "typeVersion": 3,
+        "position": [
+          880,
+          200
+        ],
+        "parameters": {
+          "batchSize": 1,
+          "options": {}
+        },
+        "id": "d38daf4d-a8b1-4b7f-af57-ad07f2b3d24e"
+      },
+      {
+        "name": "Read Settings (Cron)",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          1100,
+          200
+        ],
+        "credentials": {
+          "googleApi": {
+            "id": "Nre1YnwWyB67bKje",
+            "name": "RF Dashboard Service Account (Sheets)"
+          }
+        },
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Settings",
+            "mode": "name"
+          },
+          "options": {},
+          "authentication": "serviceAccount"
+        },
+        "id": "9ecadf95-929a-4cb5-bcbc-4c203e6b5b71",
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000
+      },
+      {
+        "name": "Calc Code Window (Cron)",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1320,
+          200
+        ],
+        "parameters": {
+          "jsCode": "\nfunction calcWindow(showingTimeISO, availableBeforeMinutes) {\n  const dt = new Date(showingTimeISO);\n  const pad = n => String(n).padStart(2, '0');\n\n  const effectiveStart = new Date(dt.getTime() - availableBeforeMinutes * 60 * 1000);\n  const startUtc = new Date(effectiveStart);\n  startUtc.setUTCMinutes(0, 0, 0);\n\n  const showingFloor = new Date(dt);\n  showingFloor.setUTCMinutes(0, 0, 0);\n  const endUtc = new Date(showingFloor.getTime() + 3600 * 1000);\n\n  const fmt = d => `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:00`;\n  return { startDate: fmt(startUtc), endDate: fmt(endUtc), tzOffset: '0' };\n}\n\nconst row = $('Find Ready Showings').first().json;\nconst settings = {};\n$('Read Settings (Cron)').all().forEach(i => {\n  if (i.json.key && i.json.value) settings[i.json.key] = i.json.value;\n});\n\nconst appKey    = settings.populife_app_key ?? '';\nconst appSecret = settings.populife_app_secret ?? '';\nif (!appKey || !appSecret) throw new Error('Populife credentials missing from Settings sheet');\n\nconst availableBeforeMinutes = parseInt(settings.available_before_minutes || '0');\nconst { startDate, endDate, tzOffset } = calcWindow(row.showing_time, availableBeforeMinutes);\n\nconst populifeLockId = row.populife_lock_id ?? row.populifeLockId ?? '';\nif (!populifeLockId) throw new Error('populife_lock_id missing on row ' + row.booking_uid);\n\n// Pass SMS-related settings through for downstream Build SMS\nconst smsTemplate = settings.access_code_sms_template ?? 'Your access code for {{address}} is: {{code}}';\nconst fromNumber  = settings.from_number ?? '';\n\nreturn [{ json: {\n  ...row,\n  appKey, appSecret,\n  startDate, endDate, tzOffset,\n  populifeLockId,\n  smsTemplate, fromNumber,\n} }];\n"
+        },
+        "id": "1e65083b-2c54-4241-96c3-e1f9af1dc503"
+      },
+      {
+        "name": "Populife - Get Token (Cron)",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1540,
+          200
+        ],
+        "parameters": {
+          "url": "={{ 'https://open.populife.co/api/auth/access_token/get?appKey=' + $json.appKey + '&appSecret=' + $json.appSecret }}",
+          "options": {}
+        },
+        "id": "4287dff0-6fd1-4325-af1e-fdac120a1afc"
+      },
+      {
+        "name": "Populife - Generate Code (Cron)",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1760,
+          200
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://open.populife.co/api/password/generate/deadline",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/x-www-form-urlencoded;charset=utf-8"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "string",
+          "body": "={{ 'appKey=' + encodeURIComponent($('Calc Code Window (Cron)').first().json.appKey) + '&accessToken=' + encodeURIComponent($('Populife - Get Token (Cron)').first().json.data.accessToken) + '&lockId=' + encodeURIComponent($('Calc Code Window (Cron)').first().json.populifeLockId) + '&startDate=' + encodeURIComponent($('Calc Code Window (Cron)').first().json.startDate) + '&endDate=' + encodeURIComponent($('Calc Code Window (Cron)').first().json.endDate) + '&timeZone=' + encodeURIComponent($('Calc Code Window (Cron)').first().json.tzOffset) + '&alias=' + encodeURIComponent($('Calc Code Window (Cron)').first().json.person_name || 'Showing') }}",
+          "options": {}
+        },
+        "id": "19602a41-eb3e-4ba0-afdc-62179f0003ef"
+      },
+      {
+        "name": "Build SMS (Cron)",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1980,
+          200
+        ],
+        "parameters": {
+          "jsCode": "\nfunction fmtShowingSlot(showingTimeISO) {\n  const start = new Date(showingTimeISO);\n  const end   = new Date(start.getTime() + 15 * 60 * 1000);\n  const timeFmt = new Intl.DateTimeFormat('en-US', {\n    timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true\n  });\n  const dateFmt = new Intl.DateTimeFormat('en-US', {\n    timeZone: 'America/New_York', month: 'short', day: 'numeric', year: 'numeric'\n  });\n  return 'Valid from ' + timeFmt.format(start) + ' through ' + timeFmt.format(end) + ', ' + dateFmt.format(start);\n}\n\nfunction fmtTime(iso) {\n  try {\n    return new Intl.DateTimeFormat('en-US', {\n      timeZone: 'America/New_York',\n      weekday: 'short', month: 'short', day: 'numeric',\n      hour: 'numeric', minute: '2-digit', hour12: true\n    }).format(new Date(iso));\n  } catch(e) { return iso; }\n}\n\nconst row    = $('Calc Code Window (Cron)').first().json;\nconst code   = $('Populife - Generate Code (Cron)').first().json.data?.keyboardPwd ?? '';\nconst codeId = String($('Populife - Generate Code (Cron)').first().json.data?.keyboardPwdId ?? '');\n\nconst validWindow = fmtShowingSlot(row.showing_time);\n\nconst message = row.smsTemplate\n  .replace('{{first_name}}',   (row.person_name ?? '').split(' ')[0] ?? '')\n  .replace('{{name}}',         row.person_name ?? '')\n  .replace('{{address}}',      row.property_address ?? row.property_key ?? '')\n  .replace('{{date}}',         fmtTime(row.showing_time))\n  .replace('{{code}}',         code)\n  .replace('{{valid_window}}', validWindow)\n  .replace('{{start}}',        row.startDate ?? '')\n  .replace('{{end}}',          row.endDate ?? '');\n\nreturn [{ json: {\n  ...row,\n  code, codeId, message,\n  from_number: row.fromNumber,\n  phone: row.person_phone,\n  sent_at: new Date().toISOString(),\n} }];\n"
+        },
+        "id": "b9333055-2c60-4d39-9268-ddbd14ebf205"
+      },
+      {
+        "name": "Send Access Code SMS (Cron)",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          2200,
+          200
+        ],
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        },
+        "parameters": {
+          "from": "={{ $json.from_number }}",
+          "to": "={{ $json.phone }}",
+          "message": "={{ $json.message }}",
+          "options": {}
+        },
+        "id": "a61ad606-d002-4acb-ab53-c577a7adcb3d"
+      },
+      {
+        "name": "Update Showings Row (Cron)",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          2420,
+          200
+        ],
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "parameters": {
+          "operation": "update",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Showings",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "booking_uid": "={{ $('Find Ready Showings').first().json.booking_uid }}",
+              "status": "code_sent",
+              "access_code": "={{ $('Populife - Generate Code (Cron)').first().json.data.keyboardPwd }}",
+              "access_code_id": "={{ String($('Populife - Generate Code (Cron)').first().json.data.keyboardPwdId) }}",
+              "code_sent_at": "={{ new Date().toISOString() }}",
+              "updated_at": "={{ new Date().toISOString() }}"
+            },
+            "matchingColumns": [
+              "booking_uid"
+            ],
+            "schema": [
+              {
+                "id": "booking_uid",
+                "displayName": "booking_uid",
+                "required": false,
+                "defaultMatch": true,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_key",
+                "displayName": "property_key",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "property_address",
+                "displayName": "property_address",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_id",
+                "displayName": "person_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_name",
+                "displayName": "person_name",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_email",
+                "displayName": "person_email",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "person_phone",
+                "displayName": "person_phone",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "showing_time",
+                "displayName": "showing_time",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "status",
+                "displayName": "status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "populife_lock_id",
+                "displayName": "populife_lock_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "access_code",
+                "displayName": "access_code",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "access_code_id",
+                "displayName": "access_code_id",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "code_sent_at",
+                "displayName": "code_sent_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "created_at",
+                "displayName": "created_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "updated_at",
+                "displayName": "updated_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "cd001e4c-52d1-40b0-afb0-cf1d34a78aa8",
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000
+      },
+      {
+        "name": "FUB - Note Code Sent (Cron)",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2640,
+          200
+        ],
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        },
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.followupboss.com/v1/notes",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ personId: Number($('Build SMS (Cron)').first().json.person_id || 0), body: 'Access code sent for showing at ' + $('Build SMS (Cron)').first().json.property_address + ': ' + $('Build SMS (Cron)').first().json.code + ' (valid ' + $('Calc Code Window (Cron)').first().json.startDate + '\\u2013' + $('Calc Code Window (Cron)').first().json.endDate + ' ET)' }) }}",
+          "options": {}
+        },
+        "id": "487399b2-0df6-4866-8d57-f4c15900271f"
+      },
+      {
+        "name": "Loop Back",
+        "type": "n8n-nodes-base.noOp",
+        "typeVersion": 1,
+        "position": [
+          2860,
+          200
+        ],
+        "parameters": {},
+        "id": "df4b0960-a6aa-4c52-aa69-0b963b96ebf1"
+      },
+      {
+        "id": "0e1c0f5c-4363-4a1c-b433-a7df084c7ad4",
+        "name": "Webhook: Immediate Dispatch",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          480
+        ],
+        "webhookId": "00e6f010-4a39-4f52-9df5-14201a4161c7",
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "immediate-dispatch-showings",
+          "responseMode": "onReceived",
+          "options": {}
+        }
+      }
+    ],
+    "connections": {
+      "Every 5 Minutes": {
+        "main": [
+          [
+            {
+              "node": "Read Showings",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Showings": {
+        "main": [
+          [
+            {
+              "node": "Find Ready Showings",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Find Ready Showings": {
+        "main": [
+          [
+            {
+              "node": "Any Ready?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Any Ready?": {
+        "main": [
+          [
+            {
+              "node": "Process One at a Time",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      },
+      "Process One at a Time": {
+        "main": [
+          [],
+          [
+            {
+              "node": "Read Settings (Cron)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Settings (Cron)": {
+        "main": [
+          [
+            {
+              "node": "Calc Code Window (Cron)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Calc Code Window (Cron)": {
+        "main": [
+          [
+            {
+              "node": "Populife - Get Token (Cron)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Populife - Get Token (Cron)": {
+        "main": [
+          [
+            {
+              "node": "Populife - Generate Code (Cron)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Populife - Generate Code (Cron)": {
+        "main": [
+          [
+            {
+              "node": "Build SMS (Cron)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build SMS (Cron)": {
+        "main": [
+          [
+            {
+              "node": "Send Access Code SMS (Cron)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Send Access Code SMS (Cron)": {
+        "main": [
+          [
+            {
+              "node": "Update Showings Row (Cron)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Update Showings Row (Cron)": {
+        "main": [
+          [
+            {
+              "node": "FUB - Note Code Sent (Cron)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Note Code Sent (Cron)": {
+        "main": [
+          [
+            {
+              "node": "Loop Back",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Loop Back": {
+        "main": [
+          [
+            {
+              "node": "Process One at a Time",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Webhook: Immediate Dispatch": {
+        "main": [
+          [
+            {
+              "node": "Read Showings",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Justin Artis",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-08-31T00:00:47.828Z",
+        "id": 456,
+        "workflowId": "ztUEx7Htu620SLbj",
+        "versionId": "0fd90012-7b15-402e-9df9-fceee1e70f17",
+        "event": "deactivated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      },
+      {
+        "createdAt": "2026-08-31T00:00:47.842Z",
+        "id": 457,
+        "workflowId": "ztUEx7Htu620SLbj",
+        "versionId": "0fd90012-7b15-402e-9df9-fceee1e70f17",
+        "event": "activated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    ]
+  }
+}
