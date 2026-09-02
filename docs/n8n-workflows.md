@@ -3,6 +3,15 @@
 The Renting Freedom automation runs on n8n. Any Claude session working on these
 workflows should read this file first.
 
+> **Companions, neither loaded into every session:** `docs/n8n-history.md` — the archive
+> of resolved post-mortems, the live executions that proved them, superseded designs and
+> one-off data repairs; and `docs/doorloop-sync.md` — the DoorLoop subsystem in full
+> (occupancy sync, reconciliation report, panel actions, provisioning). Sections here
+> link to both by name.
+> **Keep it that way when adding to these docs:** the rule, the wiring, the script and
+> the warning belong here; the incident narrative and execution transcripts belong
+> there. This file is loaded into every session and is close to its size budget.
+
 > **Conventions used throughout.** Every change ships as an idempotent script in
 > `scripts/` that checks current values before patching, refuses to patch text it
 > can't find, writes a pre-change backup to `n8n/BEFORE-<name>/`, and supports
@@ -10,6 +19,8 @@ workflows should read this file first.
 > place** per workflow. Blocked leads are **recorded, not dropped** (`skipped_*`
 > values), so lifting a gate later never fires a backlog. Stage/tag/text
 > comparisons are always `String(x).trim().toLowerCase()` (gotcha 14).
+> Give every new script its **own** `BEFORE-` directory and grep for the name
+> first — one script briefly reused another's and clobbered its only revert data.
 
 ## Instance
 
@@ -28,15 +39,17 @@ workflows should read this file first.
 | `JDsKrVRHf9TEVj7j` | FUB Inquiry → Record + Send | Webhook `fub-inquiry-created`, driven by FUB `eventsCreated`. Records every property inquiry, sends that inquiry's own cal link. |
 | `L13GUyrWbjSJwn8p` | Identity Verification Gate | Webhook `phone-added-send-text`. The real FUB phone-added trigger: guards → Stripe Identity → verify SMS. Also hosts the stage-transition watcher, the reapply-reroute, the tag-expiry cleanup, and the **ungated** new inquiry-lead alert. |
 | `PHSdCWhovdbFDHlX` | Identity Verification Result Handler | Webhook `identity-verification-result`. On success, replays `UbO0l29GtILMm1sP`. |
-| `Ih8zMmNeUwKvITGf` | FUB New Lead → Cal Link | Webhook `new-lead-cal-link` (`peopleCreated`). **Legacy, inactive.** See "Legacy overlap". |
-| `HwXpYAqwbG1zwGls` | FUB Address → Cal Link | Webhook `06b890ba-…` (`peopleUpdated`). **Legacy, inactive, not test-gated.** See "Legacy overlap". |
+| `Ih8zMmNeUwKvITGf` | FUB New Lead → Cal Link | Webhook `new-lead-cal-link` (`peopleCreated`). **Legacy, inactive, archived.** |
+| `HwXpYAqwbG1zwGls` | FUB Address → Cal Link | Webhook `06b890ba-…` (`peopleUpdated`). **Legacy, inactive, archived, not test-gated.** |
 | `4bMsEAi18j4CPK8k` | DoorLoop Occupancy Sync | Hourly poll of DoorLoop Units + ACTIVE Leases → writes `status` to Properties. **ACTIVE.** `n8n/doorloop-occupancy-sync.json`. |
 | `X1lih7X05rpnTPmb` | Zillow Rental Application → Create FUB Person | Gmail Trigger on `no-reply@comet.zillow.com` → dedup-checks FUB by name → creates person + note → texts for a phone number. **ACTIVE, test-gated.** `n8n/fub-rental-application-flow.json`. |
-| `5LwTZS4dw5qmInL2` | Cal Reminder - Immediate Sends | Own Cal.com webhook `calcom-reminder-events` (independent of the Booking Handler). **ACTIVE, test-gated.** `n8n/cal-reminder-immediate.json`. |
+| `5LwTZS4dw5qmInL2` | Cal Reminder - Immediate Sends | Own Cal.com webhook `calcom-reminder-events`. **ACTIVE, test-gated.** `n8n/cal-reminder-immediate.json`. |
 | `3hGnl6mPnu2AMbZ1` | Cal Reminder - Cron Poll | Every 5 min. Due reminders + follow-ups. **ACTIVE, test-gated.** `n8n/cal-reminder-cron.json`. |
 | `41HFRjgWiPEFJwTU` | Cal Reminder - Reconfirm Webhook | Webhook `reconfirm` (GET `?token=`). Marks `confirmed`, returns static HTML. **ACTIVE.** `n8n/cal-reconfirm-webhook.json`. |
-| `R3rhuCYEGoBFArBa` | Identity Verification Reminders | Hourly tick, sends only in the 10am ET hour. One reminder SMS/day for 4 days to leads who haven't verified. **CREATED INACTIVE 2026-08-25.** |
-| `5UvuzQwLjCB4D25A` | Cal Booking Reminders | Hourly tick, sends only in the 10am ET hour. One SMS **and** email per day for 4 days to a lead who was sent a per-property cal link and hasn't booked. **CREATED INACTIVE 2026-08-31.** |
+| `R3rhuCYEGoBFArBa` | Identity Verification Reminders | Hourly tick, sends in the 10am ET hour. One reminder SMS/day for 4 days to leads who haven't verified. **ACTIVE since 2026-08-25.** |
+| `5UvuzQwLjCB4D25A` | Cal Booking Reminders | Hourly tick, sends in the 10am ET hour. One SMS **and** email per day for 4 days to a lead sent a per-property cal link who hasn't booked. **CREATED INACTIVE 2026-08-31.** |
+| `TGGhSkTSZGYPrZo9` | New Property → Provision | Sheets `rowAdded` poll (**every 5 min** since 2026-09-01) → cal.com event type + Google resource. |
+| `W6PoSadMxnoHwxhG` | Delete Property | Sheets `anyUpdate` poll (**every 5 min**) on the SAME tab → filter `active == "Delete"` → deletes the cal.com event type, the Google resource, and the sheet row. **ACTIVE.** |
 
 ## Pre-launch checklist
 
@@ -59,80 +72,43 @@ not a deploy — it is this list of state changes. `node scripts/launch-audit.mj
    node scripts/n8n-add-access-test-gate.mjs --revert --apply  # 4. the other 4 gates
    node scripts/launch-audit.mjs                               # 5. expect hardGates=0
    ```
-   Backups from step 3 land in `n8n/BEFORE-lift-test-gates/`.
-
-   Undo: `n8n-lift-test-gates.mjs --revert --apply` (step 3);
-   `n8n-add-access-test-gate.mjs --apply` (step 4). Neither unsends an SMS.
-   As of 2026-08-07 the lift script is **dry-run verified only** — run step 3 with
-   a human watching and follow one real lead end to end.
+   Backups from step 3 land in `n8n/BEFORE-lift-test-gates/`. Undo:
+   `n8n-lift-test-gates.mjs --revert --apply` (step 3);
+   `n8n-add-access-test-gate.mjs --apply` (step 4). Neither unsends an SMS. As of
+   2026-08-07 the lift script is **dry-run verified only** — run step 3 with a human
+   watching and follow one real lead end to end.
 
 2. **Set `allowed_stages` to production** —
    `node scripts/stage-gate-setup.mjs --production --apply`. Client confirmed
    2026-07-28 that `Incoming Rental Leads` must not be live. **Move Test Test9
-   (person 2545) to `Tenant Still Looking For Rental` first** or this disables
-   your own test path.
+   (person 2545) to `Tenant Still Looking For Rental` first** or this disables your own
+   test path.
 
 3. **Reassign the alert-phone placeholders** — `unmatched_inquiry_alert_phone`,
    `rental_application_alert_phone`, `cal_send_failure_alert_phone` are all still
    `+18038047847` (Andrew's personal number). `launch-audit.mjs` checks all three.
-   Note `rental_application_alert_phone` drives **two** alerts as of 2026-08-08
-   (Zillow application + new inquiry-lead); reassigning moves both.
+   `rental_application_alert_phone` drives **two** alerts (Zillow application + new
+   inquiry-lead); reassigning moves both.
 
 4. ~~**Add Properties rows for the unmatched live Zillow addresses**~~ —
-   **RESOLVED 2026-08-20, do not add these.** Verified against the live
-   Properties tab: `296 Blue Haw Drive` and `5464 Crown Avenue` **already
-   exist**, both `active`, DoorLoop-linked, `provisioning_status=provisioned`,
-   with cal links. They were added during the DoorLoop reconciliation work; this
-   checklist item was never updated.
+   **RESOLVED, do not add any of them.** `296 Blue Haw Dr` and `5464 Crown Ave` already
+   exist as spelled-out rows, provisioned and DoorLoop-linked, and `normalizeAddress()`
+   strips street suffixes so the abbreviated Zillow forms already match (2026-08-20).
+   `522 Temple Rd` is under an ACTIVE lease to 2028 and **has never been inquired on**
+   (2026-08-23). Full reasoning in `docs/n8n-history.md`.
 
-   > **Adding `296 Blue Haw Dr` / `5464 Crown Ave` would be actively harmful.**
-   > It creates a *duplicate* property row for the same house and — because
-   > `createProperty()` fires `property.created` — provisions a **second**
-   > cal.com event type and Google resource for it.
+   > **Adding any of them would be actively harmful.** It creates a *duplicate* row for
+   > the same house and — because `createProperty()` fires `property.created` —
+   > provisions a **second** cal.com event type and Google resource for it.
 
-   The abbreviated Zillow forms match the spelled-out sheet rows already:
-   `Resolve Inquiry`'s `normalizeAddress()` strips every street suffix
-   (`street|st|road|rd|avenue|ave|drive|dr|court|ct|…`) before comparing, so
-   `296 Blue Haw Dr` → `296bluehaw` → matches `296 Blue Haw Drive` at score 120,
-   well above the 80 threshold. Verified by executing the live `jsCode` against
-   the real pairs 2026-08-20.
-
-   **`522 Temple Rd` — decided 2026-08-23, do not add it either.** It has no
-   Properties row, and it does not need one: DoorLoop unit
-   `6a6b7e39ae48cc7746b64eb9` ("522 Temple Road") carries an **ACTIVE lease
-   2026-08-01 → 2028-08-31** (Janessa Cote & Joshua Jones). It is occupied, not
-   marketed, and cannot be inquired on. Adding it would provision a cal.com event
-   type and a Google resource for a house nobody can show for two years.
-   Revisit when that lease ends, or sooner if it is listed early.
-
-   It has also **never been inquired on** — all 65 `Inquiries` rows were dumped
-   by address 2026-08-23 and none mentions Temple (see the correction under
-   "Addresses in Zillow but not in Properties"). Nothing is being lost today.
-
-   It remains **blocked, not missing** for DoorLoop *occupancy* purposes — it
-   shares an identical DoorLoop address with another unit at
-   `7636 Winchester st LLC`. Note the inquiry flow does not need DoorLoop: a row
-   with a `cal_link` is enough to serve an inquiry, and `doorloop_property_id`
-   may stay empty (status just stays manual).
-   (`2019 Codorus Ln #1` is deliberately excluded.)
-
-   > **If it is ever added, do NOT use the DoorLoop panel's Add button or
-   > `POST /api/properties/doorloop/add`.** The recon report correctly files this
-   > unit as `[blocked]` under *known*, so the panel never offers it — but calling
-   > the route directly with the unit id would create the **wrong property**. The
-   > route derives the street from `unit.address.street1`, which for this unit is
-   > the inherited parent address **`"7636 Winchester st"`**; `unit.name`
-   > ("522 Temple Road") is never consulted. That yields a row `7636 Winchester st`
-   > / key `7636-winchester-st` — a near-duplicate of the existing
-   > `7636-winchester-st-b` row — linked to the Temple unit, plus a spurious
-   > cal.com event type. **Use the ordinary Add Property dialog and type the
-   > street by hand.**
-   >
-   > Linking it by unit **id** afterwards would be correct — occupancy joins on
-   > the unit id, and the duplicated address only blocks *matching*, not the join.
-   > There is no path that does so today: `/doorloop/link` recomputes matching
-   > server-side and skips it, and `doorloop-match.mjs` is address-based.
-
+   > **If `522 Temple Rd` is ever added, do NOT use the DoorLoop panel's Add button or
+   > `POST /api/properties/doorloop/add`.** The route derives the street from
+   > `unit.address.street1`, which for that unit is the inherited parent address
+   > **`"7636 Winchester st"`** (`unit.name` is never consulted) — yielding a
+   > near-duplicate row plus a spurious cal.com event type. **Use the ordinary Add
+   > Property dialog and type the street by hand.** Linking it by unit **id** afterwards
+   > would be correct, but no path does so today. (`2019 Codorus Ln #1` is deliberately
+   > excluded.)
 ### Decisions still open
 
 5. **Retire the two legacy workflows?** `Ih8zMmNeUwKvITGf` / `HwXpYAqwbG1zwGls`
@@ -147,8 +123,7 @@ not a deploy — it is this list of state changes. `node scripts/launch-audit.mj
 
 ### Already decided — do not re-litigate
 
-- **Access Code Dispatch stays stage-ungated.** Intended design. See "Access Code
-  Dispatch stays stage-ungated".
+- **Access Code Dispatch stays stage-ungated.** Intended design.
 - **`inquiry_flow_start_at`** is what stops the flow blasting the existing CRM.
 - **The new inquiry-lead alert is deliberately ungated** and is not one of the 16.
 
@@ -163,38 +138,33 @@ not a deploy — it is this list of state changes. `node scripts/launch-audit.mj
 
 ### Launch tooling (built 2026-08-07, NOT yet run)
 
-**`launch-backlog-check.mjs`** — "what fires the instant the gates come off?"
-Run it *before* lifting anything. The record-but-don't-send design is only
-provably safe for the Inquiries tab (the sweep selects `link_sent === "false"`);
-the tabs whose crons select on **time** were never checked — `Cal Bookings`
-post-event follow-ups have no upper bound by design.
-
-Result 2026-08-07, **clean but re-run before launch**: 20 Cal Bookings rows (0
-past with unsent follow-ups), 2 Showings, 39 Inquiries (3 read `false`, **0
-deliverable**).
+**`launch-backlog-check.mjs`** — "what fires the instant the gates come off?" Run it
+*before* lifting anything. The record-but-don't-send design is only provably safe for
+the Inquiries tab (the sweep selects `link_sent === "false"`); the tabs whose crons
+select on **time** were never checked — `Cal Bookings` post-event follow-ups have no
+upper bound by design. Result 2026-08-07, **clean but re-run before launch**: 20 Cal
+Bookings rows, 2 Showings, 39 Inquiries (0 deliverable).
 
 > Gotcha 14 bit this script during its own development: Sheets stores `"false"` as
-> boolean `FALSE`, so a case-sensitive count reported 0 sweepable rows while the
-> sweep would have matched 3. Under-reporting is the dangerous direction.
+> boolean `FALSE`, so a case-sensitive count reported 0 sweepable rows while the sweep
+> would have matched 3. Under-reporting is the dangerous direction.
 
 **`n8n-lift-test-gates.mjs`** — lifts 6 gates across 5 workflows plus the sweep.
-Refuses `--apply` without `--confirm-live`: its side effects are real SMS/email,
-which aren't reversible. Does **not** touch the 4 Booking Handler / Access
-Dispatch gates, Settings, activation, or the legacy gate; prints those as a
-checklist.
+Refuses `--apply` without `--confirm-live`: its side effects are real SMS/email, which
+aren't reversible. Does **not** touch the 4 Booking Handler / Access Dispatch gates,
+Settings, activation, or the legacy gate; prints those as a checklist.
 
 **Two judgment calls baked in — both easy to get wrong by hand:**
 
-1. **Identity Gate**: the `not_test_mode` early return is deleted, but `isTestMode`
-   is still **computed**. Setting `isTestMode = true` looks equivalent and is not —
-   `Check Guards` later has `if (!isTestMode && alreadySent)`, a dedup *bypass* for
-   the test contact. Forcing it true makes that bypass permanent for everyone, so a
-   real lead could get repeat verification SMS forever.
+1. **Identity Gate**: the `not_test_mode` early return is deleted, but `isTestMode` is
+   still **computed**. Setting `isTestMode = true` looks equivalent and is not —
+   `Check Guards` later has `if (!isTestMode && alreadySent)`, a dedup *bypass* for the
+   test contact. Forcing it true makes that bypass permanent for everyone, so a real
+   lead could get repeat verification SMS forever.
 2. **Cal.com**: `isTestBooking()` and the `is_test` column are left intact. Making
    `isTestBooking()` return true would stamp every real booking `is_test=true`,
-   destroying the column's meaning and the audit trail. Instead the *send*
-   conditions stop consulting it (`testGateOpen = true`; the Cron drops
-   `|| !isTest`).
+   destroying the column's meaning and the audit trail. Instead the *send* conditions
+   stop consulting it (`testGateOpen = true`; the Cron drops `|| !isTest`).
 
 The sweep's gate is a **node**, not code, so it's bypassed by rewiring
 `Wait For All → Check & Build Message` directly and leaving the IF disconnected —
@@ -247,21 +217,15 @@ then marks each sent.
 
 ### Cal-link EMAIL alongside the SMS — `CAL_LINK_EMAIL_MARKER` (2026-08-25)
 
-Client request: a verified lead should get the cal.com link by **email as well
-as SMS**. Verified first that this did not already happen — the sweep and the
-inquiry flow hold Twilio nodes only; the estate's sole Gmail nodes belong to the
-two Cal booking workflows.
+A verified lead gets the cal.com link by **email as well as SMS**. Added in the sweep
+because it is the single place that emits "here is your link for property X", one item
+per unsent `Inquiries` row, and it is what the Result Handler replays on successful
+verification. One email per property — a two-property lead gets two of each.
 
-Added **here** rather than anywhere else because the sweep is the single place
-that emits "here is your link for property X", one item per unsent `Inquiries`
-row, and it is what the Result Handler replays on successful verification. One
-email per property, matching the SMS — a two-property lead gets two of each.
-
-**Wiring is parallel, never in front.** `Build Cal Link Email` →
-`Send Cal Link Email` hangs off `Confirm Still Unsent` alongside `Send SMS`,
-the same shape `FUB - Add Tag` already uses. Nothing is inserted ahead of an
-existing node, so no existing node's `$json` changes — **gotcha 19, which has
-already bitten this project twice.**
+**Wiring is parallel, never in front.** `Build Cal Link Email` → `Send Cal Link Email`
+hangs off `Confirm Still Unsent` alongside `Send SMS`, the same shape `FUB - Add Tag`
+already uses, so no existing node's `$json` changes (**gotcha 19, which has already
+bitten this project twice**).
 
 ```
 Confirm Still Unsent ─┬─> Send SMS -> Log to Text Log / FUB Note / Mark Sent
@@ -269,85 +233,64 @@ Confirm Still Unsent ─┬─> Send SMS -> Log to Text Log / FUB Note / Mark Se
                       └─> Build Cal Link Email -> Send Cal Link Email   (NEW)
 ```
 
-- `Send Cal Link Email` carries `onError: continueRegularOutput`. Email is an
-  *addition*; a Gmail failure must never abort the execution and cost the lead
-  their text or stop `Mark Inquiry Sent`.
-- `Build Cal Link Email` returns `[]` when there's no address, so Gmail is never
-  called with an empty `to`.
-- `Check & Build Message` now also emits `email` from the FUB person.
+`Send Cal Link Email` carries `onError: continueRegularOutput` (a Gmail failure must
+never cost the lead their text or stop `Mark Inquiry Sent`), and `Build Cal Link Email`
+returns `[]` with no address so Gmail is never called with an empty `to`.
+`Check & Build Message` also emits `email` from the FUB person.
 
 > **Address policy: any address, relays included — client decision 2026-08-25.**
 > **76 of 76** `Inquiries` rows carry an email but **54 are Zillow's anonymised
-> `@convo.zillow.com` relays**, so excluding them would drop most leads. Only 22
-> rows have a phone at all. **Delivery through Zillow's relay is UNVERIFIED** —
-> it may bounce, strip the link, or land inside Zillow's message thread rather
-> than an inbox. Worth confirming against one real relay address.
+> `@convo.zillow.com` relays**, so excluding them would drop most leads. Only 22 rows
+> have a phone at all. **Delivery through Zillow's relay is UNVERIFIED** — it may
+> bounce, strip the link, or land inside Zillow's message thread.
 
 ```bash
 node scripts/n8n-add-cal-link-email.mjs [--apply] [--revert --apply]
-node scripts/cal-link-email-verify.mjs                     # 29 assertions
+node scripts/cal-link-email-verify.mjs                     # 31 assertions
 ```
-Backup `n8n/BEFORE-cal-link-email/`. The verifier asserts the connections graph
-as well as behaviour: the entire safety story is "parallel branch", and a future
-rewire that routed `Send SMS` through the email branch would pass every
-behavioural test while breaking the SMS path.
-
+Backup `n8n/BEFORE-cal-link-email/`. The verifier asserts the connections graph as well
+as behaviour: the entire safety story is "parallel branch", and a rewire that routed
+`Send SMS` through the email branch would pass every behavioural test while breaking
+the SMS path.
 ### Every-inquiry staff alert — `INQUIRY_ALERT_MARKER` (2026-08-25)
 
-One SMS to staff for **every recorded inquiry**, saying who inquired, about
-what, and **what the system decided to do**. Added for launch-week visibility.
+One SMS to staff for **every recorded inquiry** — who inquired, about what, and **what
+the system decided to do**. The new-inquiry-lead alert was not enough on its own: it
+only fires for a lead entering the inquiry stage **with no phone**, so a lead who
+arrives *with* one produces no staff notification at all — and those are exactly the
+ones where the funnel actually runs.
 
-**Why not just add a recipient to the new-inquiry-lead alert.** That alert only
-fires for a lead entering `Tenant Inquiry Lead (Do Not Contact)` **with no phone
-number**. A lead who arrives *with* a phone goes straight to the Identity Gate
-and produces no staff notification at all — and those are exactly the ones where
-the funnel actually runs. Watching launch week through that alert would surface
-the minority of leads and hide the interesting ones.
+**Recipients come from `alert_cc_phones`, a NEW key. Emptying it turns the notification
+off** — it is its own master switch.
 
-> **`alert_cc_phones` is a NEW key, and comma-separating an existing one would
-> have broken things.** `rental_application_alert_phone` is shared: Zillow's
-> `Parse & Resolve Application` reads it and feeds **three** Twilio nodes
-> (`Send Existing-Match Alert`, `Send Phone-Needed SMS`, `Send Parse-Failed
-> Alert`), each passing it straight to Twilio as a single `To`. **Twilio rejects
-> a comma-separated `To` (error 21211)**, so putting a list in that cell would
-> silently break the entire Zillow alert path — including the dedup branch that
-> still has never run through n8n's engine. `alert_cc_phones` is read **only** by
-> `Build Inquiry Alert`.
+> **Comma-separating an existing key would have broken things.**
+> `rental_application_alert_phone` is shared: Zillow's `Parse & Resolve Application`
+> feeds it to **three** Twilio nodes as a single `To`, and **Twilio rejects a
+> comma-separated `To` (error 21211)**.
 
-**Emptying `alert_cc_phones` turns the notification off.** It is its own master
-switch — no separate enabled flag.
+**Fan-out, not a second node.** `Send Inquiry Alert` reads `to` from its *immediate*
+input, so `Build Inquiry Alert` returning one item per recipient makes the single
+Twilio node send one SMS each. This is the general answer to "can we text two numbers?"
+anywhere in this system — fan out in the build node; never comma-separate a Twilio `To`.
 
-**Fan-out, not a second node.** `Send Inquiry Alert` reads `to` from its
-*immediate* input, so `Build Inquiry Alert` returning one item per recipient
-makes the single Twilio node send one SMS each. n8n runs a node once per item.
-This is the general answer to "can we text two numbers?" anywhere in this
-system — fan out in the build node; never comma-separate a Twilio `To`.
+**Wiring.** Hangs off **all three** `Row Recorded? (N)` true branches, parallel to
+`Send Now?` / `Gate Needed?` / `Alert Needed?` — so it fires only once the row is
+confirmed recorded, and not on the exhausted-append path (which has its own alert).
+Nothing is inserted in front of an existing node (gotcha 19).
 
-**Wiring.** Hangs off **all three** `Row Recorded? (N)` true branches, parallel
-to the existing `Send Now?` / `Gate Needed?` / `Alert Needed?`. Two consequences,
-both intended: it fires only once the row is **confirmed recorded**, and it does
-**not** fire on the exhausted-append path, which already has its own
-`Send Append-Failure Alert`. Nothing is inserted in front of an existing node
-(gotcha 19).
+> **All three `Row Recorded?` IFs must be wired, or the alert is intermittent.** A row
+> verified on attempt 2 flows through `Row Recorded? (2)`; wiring only the first would
+> skip exactly the rows that hit the retry path — very hard to diagnose from outside.
 
-> **All three `Row Recorded?` IFs must be wired, or the alert is intermittent.**
-> The append-retry chain is unrolled into three explicit attempts; a row verified
-> on attempt 2 flows through `Row Recorded? (2)`. Wiring only the first would
-> make the alert fire for most inquiries and silently skip the ones that hit the
-> retry path — an intermittency that is very hard to diagnose from the outside.
-> `inquiry-alert-verify.mjs` asserts all three.
-
-`Send Inquiry Alert` carries `onError: continueRegularOutput`: observability must
-never break delivery to the actual lead.
+`Send Inquiry Alert` carries `onError: continueRegularOutput`: observability must never
+break delivery to the actual lead.
 
 ```bash
 node scripts/n8n-add-inquiry-alert.mjs [--apply] [--revert --apply]
 node scripts/inquiry-alert-verify.mjs                      # 36 assertions
 ```
-Backup `n8n/BEFORE-inquiry-alert/`. The script also creates `alert_cc_phones`
-(default `+18038047847`, Andrew's own number) if missing, and never overwrites an
-existing value.
-
+Backup `n8n/BEFORE-inquiry-alert/`. The script also creates `alert_cc_phones` (default
+`+18038047847`) if missing, and never overwrites an existing value.
 ### Inquiries tab
 
 `person_id`, `property_key`, `cal_link`, `inquired_at`, `link_sent`,
@@ -363,111 +306,55 @@ Create/repair: `node scripts/inquiries-setup.mjs --apply`.
 
 ### Person-lookup fix — wrong-person misroute (2026-08-05, was launch-blocking)
 
-`FUB - Get Person`'s URL used `{{ $json.events[0].personId }}`. `$json` there is
-`FUB - Get Event`'s output, and FUB's real payload `uri` is path-style
-(`/v1/events/1759`), which returns the event **unwrapped** — no `.events` array. So
-the expression resolved to `undefined`, the request became `/people/undefined`, and
-FUB **did not error**: it silently fell back to the **list** endpoint and returned a
-page of people. `Resolve Inquiry`'s `personPayload.people?.[0] ?? personPayload`
-fallback then took whoever was first.
-
-Confirmed live (execution 12597): an unrelated, more-recently-active person (2637)
-got attached to an inquiry belonging to person 2545. `event_id`/`person_id` stayed
-correct (those come from `ev`), but `person.phones[0].value` — the actual SMS `to` —
-was the wrong person's. **This happens any time some other CRM record is more
-recently active than the inquiring lead**, which is the normal state of a live CRM.
-
-**Fix, two parts:** (1) the URL now reads `personId` explicitly by node name —
-`{{ ($('FUB - Get Event').item.json.events?.[0] ?? $('FUB - Get Event').item.json).personId }}`
-— handling both shapes; (2) `Resolve Inquiry` now **throws** if the response is
-list-shaped (`.people` present) or if the resolved id ≠ the event's `personId`.
-Fail loudly rather than quietly, same as the DoorLoop zero-units check.
-
-**Audited every other FUB person-lookup node** (2026-08-05): the Identity Gate,
-sweep, and both legacy workflows all use `{{ $json.body.uri }}&fields=allFields`
-wired **directly** off their own Webhook node, where `$json` is the live payload for
-that exact invocation. Confirmed clean, no changes needed.
-
-```bash
-node scripts/n8n-fix-inquiry-person-lookup.mjs [--apply] [--revert --apply]
-```
-Backup `n8n/BEFORE-inquiry-person-lookup-fix/`. Verified live 2026-08-05 both
-directions, including deliberately reverting the URL to confirm the fail-loud path
-throws instead of misrouting.
+`FUB - Get Person`'s URL resolved to `/people/undefined`, and FUB **did not error** — it
+fell back to the **list** endpoint, so the SMS went to whoever was most recently active.
+**Fixed:** the URL reads `personId` explicitly by node name, and `Resolve Inquiry`
+**throws** if the response is list-shaped or the id doesn't match. Every other FUB
+person-lookup node was audited and is clean.
+`node scripts/n8n-fix-inquiry-person-lookup.mjs [--apply] [--revert --apply]`, backup
+`n8n/BEFORE-inquiry-person-lookup-fix/`. Post-mortem: `docs/n8n-history.md`, gotcha 17.
 
 ### Append-race fix — verify-and-retry (2026-08-05)
 
-Confirmed live: two inquiry events for the same person ~800ms apart, two different
-properties. Both executions ran `Resolve Inquiry` correctly but only **one row**
-landed — n8n's Sheets `append` is documented safe under concurrency but wasn't
-robust at this sub-second window. Unlike the same accepted race on `Cal Bookings` /
-`Rental Applications`, a lost row here means the lead never gets that property's
-link at all, silently.
+Two inquiry events ~800ms apart produced only **one row**, and a lost row here means the
+lead never gets that property's link at all, silently.
 
-**Verify-and-retry, not locking.** Between `Append Inquiry Row` and the three
-downstream IFs sits a bounded retry chain, unrolled as three explicit attempts
+**Verify-and-retry, not locking.** Between `Append Inquiry Row` and the three downstream
+IFs sits a bounded chain, unrolled as three explicit attempts
 (`Re-read Inquiries (Verify N)` → `Confirm Row Recorded (N)` → `Row Recorded? (N)`)
-rather than a canvas loop — each attempt is its own named node in the log, and
-there's no loop-counter expression to get wrong. The re-read is always fresh.
-`Confirm Row Recorded (N)` checks for this execution's `event_id` **and** that
-`property_key`/`cal_link` match what `Resolve Inquiry` computed.
-
-- verified on attempt 1 or 2 → straight into `Send Now?` / `Gate Needed?` /
-  `Alert Needed?`, unchanged;
-- not yet verified → `Jitter Wait (N)` (randomized 300–1500ms) →
-  `Retry Append Inquiry Row (N+1)` → back into the verify chain;
-- still unverified after 3 → `Build Append-Failure Alert` `console.log`s the
-  failure and `Send Append-Failure Alert` sends one SMS. **Only a verified append
-  continues** — an exhausted execution stops at the alert rather than firing the
-  send/gate side effects on top of an unconfirmed record.
-
-No new Settings key — the alert reuses `unmatched_inquiry_alert_phone`, already
-threaded through `Resolve Inquiry`'s output.
+rather than a canvas loop — each attempt is its own named node in the log, with no
+loop-counter expression to get wrong. Unverified goes through `Jitter Wait (N)`
+(300–1500ms) → `Retry Append Inquiry Row (N+1)`. **Only a verified append continues**;
+after 3 attempts the execution stops at `Send Append-Failure Alert` (reusing
+`unmatched_inquiry_alert_phone`) rather than firing side effects on an unconfirmed
+record.
 
 ```bash
 node scripts/n8n-add-inquiry-append-retry.mjs [--apply] [--revert --apply]
 ```
 Marker `INQUIRY_APPEND_RETRY_MARKER`, backup `n8n/BEFORE-inquiry-append-retry/`.
-Verified live 2026-08-05: two events <1s apart now produce two surviving rows
-(previously reproduced the loss on the first try).
-
+Verified live 2026-08-05.
 ### Settings keys
 
 - `stage_gate_recheck_days` — how recent a `skipped_stage_gate` row must be to be
-  recovered by the sweep (default `7`; `0` disables). See "Stage-gate race recovery".
+  recovered by the sweep (default `7`; `0` disables).
 - `inquiry_flow_start_at` — inquiry events created before this are ignored, so
   turning the flow on never blasts the existing CRM.
 - `unmatched_inquiry_alert_phone` — **still Andrew's personal number.** One SMS the
   first time an inquiry arrives for an address not in Properties.
 - `allowed_stages` — see "FUB stage gating".
 
-### Addresses in Zillow but not in Properties
+### Addresses in Zillow but not in Properties — closed
 
-**This section was wrong about all three addresses, and is now closed.** It used to
-read: *"Live inquiries arrive for addresses with no Properties row: `522 Temple Rd`,
-`296 Blue Haw Dr`, `5464 Crown Ave`."* Corrected in two passes:
+This section used to claim three addresses needed Properties rows. **All three claims
+were wrong**, disproved by reading the `Inquiries` tab (`docs/n8n-history.md`; pre-launch
+item 4 for why none may be added). **There are currently no real unmatched addresses.**
+If one appears it gets `match_status = unmatched`, no link, and one alert SMS.
 
-- `296 Blue Haw Dr` / `5464 Crown Ave` — **2026-08-20.** Both already exist as
-  spelled-out rows, provisioned and DoorLoop-linked, and `normalizeAddress()`
-  strips street suffixes so the abbreviated Zillow forms match them.
-- `522 Temple Rd` — **2026-08-23.** It has **never produced an inquiry at all.**
-  All 65 `Inquiries` rows were dumped by address: zero mention Temple. The only
-  `unmatched` rows are 5 test artifacts from person 2545 (`9999 Nonexistent Test
-  Ln`, `108 Laurels Curv`, `44 Wrongperson Guard Retest Way`) and 7 for
-  `129 Towering Pine Dr`, which has since been added and now matches (3 later rows
-  for it are `matched`). See pre-launch item 4 for why it stays unadded.
-
-**There are currently no real unmatched addresses.** The unmatched-address alert
-has not fired on a genuine live gap. If one appears, it gets
-`match_status = unmatched`, no link, and one alert SMS per address.
-
-> **The lesson, not just the correction.** This list was assembled from
-> plausible-looking addresses rather than from the `Inquiries` tab, and all three
-> entries survived months of review because nobody re-derived them from data.
-> Both the `296`/`5464` claim and the Temple claim were disproved by reading the
-> tab. Re-derive before acting on any "these need rows" list — adding a row is not
-> free, it provisions a cal.com event type and a Google resource.
-
+> **The lesson.** That list was assembled from plausible-looking addresses rather than
+> from data, and survived months of review because nobody re-derived it. Re-derive before
+> acting on any "these need rows" list — adding a row provisions a cal.com event type and
+> a Google resource.
 ### Legacy overlap — needs a decision
 
 Both legacy workflows write `customCalLink` from the mutable Person record.
@@ -475,8 +362,7 @@ Both legacy workflows write `customCalLink` from the mutable Person record.
 inquiry always produces an `eventsCreated` too. `HwXpYAqwbG1zwGls` (peopleUpdated)
 is what actively **caused** the original reported symptom, and is **not**
 test-gated. Nothing reads `customCalLink` any more, so neither can misroute today.
-Left running rather than disabled unilaterally; retiring both is probably right but
-is a live-behaviour change. See pre-launch item 5.
+See pre-launch item 5.
 
 ## Identity Verification Gate
 
@@ -488,17 +374,17 @@ the Inquiry flow calls it on every inquiry from an unverified lead. So
 
 `Check Guards` returns structured `proceed`/`reason` pairs for every block
 condition (`not_test_mode`, `no_phone`, `stage_trash`, `rejected_stage`,
-`stage_not_allowed:<stage>`, `already_sent`, `verification_already_pending`).
-`Should Proceed?` wires only its **true** branch onward — a `proceed: false`
-execution ends cleanly with no Stripe session and no SMS.
+`stage_not_allowed:<stage>`, `already_sent`, `verification_already_pending`,
+`sheets_unavailable`). `Should Proceed?` wires only its **true** branch onward — a
+`proceed: false` execution ends cleanly with no Stripe session and no SMS.
 
 ### Pending-verification guard (2026-08-05)
 
-Confirmed live: test lead 2636 inquired on two properties ~3 min apart, both before
+Confirmed live: a test lead inquired on two properties ~3 min apart, both before
 completing Stripe Identity. Both correctly triggered this gate, but `Check Guards`
 had no awareness of the open session from inquiry 1, so inquiry 2 created a
 **second** Stripe session and sent a **second** near-identical SMS — two `pending`
-rows, only one of which is ever completed; the other sits orphaned forever.
+rows, only one of which is ever completed.
 
 `Check Guards` now also blocks when a non-stale `pending` row exists for this
 lead's `person_id` **or** phone (last 10 digits), returning
@@ -513,141 +399,75 @@ permanently unable to get a fresh SMS later. A `pending` row older than
 than stale — blocking is the safer direction for a guard that exists to stop
 duplicate sends.
 
-Deliberately not touching the Inquiry flow (correctly calling this gate every time)
-or the sweep (its behaviour was confirmed correct in the same test).
-
 ```bash
 node scripts/n8n-add-pending-verification-guard.mjs [--apply] [--revert --apply]
 ```
 Marker `PENDING_VERIFICATION_GUARD_MARKER`, backup
-`n8n/BEFORE-pending-verification-guard/`. Verified live 2026-08-05 against person
-2637: two webhooks ~10s apart → `proceed: true` then
-`verification_already_pending`, confirmed in `runData` and against the sheet.
-Staleness path separately verified by forcing the TTL near zero (restored to `24`
-immediately after).
+`n8n/BEFORE-pending-verification-guard/`. Verified live 2026-08-05: two webhooks
+~10s apart → `proceed: true` then `verification_already_pending`. Staleness path
+separately verified by forcing the TTL near zero.
 
 ### Empty-email bug (2026-08-08, was launch-blocking)
 
-Execution 14816 failed at `Create Stripe Identity Session` with
-`"Invalid email address"`. `Check Guards` built `email: person.emails?.[0]?.value || ""`
-— an empty string, not an omitted key — and the Zod schema
-(`src/lib/validation/identity-schema.ts`) is `z.string().email().optional()`, which
-tolerates a *missing* key but still runs `.email()` against `""` and fails.
-
-**Any real lead with a phone but no email in FUB — plausible here, nothing upstream
-requires one — would silently never receive a verification SMS**, with no graceful
-skip like every other guard, just an opaque execution error nobody was watching.
-
-Fixed n8n-side only (no Vercel deploy): `|| ""` → `|| undefined`, so
-`JSON.stringify` omits the key — matching both the schema's `.optional()` intent and
-`create-session/route.ts`'s own `...(email ? {...} : {})` handling.
-
-```bash
-node scripts/n8n-fix-identity-empty-email.mjs [--apply]
-```
-Backup `n8n/BEFORE-identity-empty-email-fix/`. Verified live 2026-08-08, execution
-14817: person 2652 (no email) → `proceed: true`, real Stripe session
-`vs_1U1xsgBgJfPX83bqhJqIku18`, real Twilio send with `date_sent` populated.
-
-> **Worth doing:** audit how many existing real leads in FUB have no email, since
-> each has been silently stuck at this step since the Gate went live.
-
+`Check Guards` built `email: … || ""` — an empty string, not an omitted key — and
+`z.string().email().optional()` tolerates a *missing* key but still runs `.email()`
+against `""`. **Any real lead with a phone but no email in FUB would silently never
+receive a verification SMS.** Fixed n8n-side only: `|| ""` → `|| undefined`.
+`node scripts/n8n-fix-identity-empty-email.mjs [--apply]`, backup
+`n8n/BEFORE-identity-empty-email-fix/`. **Still worth doing:** audit how many real leads
+have no email, since each was stuck at this step until the fix.
 ### Identity verification reminders — `R3rhuCYEGoBFArBa` (2026-08-25)
 
-One reminder SMS per day, for **4 days**, to any lead who was sent a
-verification SMS and hasn't verified. Client request 2026-08-25. Reminders on
-days **1–4** after the original (day 0), so 5 messages total at most, stopping
-the moment they verify.
+One reminder SMS per day, for **4 days**, to any lead sent a verification SMS who hasn't
+verified — days 1–4 after the original (day 0), stopping the moment they verify.
+**ACTIVATED 2026-08-25** after confirming 0 due on each of the next 14 simulated days.
 
-**Created INACTIVE. Activating is a separate, deliberate step** — run
-`identity-reminders-preview.mjs` first and read the due list.
+> **Each reminder mints a FRESH Stripe session, and it has to.** The hosted URL is
+> **single-use, expires in 48h**, and is never stored, so days 3–4 have no link to
+> resend. Stripe bills only a **completed `VerificationReport`**, so unsubmitted sessions
+> are free.
 
-> **Each reminder mints a FRESH Stripe session, and it has to.** The hosted URL
-> is **single-use and expires in 48h** (`create-session/route.ts`), and is
-> deliberately never stored — so days 3 and 4 have no link to resend. Confirmed
-> with Stripe: billing is triggered by a **completed `VerificationReport`**
-> (*"You will not be billed until the VerificationReport is complete"*), so
-> sessions that are created and never submitted are **free**. Extra sessions
-> cost nothing; only real submissions do.
+> **A new row per reminder — never rotate `session_id` in place.** The Result Handler
+> matches the Stripe webhook by `session_id` alone; if a reminder overwrote the id and the
+> lead completed an **older** session still inside its 48h window, **that lead would
+> verify successfully and receive nothing.**
 
-> **A new row per reminder — never rotate `session_id` in place.** The Result
-> Handler matches the Stripe webhook by `session_id` alone
-> (`rows.find(r => String(r.session_id) === String(body.session_id))`). If a
-> reminder overwrote the id and the lead completed an **older** session still
-> inside its 48h window, the webhook would match no row, `found:false`, and
-> **that lead would verify successfully and receive nothing.** Appending keeps
-> every minted session findable.
+**Why it doesn't reuse the Identity Gate.** `alreadySent` is true if **any** row exists
+for the lead, so every reminder would be refused; making it work would mean bypassing both
+`already_sent` **and** `verification_already_pending` — i.e. disabling the guard that stops
+a real lead getting repeat verification SMS forever. **Do not do this.** Useful
+consequence: because `already_sent` fires *before* the pending check, a lead
+mid-reminder-window can't also be served by an inquiry-driven session, so
+`identity_verification_pending_ttl_hours` did **not** need changing.
 
-**Why it doesn't reuse the Identity Gate.** The obvious design — POST the
-lead's original webhook body back to `phone-added-send-text` — cannot work:
-
-```js
-const alreadySent = identityRows.some(r => String(r.lead_id) === String(person.id));
-if (!isTestMode && alreadySent) return fail("already_sent");
-```
-
-`alreadySent` is true if **any** row exists for the lead, whatever its status,
-so every reminder is refused. Making it work would mean bypassing both
-`already_sent` **and** `verification_already_pending` — i.e. deliberately
-disabling the guard that stops a real lead getting repeat verification SMS
-forever, in the node every lead funnels through. **Do not do this.** The
-reminder workflow carries its own guards and edits nothing existing.
-
-A useful consequence: because `already_sent` fires *before* the pending check,
-a lead mid-reminder-window can't also be served by an inquiry-driven session.
-**`identity_verification_pending_ttl_hours` therefore did NOT need changing.**
-
-**Its guards are deliberately blunter than `Check Guards`.** A reminder is an
-optional nudge, so its guard may only ever *under*-send: it blocks on **any** of
-the three trash tags with no expiry-window arithmetic, on any trash-family
-stage, on a stage outside `allowed_stages`, and on a missing phone. No 90/365-day
-windows, no reapply-reroute — those decide whether to *re-engage* someone, which
-isn't this workflow's job.
+**Its guards are deliberately blunter than `Check Guards`** — a nudge may only ever
+*under*-send: any of the three trash tags with no expiry arithmetic, any trash-family
+stage, any stage outside `allowed_stages`, a missing phone.
 
 | Situation | Behaviour |
 |---|---|
 | Verified (any row) | excluded — they're done |
-| `requires_input` / failed | excluded. **Client decision: pending only** — the failed-SMS already hands off to a human |
+| `requires_input` / failed | excluded. **Client decision: pending only** |
 | < 1 day since first SMS | too soon |
 | > 4 days | window over |
 | Already reminded today | one per day; a 20h floor backs up the day check |
 | 4 reminders sent | capped |
 
-**Send hour and timezone.** The trigger ticks **hourly**; `Find Due Reminders`
-sends only when the current hour in `America/New_York` equals
-`identity_reminder_hour_et` (10). **No workflow in this instance sets a
-timezone** — every `settings` is just `{"executionOrder":"v1"}` — so a cron
-expression would inherit the instance default and drift with DST. Computing the
-ET hour in code is correct regardless of instance config.
+**Send hour and timezone.** The trigger ticks **hourly**; `Find Due Reminders` sends only
+when the ET hour equals `identity_reminder_hour_et` (10). **No workflow in this instance
+sets a timezone**, so a cron expression would inherit the instance default and drift with
+DST — computing the ET hour in code is correct regardless. **Day count fixed 2026-08-30**
+from rolling-24h to ET calendar dates, so a 3pm original nudges at 10am the *next* morning
+(`n8n-fix-identity-reminder-day-calc.mjs`, backup
+`n8n/BEFORE-identity-reminder-day-calc/`).
 
-**Day count fixed 2026-08-30 — it was a rolling 24h count, not a calendar-day
-count.** `daysSince = Math.floor((now - anchorMs) / DAY)` meant a lead whose
-original SMS went out after 10am ET didn't get day 1 until the *second*
-calendar day: an anchor at 3pm is only 19h before the next day's 10am tick
-(`daysSince=0`, "too soon"), so the first reminder waited until 43h had
-elapsed. Client request 2026-08-30: reminders go out at 10am the very next
-calendar day regardless of what time the original fired. Fixed by comparing
-ET calendar dates (anchor's vs today's) instead of raw elapsed milliseconds —
-every other rule (window-over, one-per-day, the 20h floor) is unchanged, they
-just consume a more correct `daysSince`.
+**Loop safety.** Every path rejoins `Loop Back`: a guard rejection, a failed Stripe call
+and a failed Twilio send all continue the batch.
 
-```bash
-node scripts/n8n-fix-identity-reminder-day-calc.mjs [--apply] [--revert --apply]
-```
-Backup `n8n/BEFORE-identity-reminder-day-calc/`. Applied live 2026-08-30;
-`identity-reminders-verify.mjs`'s existing 41 assertions (all built on exact
-24h/48h/etc. offsets, which land on the correct calendar day outside a DST
-transition) still pass unchanged against the patched code.
-
-**Loop safety.** Every path rejoins `Loop Back`, so `SplitInBatches` always
-advances: a guard rejection, a failed Stripe call, and a failed Twilio send all
-continue the batch. One bad lead can never starve the rest — the lesson from the
-Cron Poll's crash loop.
-
-New Settings keys: `identity_reminder_enabled` (master switch),
-`identity_reminder_max` (4), `identity_reminder_hour_et` (10),
-`identity_reminder_sms_template`. New `Identity_Verifications` columns:
-`reminder_number` (0/blank = the original), `reminder_anchor_at`.
+New Settings keys: `identity_reminder_enabled`, `identity_reminder_max` (4),
+`identity_reminder_hour_et` (10), `identity_reminder_sms_template`. New
+`Identity_Verifications` columns: `reminder_number` (0/blank = the original),
+`reminder_anchor_at`.
 
 ```bash
 node scripts/identity-reminders-setup.mjs [--apply]        # columns + settings
@@ -656,157 +476,91 @@ node scripts/identity-reminders-preview.mjs [--force-hour] # who would be texted
 node scripts/identity-reminders-verify.mjs                 # 41 synthetic assertions
 ```
 
-`identity-reminders-verify.mjs` exists because **live data has nothing due** —
-a preview reporting "0 to send" proves the filter can say no, and nothing about
-the day arithmetic, the cap, or the guards. Those are exactly what causes harm
-if wrong. Same reasoning as `doorloop-recon-cases.mjs`.
+The verifier exists because **live data had nothing due** — a preview reporting "0 to
+send" proves the filter can say no, and nothing about the day arithmetic, the cap, or the
+guards.
 
-Preview 2026-08-25, before activation: **0 due**, 7 leads skipped — 4
-`status_verified`, 2 `window_over` (18–19d), 1 `requires_input` (2652). Clean
-start; activating texts nobody. Confirmed by simulating the live
-`Find Due Reminders` code at 10am ET on each of the **next 14 days**: 0 due
-every day. All 7 exclusions are permanent (`verified` never reverses,
-`window_over` only grows, `requires_input` is out of scope), and none can
-acquire a new row because `already_sent` refuses a new session for any lead that
-already has one.
-
-**ACTIVATED 2026-08-25.** First tick verified live, execution **26664**,
-`success`: `Read Settings=52 | Read Identity Verifications=11 |
-Find Due Reminders=1 | Any Due?=0`, `Send Reminder SMS` did not run — correct
-outside the send hour. Note `Read Identity Verifications=11`, not 52×11, which
-is `executeOnce` working (gotcha 4).
-
-> **Activation failed the first time — worth knowing for anything built against
-> this instance.** `POST /workflows/<id>/activate` returned **400 "Missing
-> required credential: googleSheetsOAuth2Api"** on all three Sheets nodes.
-> Attaching the service-account credential is **not sufficient**: the node also
-> needs `authentication: "serviceAccount"` in its *parameters*, or n8n defaults
-> to OAuth2 and refuses to publish. This estate mixes both — `Read Settings` in
-> the Identity Gate uses OAuth2 while `Read Identity Verifications` right beside
-> it uses the service account — so copying the wrong neighbour is easy. The
-> builder script now sets it on all three.
-
+> **Activation failed the first time — worth knowing for anything built against this
+> instance.** `POST /workflows/<id>/activate` returned **400 "Missing required credential:
+> googleSheetsOAuth2Api"**. Attaching the service-account credential is **not
+> sufficient**: the node also needs `authentication: "serviceAccount"` in its
+> *parameters*, or n8n defaults to OAuth2 and refuses to publish. This estate mixes both,
+> so copying the wrong neighbour is easy.
 ### `Log to Identity Verifications` fails AFTER the SMS — the record can be lost
 
-**Observed live 2026-08-27, execution 27851 (Gabriel James, person 2737).** The
-node order is: create session → build SMS → **send SMS** → log the row. A Sheets
-quota failure at that last node therefore means **"message delivered, no
-record"**. It has `retryOnFail` 5 × 15s but **no `onError`**, so it retried for
-75s, failed, and errored the execution *after* the lead had already been texted.
+Node order is create session → build SMS → **send SMS** → log the row, so a Sheets
+failure at the last node means **"message delivered, no record"** — silent and total,
+because `Find Verification Row` matches the Stripe webhook by `session_id` **alone**: the
+lead **verifies successfully and nothing happens**, is invisible to the reminder
+workflow, and `already_sent` won't block a duplicate later. Observed live 2026-08-27
+(Gabriel James, 2737), repaired by hand (`n8n/BEFORE-2026-08-27-repairs/`).
 
-The consequence is silent and total: `Find Verification Row` in the Result
-Handler matches the Stripe webhook by `session_id` **alone**, so a lead with no
-row **verifies successfully and nothing happens**. They are also invisible to the
-reminder workflow, and `already_sent` will not block a duplicate later.
-
-Repaired by appending the missing row from the execution's own
-`Build Verification SMS` output (`scripts/_oneoff-2026-08-27-repairs.mjs`,
-journal in `n8n/BEFORE-2026-08-27-repairs/`).
-
-> **Worth fixing properly if it recurs.** Options: give the node
-> `onError: continueRegularOutput` plus an alert so the loss is at least
-> visible; or write the row *before* the send, so a failure costs a message
-> rather than a record. Not changed unilaterally — reordering the send is a
-> behaviour change to the most critical path in the system.
+> **Worth fixing properly if it recurs.** Either `onError: continueRegularOutput` plus an
+> alert, or write the row *before* the send. Not changed unilaterally — reordering the
+> send is a behaviour change to the most critical path in the system. The 2026-08-31
+> fan-out fix removed the usual *cause*.
 
 ### Verification is not coupled to deliverability — leads can be asked to verify for nothing
 
-The Identity Gate fires on "gated stage + phone", but the cal link is only
-delivered if a **deliverable inquiry row** exists (`match_status = matched`, a
-non-empty `cal_link`, and `link_sent = false`). Nothing couples those two
-conditions, so a lead can be told *"verify your ID so we can schedule your
-showing"*, complete it, and receive silence.
+The Identity Gate fires on "gated stage + phone", but the cal link is only delivered if
+a **deliverable inquiry row** exists (`match_status = matched`, non-empty `cal_link`,
+`link_sent = false`). Nothing couples them, so a lead can be told *"verify your ID so we
+can schedule your showing"*, complete it, and receive silence.
 
-Three leads reached that state in the first days after launch, by three
-different routes:
+Known routes in: an inquiry address with no Properties row; a pre-launch
+`skipped_test_gate` row the sweep never reads; a verification row lost to Sheets quota;
+and — until `APPLICATION_INQUIRY_ROW_MARKER` — arriving by rental application. Five real
+leads have hit it; case detail in `docs/n8n-history.md`.
 
-| Lead | Why undeliverable |
-|---|---|
-| Erick Silva (2738) | inquiry address had no Properties row → `unmatched`, no `cal_link` |
-| Detric Yoder (2721) | row is `skipped_test_gate` from before go-live; the sweep only reads `false` |
-| Gabriel James (2737) | verification row lost to Sheets quota (above) |
-
-Adding the missing property does **not** repair the first case on its own: the
-sweep reads `cal_link` from the **Inquiries** row, not from Properties, so an
-existing unmatched row stays unmatched and must be backfilled
-(`property_key`, `cal_link`, `match_status`) with `link_sent` left `FALSE`.
+Adding the missing property does **not** repair the unmatched case on its own: the sweep
+reads `cal_link` from the **Inquiries** row, not Properties, so an existing unmatched row
+must be backfilled (`property_key`, `cal_link`, `match_status`) with `link_sent` left
+`FALSE`.
 
 ### Stripe went LIVE 2026-08-26 — every earlier link was test-mode
 
-The Vercel project carried `sk_test_…` through launch, so **every verification
-link sent before 2026-08-26 ~13:00Z was a Stripe TEST-mode link**, and the
-webhook secret was the test endpoint's. Confirmed, not inferred: retrieving
-those sessions with the test key returns HTTP 200 and `livemode: false`.
+The Vercel project carried `sk_test_…` through launch, so **every verification link sent
+before 2026-08-26 ~13:00Z was a Stripe TEST-mode link**. Six real leads held one; none
+had submitted anything. They could not be re-issued through the gate (`already_sent`), so
+**the reminder workflow is the re-issue mechanism** — it mints a fresh live session and
+records the new `session_id`.
 
-Six real leads were holding one — 2711, 2715, 2719, 2727, 2728, 2729. **None had
-submitted anything** (`requires_input` is Stripe's *initial* state, not a
-failure), so nobody wasted a real attempt.
+> **How to tell test from live, since the ids look identical.** The hosted `url` contains
+> `/start/live_…` vs `/start/test_…`; the object has a `livemode` boolean; and retrieving
+> a live session with a test key returns **404** — the strongest signal, because it
+> proves a key swap actually took effect in Vercel rather than just being saved there.
 
-Two things made those links dead: test mode, and a webhook that would now be
-signed with a secret the live endpoint does not share — so completing one would
-verify the lead and fire **nothing**, with no cal link ever following.
-
-**They could not be re-issued through the gate**: `already_sent` refuses a new
-session for any lead that already has a row. **The reminder workflow is the
-re-issue mechanism** — it mints a fresh (now live) session, bypasses
-`already_sent` by design, and records the new `session_id` so the Result Handler
-can match. Client decision 2026-08-26: let the normal 10am ET run pick them up
-rather than forcing it early.
-
-> **How to tell test from live, since the object ids look identical.** A
-> VerificationSession id is `vs_…` in both modes. Three reliable checks:
-> the hosted `url` contains `/start/live_…` vs `/start/test_…`; the retrieved
-> object has a `livemode` boolean; and retrieving a live session with a test key
-> returns **404**. The 404 is the strongest signal — it is the one that proves a
-> key swap actually took effect in Vercel rather than just being saved there.
-
-> **Still unverified: the webhook signing secret.** A secret key can be proved
-> by minting a session (free — Stripe bills only a completed
-> `VerificationReport`). A *signing* secret only reveals itself on a real
-> inbound event. If it is wrong, a lead verifies successfully and nothing
-> happens — the same silent-failure class as the Sheets-quota bail. Confirm in
-> Stripe Dashboard → **live mode** → Developers → Webhooks that the endpoint
-> exists (live and test endpoints are separate objects) and that its signing
-> secret matches `STRIPE_WEBHOOK_SECRET` in Vercel, then watch the first real
-> verification end to end.
-
+> **Still unverified: the webhook signing secret.** A secret key can be proved by minting
+> a session (free); a *signing* secret only reveals itself on a real inbound event, and if
+> it is wrong a lead verifies successfully and nothing happens. Confirm in Stripe
+> Dashboard → **live mode** → Developers → Webhooks that the endpoint exists (live and
+> test endpoints are separate objects) and that its secret matches
+> `STRIPE_WEBHOOK_SECRET` in Vercel.
 ### Dedicated test contact for Stripe outcomes
 
-**Test StripeVerify**, FUB person **2652** — for testing verified /
-`requires_input` / `canceled` without disturbing Test Test9's history. Stage
-`Tenant Still Looking For Rental` (inside `allowed_stages` in both the testing and
-production values, so it keeps working after launch). Adding a phone is what fires
-`peopleUpdated` and starts a run, so the phone add is the "start this test now"
-action.
+**Test StripeVerify**, FUB person **2652** — for testing verified / `requires_input` /
+`canceled` without disturbing Test Test9's history. Stage `Tenant Still Looking For
+Rental`, inside `allowed_stages` in both values, so it keeps working after launch.
+Adding a phone is what fires `peopleUpdated` and starts a run; to reuse it, remove the
+phone and re-add it. A person who has reached `verified` will keep hitting `already_sent`
+regardless of phone changes, so **sequence the failed/canceled runs before the verified
+one**, or use a fresh contact.
 
-**Reusing it for a different outcome:** once a session resolves, remove the phone
-and re-add it for a fresh `peopleUpdated`. A person who has reached `verified` will
-keep hitting `already_sent` on any later run regardless of phone changes — that
-check has no "downgrade" path — so **sequence the failed/canceled runs before the
-verified one**, or use a fresh contact.
-
-> Every test contact in this project reuses Andrew's one real phone. The pending
-> guard matches on phone, so a stale `pending` row from a *different* test contact
-> can block a new run (seen 2026-08-07, execution 14812, by under a minute). Not a
-> defect — that's the guard working.
-
+> Every test contact reuses Andrew's one real phone, and the pending guard matches on
+> phone — so a stale `pending` row from a *different* test contact can block a new run.
+> Not a defect; that's the guard working.
 ### New inquiry-lead alert — "this lead needs a phone number" (2026-08-08)
 
 Texts `rental_application_alert_phone` when a person **enters**
-`Tenant Inquiry Lead (Do Not Contact)` ("Tenant Initial Inquiry") **with no phone
-on file**. Same job as the Zillow flow's `Send Phone-Needed SMS` — a human must find
-the number before anything else can act — extended to leads arriving by any route.
+`Tenant Inquiry Lead (Do Not Contact)` **with no phone on file**. Same job as the Zillow
+flow's `Send Phone-Needed SMS`, extended to leads arriving by any route.
 
-**Why it lives here rather than its own workflow:** (1) both `peopleUpdated`
-webhook slots are full, so a standalone workflow can't subscribe without retiring
-the legacy one; (2) **FUB's payload carries no previous stage**, so stage *entry* is
-undetectable from the webhook alone — the only record of "what stage were they in
-before" is `customTrashGateLastStage`, the cache the trash-tag watcher already
-maintains here; (3) this workflow already fetches the person with `fields=allFields`
-and already holds the Twilio credential.
-
-Coverage confirmed: real Zillow lead person **2655** (created 17:10:57Z, no phone)
-triggered execution **15290** at 17:10:57.974Z — under a second after creation.
+**Why it lives here rather than its own workflow:** (1) both `peopleUpdated` webhook
+slots are full; (2) **FUB's payload carries no previous stage**, so stage *entry* is
+undetectable from the webhook alone — the only record of the prior stage is
+`customTrashGateLastStage`, the cache the trash-tag watcher already maintains here;
+(3) this workflow already fetches the person with `fields=allFields` and holds the
+Twilio credential.
 
 | Situation | Behaviour |
 |---|---|
@@ -817,45 +571,36 @@ triggered execution **15290** at 17:10:57.974Z — under a second after creation
 
 > **The third row is load-bearing.** 14 of the 16 people in this stage have
 > `customTrashGateLastStage = null` purely because the watcher shipped 2026-08-07.
-> Without the created-at window, the first `peopleUpdated` on each would fire a
-> bogus "new lead" text. Same go-forward-only discipline as `inquiry_flow_start_at`.
+> Without the created-at window, the first `peopleUpdated` on each would fire a bogus
+> "new lead" text. Same go-forward-only discipline as `inquiry_flow_start_at`.
 
 **No phone is the point** — a lead who has one needs no human action (the Gate picks
-them up automatically), so alerting would be noise. Client decisions 2026-08-08:
-inquiry stage only, reuse `rental_application_alert_phone`, and **not test-gated**.
+them up automatically). Client decisions 2026-08-08: inquiry stage only, reuse
+`rental_application_alert_phone`, and **not test-gated**.
 
-**Ungated is deliberate — the only send in the system that isn't.** It goes to
-staff, never a lead, so it cannot misfire at a customer. Consequences:
-`launch-audit.mjs`'s gate count doesn't cover it (its "16" is still correct — this
-isn't one of them), and it fires on **real** people while everything else is gated.
+**Ungated is deliberate — the only send in the system that isn't.** It goes to staff,
+never a lead. So `launch-audit.mjs`'s gate count doesn't cover it (its "16" is still
+correct), and it fires on **real** people while everything else is gated.
 
 **Wiring:** `Trash Transition Watcher` → `New Inquiry Lead?` (IF) →
 `Read Settings (New Lead Alert)` → `Build New-Lead Alert` → `Send New-Lead Alert`,
-hanging off the watcher **in parallel** with the existing `Watcher Needs Write?` —
-same shape as `Tag Cleanup Needed?` off `Check Guards`.
+hanging off the watcher **in parallel** with the existing `Watcher Needs Write?`.
 
-> **Gotcha 19, not theoretical here.** Both `Watcher Needs Write?`
-> (`$json.needs_write`) and `FUB - Update Person (Watcher)` (`$json.person_id` /
-> `$json.update_body`) read their **immediate** input. Anything spliced *between*
-> the watcher and them would feed the wrong object and silently break the trash
-> gate. Adding keys to the watcher's output is safe; inserting a node is not. The
-> verifier asserts the watcher is still the *only* node feeding
-> `Watcher Needs Write?`.
+> **Gotcha 19, not theoretical here.** Both `Watcher Needs Write?` and
+> `FUB - Update Person (Watcher)` read their **immediate** input, so anything spliced
+> between the watcher and them would feed the wrong object and silently break the trash
+> gate. Adding keys to the watcher's output is safe; inserting a node is not.
 
-The flag is emitted on **all three** watcher return paths (`out_of_scope`,
-`no_change`, `needs_write`) because `New Inquiry Lead?` is `typeValidation: strict`,
-which can throw on `undefined`. `Read Settings (New Lead Alert)` and
-`Send New-Lead Alert` both carry `onError: continueRegularOutput` (bookkeeping must
-never abort the workflow that sends verification SMS). `Build New-Lead Alert` reads
-Settings by **named-node** reference and returns `[]` — logging loudly — rather than
-sending if the phone keys are missing; sending with an empty `to` is Twilio 21604.
+The flag is emitted on **all three** watcher return paths because `New Inquiry Lead?` is
+`typeValidation: strict`, which can throw on `undefined`. `Read Settings (New Lead
+Alert)` and `Send New-Lead Alert` both carry `onError: continueRegularOutput`.
+`Build New-Lead Alert` reads Settings by **named-node** reference and returns `[]` —
+logging loudly — rather than sending with an empty `to` (Twilio 21604).
 
-**Known limits:** a duplicate is possible but bounded (if the watcher's PUT fails,
-the cache stays empty and a second event inside 60 min alerts again — accepted, vs
-losing the alert entirely if the cache write were a precondition). Coverage is
-`peopleUpdated` only. Someone in literal `Trash` is invisible to the `?id=` lookup
-(gotcha 18), so a move out of Trash is seen only once visible — which is when it
-happens. When it fires it adds one extra Settings read to that execution.
+**Known limits:** a duplicate is possible but bounded (if the watcher's PUT fails, the
+cache stays empty and a second event inside 60 min alerts again — accepted, vs losing
+the alert entirely if the cache write were a precondition). Coverage is `peopleUpdated`
+only, and someone in literal `Trash` is invisible to the `?id=` lookup (gotcha 18).
 
 ```bash
 node scripts/n8n-add-new-inquiry-lead-alert.mjs [--apply] [--revert --apply]
@@ -863,179 +608,97 @@ node scripts/n8n-add-new-inquiry-lead-alert.mjs --emit-js <dir>   # dump jsCode
 node scripts/new-inquiry-lead-alert-verify.mjs [--js <dir>]       # 47 assertions
 ```
 Marker `NEW_INQUIRY_LEAD_ALERT_MARKER`, backup `n8n/BEFORE-new-inquiry-lead-alert/`.
-`--emit-js` + `--js` lets the patch be unit-tested **before** it's pushed; the
-default verifier mode reads the live deployed code and also checks the
-`connections` graph and onError/retry config. **Because this edits a node the trash
-gate shares, `trash-tag-gate-verify.mjs` is the regression check** — still 323
-assertions passing.
-
-Verified live 2026-08-08, all three cases: **15325** person 2656 (no phone) moved in
-→ `notify_new_inquiry_lead: true`, real Twilio send `SMdac3c523681be3c75cbf9d9183598b8f`,
-`error_code: null`; **15326** same person re-fired → `false`; **15327** person 2650
-(created a day earlier, cache empty, already in the stage) → `false`, the backlog
-regression. 15326/15327 both ended in execution *error*, but at
-`Read Identity Verifications` on the pre-existing Sheets quota burst (two FUB PUTs
-~0.5s apart) — neither ran the new branch at all.
+`--emit-js` + `--js` lets the patch be unit-tested **before** it's pushed. **Because
+this edits a node the trash gate shares, `trash-tag-gate-verify.mjs` is the regression
+check.** Verified live 2026-08-08 across all three cases.
 
 **No duplicate with the Zillow flow — verified, and do not "fix" it by removing
-either.** Scanning 750 Identity Gate executions back to 2026-08-06: persons 2649,
-2650 (both created by the Zillow workflow's `FUB - Create Person`) and 2656 (created
-by API) have **zero** executions at creation time. **A person created via the FUB
-API does not fire `peopleUpdated`** — only `peopleCreated`, which doesn't route
-here. FUB's *own* Zillow lead-flow creation does fire it (person 2655). So the two
-alerts cover disjoint populations, and removing the Zillow one would leave rental
-applications with **no alert at all**. They also signal different things: a
-completed application (late funnel, carries the review link) vs. entering the
-initial inquiry stage.
-
-Test artifacts left in place per convention: FUB person **2656**; person **2650**'s
-`background` holds a `touch <timestamp>` string.
-
-## Zillow Rental Application Flow
-
-Separate source from the inquiry flow. Zillow Rental Manager emails
-`contact@rentingfreedom.com` directly (not via `convo.zillow.com`, which the
-existing webhooks already cover) when someone completes an application:
-
-```
-From: Zillow Rentals <no-reply@comet.zillow.com>
-Subject: You have a new rental application for 5464 Crown Ave!
-Body: "Great news! <Applicant Name> has completed their rental application for
-       <address>, including their credit and background check..."
-```
-
-The notification carries **no phone or email** for the applicant. Andrew's ask:
-create the FUB person, reference the address, and text whoever finds the phone
-number. Once someone adds that phone, the **existing** Identity Gate does the rest —
-no new wiring, because `peopleUpdated` already fires on every phone add.
-
+either.** **A person created via the FUB API does not fire `peopleUpdated`** — only
+`peopleCreated`, which doesn't route here — while FUB's *own* Zillow lead-flow creation
+does. The two alerts cover disjoint populations, and removing the Zillow one would leave
+rental applications with **no alert at all**.
 ### Workflow — `X1lih7X05rpnTPmb`
 
 1. **Gmail Trigger** polls for `from:no-reply@comet.zillow.com subject:"new rental
    application"`. Credential "Gmail account" (`8F2JkQuOKIKFO18Z`) — a dedicated
    `gmailOAuth2` credential; the pre-existing "Google Workspace Auth" is a
-   different n8n credential type and **cannot** be used by a Gmail node regardless
-   of its underlying scopes.
+   different n8n credential type and **cannot** be used by a Gmail node.
 2. **Parse & Resolve Application** parses applicant name + address, matches against
    Properties (context only — doesn't block creation), and checks
    `Rental Applications` for the Gmail message id (idempotency). A real email that
    fails to parse is flagged and alerted, not dropped.
 3. **Test gate**: `testGateOpen = isTestLead`, computed from the *parsed applicant
-   name* (there's no FUB person yet). `Should Process?` requires
-   `test_gate_open = true`, so nothing past it runs for a real applicant. A real
-   applicant is still **recorded** via `Test Gate Closed?` →
-   `Append Test-Gate-Skipped Row` (`fub_stage = skipped_test_gate`, no `person_id`).
-   Lift it with `n8n-lift-test-gates.mjs`, **not** a hand-edit — this workflow is
-   already one of the six that script handles.
+   name* (there's no FUB person yet). A real applicant is still **recorded** via
+   `Test Gate Closed?` → `Append Test-Gate-Skipped Row`. Lift it with
+   `n8n-lift-test-gates.mjs`, **not** a hand-edit.
 4. **FUB - Search Existing Person**: `GET /v1/people?name=<applicant>` — dedup guard
-   added after a live run matched "William Evans", who already existed with an
-   extensive history. The name search is soft, so it can miss (→ create new, no
-   worse than before) or over-match (→ alert a human instead of creating); it never
-   silently overwrites the existing person.
+   added after a live run matched "William Evans", who already existed. The name
+   search is soft: it can miss (→ create new) or over-match (→ alert a human); it
+   never silently overwrites the existing person.
 5. **Match found** → `FUB - Add Note To Existing` + `Send Existing-Match Alert` +
    `Append Existing-Match Row` (`existing_person_match = TRUE`).
-6. **No match** → `FUB - Create Person` (`source`/`firstName`/`lastName`/`stage`
-   from `rental_application_stage`) → `FUB - Add Note` (address, match status,
+6. **No match** → `FUB - Create Person` → `FUB - Add Note` (address, match status,
    Zillow review link) → `Append Rental Application Row` + `Send Phone-Needed SMS`.
 7. **Parse failure** → `Send Parse-Failed Alert` + `Append Parse-Failed Row`. No FUB
    person created.
 
 ### An application now records an Inquiries row — `APPLICATION_INQUIRY_ROW_MARKER` (2026-08-31)
 
-**A rental application used to create no `Inquiries` row, so an applicant could
-verify their identity and receive nothing.** The Identity Gate fires on "gated
-stage + phone", but the cal link is only ever delivered by the sweep, which
-serves `Inquiries` rows that are `matched`, carry a `cal_link`, and are
-`link_sent = false`. Nothing coupled the two. This is the
-"verification is not coupled to deliverability" class, and it cost two real
-leads a hand repair — Cassandra Ferra (2748, 08-30) and Quantez Guest (2759,
-08-31), both for 121 Rockingham Way.
+**A rental application used to create no `Inquiries` row, so an applicant could verify
+their identity and receive nothing** — the cal link is only ever delivered by the sweep,
+which serves rows that are `matched`, carry a `cal_link`, and are `link_sent = false`.
+This cost two real leads a hand repair (Cassandra Ferra 2748, Quantez Guest 2759).
 
 ```
 FUB - Add Note ─────────────┐
                             ├─> Build Application Inquiry (Pre)      [runOnceForEachItem]
-FUB - Add Note To Existing ─┘              |
-                            Read Inquiries (App Dedup)               [executeOnce]
-                                           |
-                            Decide Application Inquiry Rows          [runOnceForAllItems]
-                                           |
-                            Append Application Inquiry Row
+FUB - Add Note To Existing ─┘   -> Read Inquiries (App Dedup)        [executeOnce]
+                                -> Decide Application Inquiry Rows   [runOnceForAllItems]
+                                -> Append Application Inquiry Row
 ```
 
-**Purely additive: 4 new nodes, 2 new edges, and NO edit to any existing
-`jsCode`.** `Parse & Resolve Application` already emits `property_key`,
-`match_status`, `message_id`, `received_at` and `property_address`. The only
-missing field was `cal_link` — and rather than patch the most critical and
-most-bugged node in this workflow, the new build node resolves it itself from
-`$items("Read Properties")`, which has always run by that point.
+**Purely additive: 4 new nodes, 2 new edges, NO edit to any existing `jsCode`.** The only
+field `Parse & Resolve Application` didn't already emit was `cal_link` — and rather than
+patch the most-bugged node in this workflow, the new build node resolves it from
+`$items("Read Properties")`.
 
-**Both note nodes must be wired.** The existing-match branch is Omisha Burns'
-case and has the identical gap; wiring only the new-person branch would work
-for most applicants and silently skip the rest. Hanging off the *note* nodes
-rather than earlier also means the row is only created once the FUB person
-provably exists, and the trashed-existing path (`Existing Person Trashed?` →
-`Append Trash-Skipped Row`) never reaches a note node, so a trashed person is
-correctly excluded with no extra check.
-
-Nothing is inserted in front of an existing node (gotcha 19) — both new edges
-are additional outputs on connectors that already fanned out to two siblings.
+**Both note nodes must be wired.** The existing-match branch has the identical gap;
+wiring only the new-person branch would work for most applicants and silently skip the
+rest. Hanging off the *note* nodes also means the row is created only once the FUB person
+provably exists, and the trashed-existing path never reaches a note node, so a trashed
+person is excluded with no extra check.
 
 > **Item counts, because a polling trigger will eventually send two (gotcha 21).**
-> `Build Application Inquiry (Pre)` is `runOnceForEachItem` and resolves its
-> source with `$('Parse & Resolve Application').item` — the same paired-item
-> idiom `Append Rental Application Row` already uses — so if the still-unobserved
-> multi-email-per-poll case ever fires, each application pairs with its own
-> parsed data instead of collapsing onto the first (gotcha 11).
-> `Read Inquiries (App Dedup)` carries `executeOnce`, so it stays **one** Sheets
-> request however many applications arrive — deliberately not repeating the
-> fan-out defect that caused this incident in the first place.
+> `Build Application Inquiry (Pre)` is `runOnceForEachItem` and pairs via
+> `$('Parse & Resolve Application').item` (gotcha 11); `Read Inquiries (App Dedup)` carries
+> `executeOnce` so it stays **one** Sheets request however many arrive.
 
-**Two dedup rules, both in `Decide Application Inquiry Rows`:** an existing row
-with the same `event_id` (`application-<message_id>`, so a Gmail redelivery is
-idempotent), and an existing row for the same `person_id` **and**
-`property_key` — a lead who inquired on a property *and* applied for it already
-has a row the sweep will serve, and a second one would text them the same link
-twice.
+**Two dedup rules:** same `event_id` (`application-<message_id>`, so a Gmail redelivery is
+idempotent), and an existing row for the same `person_id` **and** `property_key`.
 
-> **It fails CLOSED.** `Read Inquiries (App Dedup)` carries
-> `onError: continueRegularOutput`, so a Sheets failure arrives as an item
-> holding `error`. Decide treats that as "cannot prove this is not a duplicate"
-> and appends **nothing**, logging loudly. Unknown must never become "fire it" —
-> same direction as the trash-date and `stage_gate_recheck_days` rules. The cost
-> is a missed row (repairable by hand, and Nicole's alert still goes out); the
-> alternative is texting a customer the same cal link twice.
+> **It fails CLOSED.** A Sheets failure arrives as an item holding `error`, and Decide
+> treats that as "cannot prove this is not a duplicate" and appends **nothing**. The cost
+> is a missed row (repairable by hand, and Nicole's alert still goes out); the alternative
+> is texting a customer the same cal link twice.
 
-Both new Sheets nodes also carry `onError: continueRegularOutput`, so this
-branch can never abort the execution and cost the applicant the alert to
-Nicole — which is the only mechanism that moves an applicant forward.
-
-**Availability is deliberately NOT checked.** The sweep has never checked it
-(see Cheyla Zinck under "Verification is not coupled to deliverability"), and
-inventing that policy in this one place would make application-sourced rows
-behave unlike inquiry-sourced ones. The property's status is recorded in the
-execution log only.
+Both new Sheets nodes carry `onError: continueRegularOutput`, so this branch can never
+abort the execution and cost the applicant the alert to Nicole. **Availability is
+deliberately NOT checked** — the sweep has never checked it, and inventing that policy
+here would make application-sourced rows behave unlike inquiry-sourced ones.
 
 ```bash
-node scripts/n8n-add-application-inquiry-row.mjs [--apply] [--revert --apply]
-node scripts/n8n-add-application-inquiry-row.mjs --emit-js <dir>
+node scripts/n8n-add-application-inquiry-row.mjs [--apply] [--revert --apply] [--emit-js <dir>]
 node scripts/application-inquiry-row-verify.mjs [--js <dir>]   # 64 assertions
 ```
-Backup `n8n/BEFORE-application-inquiry-row/`. `--emit-js` + `--js` lets the
-patch be unit-tested **before** it is pushed (39 behavioural assertions); the
-default mode reads the live deployed code and also asserts the `connections`
-graph, the onError/executeOnce/retry config, that the append carries an explicit
-`columns.schema` (gotcha 13), that neither new node sits on the Project-2
-credential, and that `Parse & Resolve Application` is still unmarked.
+Backup `n8n/BEFORE-application-inquiry-row/`. The default mode reads the live deployed
+code and also asserts the `connections` graph, the onError/executeOnce config, an explicit
+`columns.schema` on the append (gotcha 13), and that neither new node sits on the Project-2
+credential. **NOT yet live-verified** — a Gmail Trigger can't be fired via the API, so
+**the next real application is the live test** (expect an `Inquiries` row alongside the
+`Rental Applications` row, `link_sent = FALSE`).
 
-**NOT yet live-verified.** n8n's public API cannot fire a Gmail Trigger
-(`POST /workflows/:id/run` → 405), so **the next real Zillow application is the
-live test.** Expect a new `Inquiries` row alongside the `Rental Applications`
-row, `link_sent = FALSE`, `source = Zillow Rental Application`.
-
-> `application-alert-cc-verify.mjs` asserts the **exact** sibling set on both
-> note connectors, so it was updated in the same change to expect the third
-> sibling. If you add a fourth, update it there too.
-
+> `application-alert-cc-verify.mjs` asserts the **exact** sibling set on both note
+> connectors. If you add a fourth, update it there too.
 ### Rental Applications tab
 
 `message_id` (idempotency key), `received_at`, `applicant_name`,
@@ -1046,52 +709,27 @@ Create/repair: `node scripts/rental-applications-setup.mjs --apply`.
 
 ### Settings keys
 
-- `rental_application_stage` — default `Tenant Inquiry Lead (Do Not Contact)`
-  (already inside `allowed_stages`).
+- `rental_application_stage` — default `Tenant Inquiry Lead (Do Not Contact)`.
 - `rental_application_alert_phone` — **still Andrew's personal number.** Also drives
-  the new inquiry-lead alert as of 2026-08-08.
+  the new inquiry-lead alert.
 
 ### Status
 
-**`active: true`, gate still closed** (2026-08-07). Activated deliberately in that
-order: with the gate closed, real applicants are recorded (`skipped_test_gate`) but
-never reach FUB writes or SMS — including the still-unexercised dedup branch. This
-is the reverse of the lift script's suggested order, and is safe only because the
-gate blocks everything past `Should Process?`. **Exercise the dedup branch live
-before lifting this gate.**
+**`active: true`, gate still closed** (2026-08-07). Activated in that order
+deliberately: with the gate closed, real applicants are recorded
+(`skipped_test_gate`) but never reach FUB writes or SMS. This is the reverse of the
+lift script's suggested order, and is safe only because the gate blocks everything
+past `Should Process?`.
 
-### 2026-08-07 — real n8n execution, two launch-blocking parsing bugs
+### Parsing bugs found by the first real n8n execution (2026-08-07)
 
-n8n's public API cannot fire this workflow's Gmail Trigger on demand
-(`POST /workflows/:id/run` → `405`), so this needed browser access to the editor.
-Running it through n8n's own engine surfaced two bugs invisible to every prior
-verification pass, because those passes fed the code synthetic input shaped like
-the code's own assumptions rather than the Gmail Trigger's real output.
-
-**Bug 1 — subject field casing.** The code read `email.subject`. Three real
-"Fetch Test Event" executions show the real field is `Subject` — header-derived
-fields (`From`/`To`/`Subject`) keep their email-header casing. So `rawSubject` was
-`""`, the `/new rental application/i` check failed, and the item got
-`skip: true, reason: "not_a_rental_application_email"`. Neither downstream IF
-matches that reason, so **every real inbound Zillow application email would have
-been silently dropped** — no person, no SMS, no row. Confirmed live (exec 14687).
-Fix: `rawSubject = email.Subject || email.subject`.
-
-**Bug 2 — applicant-name regex matched boilerplate.** The real trigger output has
-**no `textPlain`** — the only body text is Gmail's `snippet`, e.g. *"<Name>
-completed an application for <address>. Brand logo Application received Hi Renting,
-Great news! <Name> has completed their rental application for <address>, including
-their"*. The primary regex was non-greedy but **unanchored**, so it matched from the
-earliest capital letter that let the whole pattern succeed — "Brand", not the name.
-Confirmed against the real captured William Evans snippet: it extracted
-`"Brand logo Application received Hi Renting, Great news! William Evans"`.
-Consequence: **garbage firstName written to FUB** (`"Brand"`), and since the test
-gate checks `firstName === "Test"`, a genuine `"Test ..."` applicant would **fail
-the gate** (exec 14688). The code already had a correctly-anchored second regex but
-only ran it when the first matched *nothing* — never when it matched *wrong*. Fix:
-try the anchored pattern first, fall back to the original for the documented clean
-two-line format (verified the anchored one does not match that format, so the
-ordering is safe both ways).
+Two launch-blocking bugs, invisible to every prior verification pass because those passes
+fed the code synthetic input shaped like the code's own assumptions rather than the Gmail
+Trigger's real output: `email.subject` vs the real `Subject` (**every real inbound
+application email would have been silently dropped**), and an unanchored applicant-name
+regex that matched Gmail `snippet` boilerplate (garbage `firstName` into FUB, and a
+genuine `"Test ..."` applicant would **fail the test gate**). Full post-mortem in
+`docs/n8n-history.md`.
 
 ```bash
 node scripts/n8n-fix-zillow-subject-case.mjs [--apply] [--revert --apply]
@@ -1099,66 +737,32 @@ node scripts/n8n-fix-zillow-applicant-name-parse.mjs [--apply] [--revert --apply
 ```
 Backups `n8n/BEFORE-zillow-subject-fix/`, `n8n/BEFORE-zillow-applicant-name-fix/`.
 
-> **Process gotcha, worth knowing.** The first `--apply` was silently clobbered: the
-> n8n editor tab was open from before the fix, and pinning test data on
-> `Gmail Trigger` made the editor autosave the **entire workflow** from its stale
-> in-memory copy, overwriting the server-side fix. The same autosave also added
-> `"binaryMode": "separate"` to `settings` — a key outside the PUT whitelist — which
-> then made the next API PUT fail `400 settings must NOT have additional
-> properties`. **If the n8n editor tab is open across an API-based fix, reload it
-> before touching anything.** Both fix scripts now filter `settings` on PUT; apply
-> the same filter to any script that builds its own PUT body.
-
-**Full successful run, exec 14696** (pinned data with real `Subject` casing and
-`snippet`-only body, applicant "Test ZillowSmsCheck", `102 Braeford`): parse correct
-and test-gated open, `FUB - Create Person` → **201** person **2650**,
-`FUB - Add Note` → note **2654**, row appended, and `Send Phone-Needed SMS` → real
-Twilio send, SID `SM179520abe0f9cac7b7822dd9078ef3f8`. **Andrew confirmed receiving
-it** — the one piece no offline replay could prove.
+> **Process gotcha.** The first `--apply` was silently clobbered: the n8n editor tab was
+> open from before the fix, and pinning test data made the editor autosave the **entire
+> workflow** from its stale in-memory copy — also adding `"binaryMode": "separate"` to
+> `settings`, outside the PUT whitelist, which made the next PUT fail `400 settings must
+> NOT have additional properties`. **If the n8n editor tab is open across an API-based
+> fix, reload it before touching anything.** Both fix scripts now filter `settings` on
+> PUT; do the same in any script that builds its own PUT body.
 
 ### What's verified vs. not
 
-**Verified live:** `POST /v1/people` with `source`/`firstName`/`lastName`/`stage`
-creates in the intended stage (person 2607, later 2649/2650); `POST /v1/notes`
-attaches (notes 2549, 2653, 2654); the parsing regexes against the real captured
-email; the append column mapping; the `?name=` dedup search for both a zero-match
-(Shawanna Odom) and a one-match (William Evans) case; the full new-applicant branch
-including the real Twilio send (exec 14696).
+`node scripts/zillow-flow-verify.mjs` pulls the **live** `jsCode`, feeds it realistic
+synthetic input, calls the **real** FUB search endpoint (read-only), and cross-checks the
+four IF nodes against the live `connections` graph.
 
-`node scripts/zillow-flow-verify.mjs` (2026-08-07) pulls the **live** `jsCode` for
-`Parse & Resolve Application` / `Check Existing Match`, feeds it realistic synthetic
-input, calls the **real** FUB search endpoint (read-only) rather than mocking it,
-and cross-checks the four IF nodes against the live `connections` graph. All pass:
-new applicant, existing match (person 2607), redelivered `message_id` skipped, and a
-non-`Test` name correctly routed to `Test Gate Closed?`.
+Live-verified: person/note creation in the intended stage, the parsing regexes against
+the real captured email, the append mapping, `?name=` dedup both ways, the full
+new-applicant branch including a real Twilio send, the Gmail Trigger against six real
+applications, and the **existing-match branch end to end** (execution 28417, Omisha
+Burns) — unexercised since 2026-08-07. **Multi-email-per-poll is still not observed** and
+genuinely open.
 
-**Live-verified 2026-08-27 → 08-29, all three of the previously-open items:**
-
-- **The Gmail Trigger against real inbound mail** — six real applications have
-  now flowed through it (Gabriel James, Tristian Peters, Omisha Burns, Shaquya
-  Campbell, Cassandra Ferra, Joshua Milner). Everything before this used pinned
-  or synthetic data.
-- **The dedup/existing-match branch, end to end through n8n's engine**
-  (execution **28417**, Omisha Burns, 2026-08-28). She matched existing FUB
-  person **2057** (`C - Cold 6+ Months`): `existing_found: true`,
-  `existing_trashed: false`, **no duplicate person created**, note added, alert
-  SMS to Nicole (`SM8319d891…`, `error_code: null`), and a Rental Applications
-  row with `existing_person_match = TRUE`. This branch had been unexercised
-  since 2026-08-07 and was the last such path; **that risk is closed.**
-- **Multi-email-per-poll** — still not observed. Applications 10 minutes apart
-  produced separate single-item executions (`trigger=1 parsed=1` each), so the
-  loop is still only exercised single-item. **Genuinely still open**, but note
-  it was NOT the cause of the Cassandra incident, which people reasonably
-  assumed — see "Sheets quota after the early stage filter".
-
-> **An existing-match does NOT move the person's stage** — by design, it never
-> silently overwrites. So an applicant matched to someone parked in an untracked
-> stage (Omisha, `C - Cold 6+ Months`) stays there, the Identity Gate refuses
-> them `stage_not_allowed`, and **nothing automated progresses them**. The alert
-> to Nicole is the entire mechanism. If she moves them into a gated stage they
-> will get a verification SMS — and, having no Inquiries row, will verify into
-> silence unless one is created. See "Verification is not coupled to
-> deliverability".
+> **An existing-match does NOT move the person's stage** — by design, it never silently
+> overwrites. So an applicant matched to someone in an untracked stage stays there, the
+> Identity Gate refuses them `stage_not_allowed`, and **nothing automated progresses
+> them**. The alert to Nicole is the entire mechanism, and if she moves them into a gated
+> stage they will verify into silence unless an Inquiries row exists.
 
 Test artifacts left in place deliberately: FUB persons 2607/2649/2650, notes
 2549/2653/2654, and the `Rental Applications` rows from those runs.
@@ -1169,35 +773,29 @@ Only leads in the client's two rental smart lists get automated contact. The
 allow-list lives in the `allowed_stages` Settings key, comma-separated.
 
 **What it is for:** the client's FUB account is not only a rental CRM — he also
-creates People for owners, developers, and general contacts. None of those should
-ever receive an ID-verification SMS or a cal link. The gate is therefore an
-**allow-list of tenant-inquiry stages, not a suppression list.** The question to ask
-of a new stage is "is this a prospective tenant inquiring about a rental?", and
-anything that isn't gets left out by default.
+creates People for owners, developers, and general contacts. None should ever
+receive an ID-verification SMS or a cal link. The gate is therefore an **allow-list
+of tenant-inquiry stages, not a suppression list.** The question to ask of a new
+stage is "is this a prospective tenant inquiring about a rental?"
 
 ### The smart-list → stage mapping
 
 The client specified the gate as two FUB **smart lists**. The v1 API doesn't expose
-custom smart lists (`GET /v1/smartLists` returns only the 12 built-ins), but both
-are pure stage filters. Pinned by exact person-count match (2026-07-27):
+custom smart lists, but both are pure stage filters. Pinned by exact person-count
+match (2026-07-27):
 
 | Smart list | FUB stage | Count |
 |---|---|---|
 | Tenant Initial Inquiry (6) | `Tenant Inquiry Lead (Do Not Contact)` | 6 |
 | Tenant Still Looking (37) | `Tenant Still Looking For Rental` | 37 |
 
-Three stages have exactly 6 people, so the count alone isn't decisive for the first
-row — but the name is, and five *other* smart lists in the same sidebar match their
-stage counts exactly. That pattern rules out coincidence. Re-verify with
-`node scripts/fub-stage-counts.mjs`. Not every smart list is a pure stage filter
-("Manufactured Home Buyers (45)" has no stage with 45 people), so this holds for the
-two gated lists, not as a general rule.
+Re-verify with `node scripts/fub-stage-counts.mjs`. Not every smart list is a pure
+stage filter, so this holds for the two gated lists, not as a general rule.
 
 > **`Tenant Initial Inquiry` really is the stage named `Tenant Inquiry Lead (Do Not
 > Contact)`.** Confirmed intentional 2026-07-28 — the "(Do Not Contact)" refers to
-> the client's own manual follow-up practice, not to this automation. These are
-> exactly the inquiries the flow exists to serve. **Do not read the stage name as an
-> instruction to suppress automated contact.**
+> the client's own manual follow-up practice, not to this automation. **Do not read
+> the stage name as an instruction to suppress automated contact.**
 
 ### Where it is enforced
 
@@ -1208,7 +806,7 @@ FUB Person:
 |---|---|---|
 | `L13GUyrWbjSJwn8p` Identity Gate | `Check Guards` | `proceed = false`, `stage_not_allowed:<stage>` |
 | `JDsKrVRHf9TEVj7j` Inquiry flow | `Resolve Inquiry` | row still recorded, `link_sent = "skipped_stage_gate"` |
-| `UbO0l29GtILMm1sP` Sweep | `Check & Build Message` | bails `stage_not_allowed` — a lead who leaves the allowed stages stops being swept even for rows already unsent |
+| `UbO0l29GtILMm1sP` Sweep | `Check & Build Message` | bails `stage_not_allowed` |
 
 ```bash
 node scripts/n8n-add-stage-gate.mjs --apply      # idempotent, STAGE_GATE_MARKER
@@ -1220,94 +818,65 @@ Semantics worth knowing:
 
 - **Empty or missing `allowed_stages` means allow everything.** Deleting the row
   degrades to pre-gate behaviour rather than silently muting the system.
-- `skipped_stage_gate` takes precedence over `skipped_test_gate` when both apply —
-  the stage gate is the permanent policy. `skipped_test_gate` is inert to the sweep;
-  `skipped_stage_gate` is **recoverable** as of 2026-08-30, see below.
+- `skipped_stage_gate` takes precedence over `skipped_test_gate` when both apply.
+  `skipped_test_gate` is inert to the sweep; `skipped_stage_gate` is **recoverable**
+  as of 2026-08-30, see below.
 - **Unmatched-address alerts are deliberately NOT stage-gated.** A missing Properties
   row is a data gap worth knowing about regardless of who inquired.
 
 ### Stage-gate race recovery — `STAGE_GATE_RACE_MARKER` (2026-08-30)
 
-**A `skipped_stage_gate` stamp can be a race artefact rather than a decision,
-and it used to be permanent.** Confirmed live, Deborah Bryant (2752):
+**A `skipped_stage_gate` stamp can be a race artefact rather than a decision, and it
+used to be permanent.** Confirmed live, Deborah Bryant (2752): FUB created her in stage
+`Lead`, **its own lead-flow automation promoted her to a gated tenant stage ~600ms
+later**, and our `eventsCreated` event landed inside that window — so the row was
+stamped `skipped_stage_gate` while the Identity Gate, re-reading the stage an hour
+later, went on to ask her to verify. **She would have verified into silence.** Repaired
+by hand (`scripts/_oneoff-2026-08-30-deborah-repair.mjs`), then fixed properly.
 
-```
-14:11:45.885Z  inquiry event -> FUB person reads stage "Lead"
-               -> stage gate says no -> row stamped skipped_stage_gate
-14:11:46.516Z  next execution   -> stage is "Tenant Inquiry Lead (Do Not Contact)"
-15:10:29Z      Identity Gate    -> re-reads the stage -> proceed -> verification SMS
-```
-
-FUB created her in stage `Lead` and **its own lead-flow automation promoted her
-to a gated tenant stage ~600ms later**; our `eventsCreated` event landed inside
-that window. Every decision was correct on the data in front of it —
-`Resolve Inquiry` genuinely did read `Lead`. The defect was that the stamp was
-never re-evaluated, so the Identity Gate went on to ask her to verify while the
-row that would deliver her link sat inert. **She would have verified into
-silence.** Repaired by hand
-(`scripts/_oneoff-2026-08-30-deborah-repair.mjs`), then fixed properly.
-
-> Same class as the trash-gate finding, where FUB un-trashed a person
-> server-side seconds before our node read them (gotcha 18). **The trigger is
-> external and unavoidable; treating a momentary read as a durable verdict is
-> ours.** Expect more of these: any decision this system stamps from a single
-> read of a record FUB is concurrently mutating is suspect.
+> Same class as the trash-gate finding, where FUB un-trashed a person server-side
+> seconds before our node read them (gotcha 18). **The trigger is external and
+> unavoidable; treating a momentary read as a durable verdict is ours.** Expect more of
+> these: any decision this system stamps from a single read of a record FUB is
+> concurrently mutating is suspect.
 
 **Fixed in the sweep, deliberately not in the Identity Gate.** The sweep already
-re-applies the *entire* gate at send time — `allowed_stages`, all three trash
-tags, the trash-family fallback — and bails, **above** the row selection. So
-"re-check the stage when it actually matters" was already built and running;
-this change only lets the row reach that check. Reaching the selector means the
-lead is allowed *right now*, which is the only moment that matters.
+re-applies the *entire* gate at send time, **above** the row selection — so "re-check
+the stage when it actually matters" was already built; this change only lets the row
+reach that check. It adds **0** Sheets ops (the sweep already reads Inquiries/Settings/
+Text Log and writes via `Mark Inquiry Sent`); the Identity Gate would add a read and a
+write on the workflow that already bails on quota, plus a new write-side-effect class
+in the one workflow that sends verification SMS.
 
-| | Sheets ops added |
-|---|---|
-| **the sweep (chosen)** | **0** — it already reads Inquiries, Settings and Text Log, and already writes via `Mark Inquiry Sent` |
-| the Identity Gate | +1 read, +1 write, on the workflow that already bails ~17% on quota — and a new write-side-effect class in the one workflow that sends verification SMS, the same shape rejected for the reapply-reroute |
-
-> **It is TWO nodes, and widening only one is a silent no-op.**
-> `Check & Build Message` selects the rows; `Confirm Still Unsent` re-reads and
-> re-checks `=== "false"` immediately before sending, to fail closed against a
-> double send. Patch only the selector and the row is picked up and then
-> silently dropped — indistinguishable from the fix not working. The verifier
-> asserts both carry the marker.
+> **It is TWO nodes, and widening only one is a silent no-op.** `Check & Build Message`
+> selects the rows; `Confirm Still Unsent` re-reads and re-checks `=== "false"`
+> immediately before sending. Patch only the selector and the row is picked up and then
+> silently dropped. The verifier asserts both carry the marker.
 
 **Recency guard — `stage_gate_recheck_days`, default 7.** The race window is
-sub-second, so a recent stamp is a victim while an old one was a correct
-decision whose link is now stale. Only rows whose `inquired_at` is inside the
-window are recovered. `0` disables recovery entirely (the kill switch). An
-unparseable or empty `inquired_at` is **not** recovered — unknown age must never
-become "fire it", the same direction as the trash-date rule. A non-numeric
-setting falls back to 7, not to "always".
+sub-second, so a recent stamp is a victim while an old one was a correct decision whose
+link is now stale. `0` disables recovery entirely (the kill switch). An unparseable or
+empty `inquired_at` is **not** recovered — unknown age must never become "fire it". A
+non-numeric setting falls back to 7, not to "always". `skipped_test_gate` is **not**
+recovered: that is a permanent fact about the pre-launch period, and 45 live rows
+depend on it staying inert.
 
-`skipped_test_gate` is **not** recovered: that is a permanent fact about the
-pre-launch period, not a race. 45 live rows depend on it staying inert.
-
-> **This does NOT check whether the property is still available**, because the
-> sweep never has. A lead whose house was leased since they inquired can still
-> be sent its link — see Cheyla Zinck under "Verification is not coupled to
-> deliverability". Separate pre-existing gap, deliberately untouched here.
+> **This does NOT check whether the property is still available**, because the sweep
+> never has. Separate pre-existing gap, deliberately untouched here.
 
 ```bash
 node scripts/n8n-add-stage-gate-race-recovery.mjs [--apply] [--revert --apply]
 node scripts/stage-gate-race-verify.mjs                    # 36 assertions
 ```
-Backup `n8n/BEFORE-stage-gate-race/`. The builder **refuses to apply** if the
-stage gate no longer runs above the row selection — the entire safety argument
-rests on that ordering.
-
-**Backlog check against live data, at apply time: 0 messages.** The deployed
-code was run against all 7 real people owning a `skipped_stage_gate` row, with
-their real FUB records: every one is blocked *before* recency even matters
-(4 are Trash-invisible → `no_phone`, 1 `stage_not_allowed`, 1
-`trash_untagged_fallback`), and all 7 rows are older than the 7-day window
-anyway. Re-run that check before widening `stage_gate_recheck_days`.
-
+Backup `n8n/BEFORE-stage-gate-race/`. The builder **refuses to apply** if the stage gate
+no longer runs above the row selection — the entire safety argument rests on that
+ordering. Backlog check at apply time: **0 messages** (all 7 real people owning such a
+row are blocked before recency even matters, and all 7 rows are older than the window).
+Re-run that check before widening `stage_gate_recheck_days`.
 ### Testing vs launch value
 
 `allowed_stages` currently includes a third entry, `Incoming Rental Leads`, because
-that's where **Test Test9 (person 2545)** lives. Without it every gated workflow
-correctly refuses to act during testing and looks broken.
+that's where **Test Test9 (person 2545)** lives.
 
 ```bash
 node scripts/stage-gate-setup.mjs --apply                 # testing value (3 stages)
@@ -1317,8 +886,7 @@ node scripts/stage-gate-setup.mjs --production --apply    # launch value (2 stag
 **The client confirmed 2026-07-28 that `Incoming Rental Leads` must NOT be in
 production**, so `--production --apply` is a required release step. Consequence:
 **it disables the test contact.** Either finish testing first, or move Test Test9
-into `Tenant Still Looking For Rental` — the better end state, since it keeps a
-working test path after launch.
+into `Tenant Still Looking For Rental` — the better end state.
 
 ### Access Code Dispatch stays stage-ungated — decided
 
@@ -1328,60 +896,42 @@ only exist if the lead got a cal link, which required passing the stage gate *an
 Stripe Identity. Once a verified tenant has a confirmed booking, a later stage change
 isn't a reason to strand them at the door with no code. Re-checking would only add a
 FUB lookup inside the 5-minute cron (which has no FUB person in hand) for no gain.
-**Do not "fix" this by adding a stage check to the cron.**
-
-That decision was about the **stage** gate only — this workflow *is* test-gated as
-of 2026-07-31. The two are independent.
+**Do not "fix" this by adding a stage check to the cron.** That decision was about
+the **stage** gate only — this workflow *is* test-gated as of 2026-07-31.
 
 ### Booking / access code test gate
 
-Added 2026-07-31. Until then the Booking Handler and Access Code Dispatch were the
-only **active** workflows with no test gate.
+Added 2026-07-31. Until then the Booking Handler and Access Code Dispatch were the only
+**active** workflows with no test gate.
 
-**Why it was needed.** The recorded reasoning for leaving them open was that a lead
-can only hold a booking if they already passed the stage gate and Stripe Identity.
-That holds for the cal link the system *sends* — but **the Cal.com booking pages are
-public URLs.** A real lead reaching one another way (the website, an old
-Calendly-era email, a listing, or staff sharing it by hand) would have gone straight
-through to a real Populife code on a real lockbox. Nothing had hit that path, so
-this closed exposure, not an incident.
+**Why it was needed.** The recorded reasoning for leaving them open was that a lead can
+only hold a booking if they already passed the stage gate and Stripe Identity. That
+holds for the cal link the system *sends* — but **the Cal.com booking pages are public
+URLs.** A real lead reaching one another way (the website, an old Calendly-era email, a
+listing, staff sharing it by hand) would have gone straight through to a real Populife
+code on a real lockbox.
 
 **Which name the gate reads — the subtle part.** It reads the **FUB person's**
 `firstName`, *not* the Cal.com attendee name. Those routinely differ: the FUB lead is
 `Test Test9` while the booking is made under whatever the tester types. Gating on the
-attendee name is exactly backwards — it blocks the tester's own runs and lets a
-FUB-test lead through. An earlier version made that mistake; **keep the FUB person as
-the source.**
+attendee name is exactly backwards. An earlier version made that mistake; **keep the FUB
+person as the source.**
 
-`Build Showing Row` already holds the FUB person via `FUB - Search by Phone`, so it
-computes `isTestLead` there and **stamps the verdict into the Showings row as
-`is_test`**. The 5-minute cron has no FUB person in hand — and adding a lookup was
-explicitly rejected above — so `Find Ready Showings` reads that stamped column. Same
-shape as `Cal Bookings.is_test`.
-
-Not tied to person 2545 or any email, unlike the Cal.com gate — any FUB contact named
-`Test <something>` works. Match is **exact on the first whitespace-delimited token**:
-`"Testing"` is blocked, `"Test"` passes. A row whose `is_test` is blank (appended
-before this change) or whose FUB person couldn't be resolved by phone is treated as
-**not** a test and blocked — the safe direction.
-
-Real bookings are still **recorded** (`status = scheduled`, `is_test = false`, no
-code). `Find Ready Showings` is the single choke point for both the cron and the
-immediate-dispatch webhook, so one filter covers both; the reschedule path reaches
-code delivery only via `Trigger Immediate Dispatch`, which lands on that same filter.
+`Build Showing Row` holds the FUB person via `FUB - Search by Phone`, computes
+`isTestLead` there and **stamps the verdict into the Showings row as `is_test`**; the
+5-minute cron has no FUB person in hand, so `Find Ready Showings` reads that stamped
+column. Match is **exact on the first whitespace-delimited token**: `"Testing"` is
+blocked, `"Test"` passes. A blank `is_test` (rows appended before this change) or an
+unresolvable phone is treated as **not** a test and blocked — the safe direction. Real
+bookings are still recorded (`status = scheduled`, `is_test = false`, no code).
 
 ```bash
 node scripts/showings-add-is-test.mjs --apply              # column + backfill (once)
 node scripts/n8n-add-access-test-gate.mjs [--apply]        # add
 node scripts/n8n-add-access-test-gate.mjs --revert --apply # remove at launch
 ```
-Marker `ACCESS_GATE_MARKER`, backups `n8n/BEFORE-access-gate/`. The script refuses to
-run if the `is_test` column is missing. `--revert` leaves the column in place —
-harmless, and it keeps the historical record.
-
-**While testing:** the booking can be made under any name; what matters is that the
-phone resolves to a FUB person whose first name is `Test`. If the phone isn't on a
-FUB person at all, the booking is treated as real and gets no code.
+Marker `ACCESS_GATE_MARKER`, backups `n8n/BEFORE-access-gate/`. The script refuses to run
+if the `is_test` column is missing; `--revert` leaves the column in place.
 
 ## Test gates — the full table
 
@@ -1405,8 +955,7 @@ system half-dead in a way that looks like a bug.** Verify with
 > **The bottom three were missing from both this table and `launch-audit.mjs` until
 > 2026-08-07.** Two were *active* at the time, so lifting the eight the audit
 > reported and seeing `hardGates=0` would have read as "ready to launch" while the
-> entire Cal.com confirmation/reminder/follow-up chain stayed silently dead for real
-> bookings.
+> entire Cal.com confirmation/reminder/follow-up chain stayed silently dead.
 
 Two ordering notes for the Cal.com pair:
 
@@ -1427,29 +976,17 @@ This is stacked on top of the stage gate — a lead must pass **both**.
 
 ## FUB Trash-stage gate — SUPERSEDED
 
-The original gate was a plain `stage == "Trash"` check, applied 2026-08-04 with
-`scripts/n8n-add-trash-gate.mjs` (marker `TRASH_GATE_MARKER`, backups
-`n8n/BEFORE-trash-gate/`).
+The original gate was a plain `stage == "Trash"` check (`TRASH_GATE_MARKER`,
+`scripts/n8n-add-trash-gate.mjs`, backups `n8n/BEFORE-trash-gate/`). **Retired
+2026-08-07** for one reproduced reason: **FUB's own lead-flow automation un-trashes a
+person server-side when a new inbound event arrives, before any of our workflows read
+their stage.** The gate was reading the correct, current, live stage — the person
+genuinely wasn't in Trash any more. **A tag survives that auto-reactivation; a stage read
+does not.** Replaced by the tag gate below.
 
-**Retired 2026-08-07.** It was unreliable for one specific reason, reproduced live:
-**FUB's own lead-flow automation un-trashes a person server-side when a new inbound
-event arrives for them, before any of our workflows read their stage.** Reproduced
-with person 2525: set to `Trash` via the API, created a fresh `Property Inquiry`
-event, and ~11 seconds later the stage had changed itself to `Tenant Inquiry Lead
-(Do Not Contact)` with no code of ours involved. This matches execution 12630
-exactly (event created `21:48:40Z`, person's `updated` also `21:48:40Z`, our
-`FUB - Get Person` at `21:48:41Z`). The gate was reading the correct, current,
-live stage — the person genuinely wasn't in Trash any more. **A tag survives that
-auto-reactivation; a stage read does not.** Replaced by the tag gate below.
-
-`n8n-add-trash-gate.mjs --revert --apply` still works if a rollback is ever needed
-(and `scripts/trash-gate-verify.mjs` still verifies that older logic), but the new
-gate's untagged-fallback branch covers the same case, so there shouldn't be a reason.
-
-> **Deliberately separate from `allowed_stages`.** Three workflows already exclude
-> Trash *implicitly* because it isn't on the allow-list — but that's incidental:
-> emptying `allowed_stages` ("allow everything") or adding `Trash` to it would
-> silently remove the protection. This is a separate hardcoded check.
+> **Deliberately separate from `allowed_stages`.** Three workflows exclude Trash
+> *implicitly* because it isn't on the allow-list — but that's incidental: emptying
+> `allowed_stages` or adding `Trash` to it would silently remove the protection.
 
 ## FUB Trash-tag gate
 
@@ -1457,33 +994,27 @@ Three tags. This system only ever **reads** them, never writes them (except the
 reapply-reroute PATCH, which restores stage/date, never touches tags).
 
 > **Process changed 2026-08-19 — read this before touching the tag names.**
-> The tags used to be applied by FUB's own per-stage automation (a distinct stage
-> per tag). The client simplified this for Nicole: she now applies one of the three
-> tags **manually**, then moves everyone to a **single** stage,
-> `Cold Rental Lead 1 month Hold`. `Permanent Trash` and `Trash` are no longer used
-> as destination stages going forward — confirmed live, `GET /v1/stages` no longer
-> lists `Permanent Trash` at all, and `people?stage=Permanent%20Trash` returns 0.
+> The tags used to be applied by FUB's own per-stage automation. The client
+> simplified this: Nicole now applies one of the three tags **manually**, then moves
+> everyone to a **single** stage, `Cold Rental Lead 1 month Hold`. `Permanent Trash`
+> and `Trash` are no longer used as destination stages — confirmed live,
+> `GET /v1/stages` no longer lists `Permanent Trash`.
 >
 > This broke the gate silently: the code checked for a tag named `Temporary Trash`,
-> which was **never the real tag** — live data showed 0 people ever held it. The
-> actual tag is **`No Response Trash`**. Because the string never matched, anyone
-> tagged `No Response Trash` fell through to the untagged stage-fallback branch
-> instead of the intended 90-day window (no expiry, no reapply-reroute). Confirmed
-> on two real leads created under the new process, persons **2669** and **2666**
-> (tagged 8/15 and 8/17): both were computing `trash_untagged_fallback` before the
-> fix, `trash_temporary` (correct) after. Fixed by
-> `scripts/n8n-fix-trash-tag-rename.mjs`, which also repoints the `Permanent Trash`
-> and `No Response Trash` reroute targets at `Cold Rental Lead 1 month Hold` (the
-> old per-tag targets, `Permanent Trash` and `Trash`, are dead stages under the new
-> process — a reapply-reroute PATCH to either would misfile or error).
+> which was **never the real tag** (0 people ever held it). The actual tag is
+> **`No Response Trash`**. Because the string never matched, anyone tagged
+> `No Response Trash` fell through to the untagged stage-fallback branch instead of
+> the intended 90-day window. Fixed by `scripts/n8n-fix-trash-tag-rename.mjs`, which
+> also repoints the `Permanent Trash` and `No Response Trash` reroute targets at
+> `Cold Rental Lead 1 month Hold` (the old per-tag targets are dead stages — a
+> reapply PATCH to either would misfile or error).
 >
-> **The two archived legacy workflows (`Ih8zMmNeUwKvITGf`, `HwXpYAqwbG1zwGls`)
-> could not be patched** — n8n now rejects PUTs to them (`400 Cannot update an
-> archived workflow`). They still read the old `Temporary Trash` string, which is
-> inert since they can't execute while archived. `trash-tag-gate-verify.mjs` tests
-> them against the old tag name on purpose (see `LEGACY_POLICY_CASES` in that
-> script) so it verifies what's actually deployed there. If either is ever
-> un-archived, re-run `n8n-fix-trash-tag-rename.mjs --apply` first.
+> **The two archived legacy workflows could not be patched** — n8n rejects PUTs to
+> them (`400 Cannot update an archived workflow`). They still read the old
+> `Temporary Trash` string, inert since they can't execute.
+> `trash-tag-gate-verify.mjs` tests them against the old tag name on purpose (see
+> `LEGACY_POLICY_CASES`). If either is ever un-archived, re-run
+> `n8n-fix-trash-tag-rename.mjs --apply` first.
 
 | Tag | Applied by | Reapply/reroute target | Window |
 |---|---|---|---|
@@ -1495,19 +1026,16 @@ Decision table, evaluated in this order:
 
 - **`Permanent Trash` tag** → hard block, unconditionally. No date check.
 - **`Denied Credit` present** → governs entirely, even if `No Response Trash` is
-  also present (that tag's window is ignored) — block if `daysSinceTrash <= 365`.
+  also present — block if `daysSinceTrash <= 365`.
 - **`No Response Trash` only** → block if `daysSinceTrash <= 90`.
 - **None of the three** → plain stage fallback: block if the *current* stage is
   `Trash` / `Permanent Trash` / `Cold Rental Lead 1 month Hold`. Suppress-only —
-  there's no `trash_date`, so no reapply-reroute. Added 2026-08-07 to cover anyone
-  already sitting in a trash-family stage before this shipped. `Trash` and
-  `Permanent Trash` are kept in this list defensively even though Nicole's new
-  process no longer sends anyone there — harmless if unused, and it still covers
-  any pre-existing record that was never migrated off the old stages.
+  there's no `trash_date`, so no reapply-reroute. `Trash` and `Permanent Trash` are
+  kept in this list defensively even though Nicole's process no longer uses them.
 
 `daysSinceTrash` comes from `customTrashDate`. A missing/unparseable value computes
-as `Infinity`, which never satisfies `<=`, so **a tag with no date is treated as
-expired, not blocking**. `Permanent Trash` doesn't consult the date at all.
+as `Infinity` — but see "Dateless trash tag", which synthesises `Date.now()` at read
+time so a dateless tag blocks. `Permanent Trash` doesn't consult the date at all.
 
 ### `customTrashDate` write rule — transition-based, not presence-based
 
@@ -1516,15 +1044,12 @@ something else — not every time they're seen sitting in one. This correctly gi
 someone trashed on 1/1, released, then trashed again on 5/1 two distinct dates.
 
 **Verified live before building anything (2026-08-06/07):** does FUB's
-`peopleUpdated` payload carry the previous stage? **No** — inspected three real
-executions (including one triggered by moving person 2525 to `Trash` and back), and
-the payload is always the thin `{eventId, event, resourceIds, uri}` shape with no
-before/after data. Hence the second custom field below.
+`peopleUpdated` payload carry the previous stage? **No** — the payload is always the
+thin `{eventId, event, resourceIds, uri}` shape. Hence the second custom field below.
 
 ### New FUB custom fields
 
-Created live via `POST /v1/customFields` (confirmed the endpoint works — returns a
-400 validation error rather than 404 on a bad body):
+Created live via `POST /v1/customFields`:
 
 | Field key | id | Purpose |
 |---|---|---|
@@ -1532,9 +1057,8 @@ Created live via `POST /v1/customFields` (confirmed the endpoint works — retur
 | `customTrashGateLastStage` | 20 | Cache of "what stage did we last see this person in" — the only way to detect a transition. |
 
 Both are plain `text` fields (not FUB's `date` type) so they round-trip a full ISO
-timestamp. Confirmed they survive a PUT/GET round-trip, including on the list/search
-endpoint **once `&fields=allFields` is present** — absent from a plain response
-without it.
+timestamp. They are absent from list/search responses **unless `&fields=allFields`
+is present**.
 
 First-ever-seen already-trashed people (cache empty pre-launch) get `customTrashDate`
 stamped as the day this shipped, not their true original date. Known, accepted
@@ -1546,20 +1070,18 @@ go-forward-only limitation.
 |---|---|---|
 | `L13GUyrWbjSJwn8p` Identity Gate | `Check Guards` | full policy **with** reapply-reroute (the only workflow that writes to FUB people) |
 | `UbO0l29GtILMm1sP` Sweep | `Check & Build Message` | suppress-only, `bail(trashBlock \|\| "stage_not_allowed")` |
-| `JDsKrVRHf9TEVj7j` Inquiry flow | `Resolve Inquiry` | suppress-only, row recorded with `link_sent = "skipped_" + trashBlock` (e.g. `skipped_trash_permanent`) |
+| `JDsKrVRHf9TEVj7j` Inquiry flow | `Resolve Inquiry` | suppress-only, `link_sent = "skipped_" + trashBlock` |
 | `Ih8zMmNeUwKvITGf` / `HwXpYAqwbG1zwGls` legacy | `Match & Resolve Cal Link` | suppress-only, early `{ skipped: true, reason: trashBlock }` |
-| `X1lih7X05rpnTPmb` Zillow | `Check Existing Match` | suppress-only against the matched *existing* person, driving the `Existing Person Trashed?` → `Append Trash-Skipped Row` branch |
+| `X1lih7X05rpnTPmb` Zillow | `Check Existing Match` | suppress-only against the matched *existing* person, driving `Existing Person Trashed?` → `Append Trash-Skipped Row` |
 
 Five of six are code-only patches. Only the Identity Gate gets new nodes.
 
-**Not patched:** Access Code Dispatch (never looks up a FUB person — same design
-that keeps it stage-ungated); the Booking Handler's test-gate node (reads only
-`firstName`); the three Cal.com workflows (no FUB person in scope).
+**Not patched:** Access Code Dispatch (never looks up a FUB person); the Booking
+Handler's test-gate node (reads only `firstName`); the three Cal.com workflows (no
+FUB person in scope).
 
-The Zillow flow's `FUB - Search Existing Person` also needed `&fields=allFields`
-added — a list/search endpoint returns `tags` by default but **not** custom fields,
-so `customTrashDate` was invisible to that one node (tags-only checks would have
-worked either way).
+The Zillow flow's `FUB - Search Existing Person` also needed `&fields=allFields` — a
+list/search endpoint returns `tags` by default but **not** custom fields.
 
 ### Reapply-reroute — Identity Gate only
 
@@ -1572,18 +1094,15 @@ Deliberately **not** duplicated across the other five: they'd each need write
 capability, and near-simultaneous corrections from multiple workflows for the same
 event wave is a real race with no upside. The Identity Gate already fires on
 **every** `peopleUpdated`, so routing the correction through it extends an existing
-choke point rather than creating a new one.
+choke point.
 
 > **Audited: `not_test_mode` still short-circuits BEFORE any trash-tag or reroute
-> logic, on every path.** Verified two ways — by reading the live code (the
-> `isTestMode` check sits above the marker block, and `fail()` returns an object with
-> no `needs_reapply_reroute` field at all, so a real lead cannot acquire reroute
-> fields even in principle), and by live execution (13451/13469/13470 all show
-> `{proceed:false, reason:"not_test_mode"}` → `Should Proceed? items=0` →
-> `Needs Reapply Reroute? items=0`, no error). Worth knowing: that IF uses
-> `typeValidation: strict` against a `needs_reapply_reroute` that is `undefined` on
-> this path — a combination that *can* throw in n8n. It doesn't here, confirmed on
-> real executions rather than assumed.
+> logic, on every path.** Verified by reading the live code (the `isTestMode` check
+> sits above the marker block, and `fail()` returns an object with no
+> `needs_reapply_reroute` field at all) and by live execution. Worth knowing: that
+> IF uses `typeValidation: strict` against a `needs_reapply_reroute` that is
+> `undefined` on this path — a combination that *can* throw in n8n. It doesn't here,
+> confirmed on real executions rather than assumed.
 
 Wired off `Should Proceed?`'s previously-unwired false branch:
 `Needs Reapply Reroute?` → `FUB - Update Person (Reapply)` (`PUT /people/{id}` with
@@ -1594,25 +1113,21 @@ by construction: the flag is only set when the current stage doesn't already mat
 ### Stage-transition watcher — Identity Gate only
 
 Spliced between `FUB - Get Person` and `Read Settings`: `FUB - Get Recent Notes` →
-`Trash Transition Watcher` → `Watcher Needs Write?` → `FUB - Update Person
-(Watcher)`, both branches rejoining `Read Settings`. Inserting ahead of
-`Read Settings`/`Check Guards` is safe **specifically because both already read
-`$items("FUB - Get Person")` by name**, not `$json`/`$input` — verified before
-writing, since gotcha 19 is exactly the failure this would otherwise hit.
+`Trash Transition Watcher` → `Watcher Needs Write?` → `FUB - Update Person (Watcher)`,
+both branches rejoining `Read Settings`. Inserting ahead of `Read Settings`/
+`Check Guards` is safe **specifically because both already read
+`$items("FUB - Get Person")` by name**, not `$json`/`$input` — verified before writing,
+since gotcha 19 is exactly the failure this would otherwise hit.
 
-**Self-collision handling.** The reapply PATCH re-fires this same webhook, and
-without a guard would look like a fresh transition and re-stamp `customTrashDate =
-now`, destroying the value it just preserved. The watcher checks the last 5 notes
-for `"Automation: reapply blocked"` created in the last 5 minutes; if found it still
-refreshes the cache but skips re-stamping.
+**Self-collision handling.** The reapply PATCH re-fires this same webhook, and without a
+guard would look like a fresh transition and re-stamp `customTrashDate = now`,
+destroying the value it just preserved. The watcher checks the last 5 notes for
+`"Automation: reapply blocked"` in the last 5 minutes; if found it refreshes the cache
+but skips re-stamping. It only PUTs when the cache is stale or a stamp is needed, so
+once in sync the next unrelated event does nothing.
 
-**Loop safety.** The watcher's own write is an update, but it only PUTs when
-`cacheStale` or a genuine stamp is needed. Once the cache is in sync, the next
-unrelated event does nothing.
-
-**Not test-gated** — it sits upstream of `Check Guards`. Client decision 2026-08-07:
-it must only act on people in, or coming from, the two gated tenant stages, because
-the CRM also serves other business functions.
+**Not test-gated** — it sits upstream of `Check Guards`. Client decision 2026-08-07: it
+must only act on people in, or coming from, the two gated tenant stages.
 
 | Situation | Behaviour |
 |---|---|
@@ -1621,35 +1136,27 @@ the CRM also serves other business functions.
 | Trash-family, cache EMPTY (never seen) | stamp anyway — see safety note |
 | Anything else (owner / lender / developer) | **no write at all**, `reason: "out_of_scope"` |
 
-> **Safety note on the empty-cache exception.** A tag with no `customTrashDate`
-> computes `Infinity` days and is therefore treated as expired — so refusing to stamp
-> a first-seen already-trashed person would convert "we don't know when they were
-> trashed" into "they are not blocked". Stamping errs toward blocking.
-
-A useful side effect: refusing to write when the cache holds a non-tenant stage also
-closes the reroute-clobber path.
+> **Safety note on the empty-cache exception.** A tag with no `customTrashDate` used to
+> compute `Infinity` days and read as expired — so refusing to stamp a first-seen
+> already-trashed person would convert "we don't know when they were trashed" into "they
+> are not blocked". Stamping errs toward blocking. Refusing to write when the cache holds
+> a non-tenant stage also closes the reroute-clobber path.
 
 `WATCH_SCOPE_STAGES` is **hardcoded** rather than read from `allowed_stages`, because
-the watcher runs *before* `Read Settings` and moving it after would fan it out across
-all ~47 rows — mirroring how `TRASH_STAGES` and the tag names are already hardcoded.
-**If the production `allowed_stages` value changes, update `WATCH_SCOPE_STAGES`.**
+the watcher runs *before* `Read Settings`. **If the production `allowed_stages` value
+changes, update `WATCH_SCOPE_STAGES`.**
 
 ### Error isolation
 
-The watcher's two HTTP nodes were originally spliced into the **critical path** of
-the only workflow that sends verification SMS, at n8n's default abort-on-error — so
-bookkeeping could kill the gate. Execution 13463 proved the shape: it died at
-`FUB - Update Person (Watcher)` on a FUB 400 and never reached `Check Guards`. That
-specific 400 was fixed, but any FUB 429/5xx reproduces it, and this workflow errors
-on ~25% of executions (mostly Sheets quota).
-
-Fixed with the same shape as the Cron Poll's send isolation: both nodes get
-`onError: continueRegularOutput` (`FUB - Get Recent Notes` also `alwaysOutputData`),
-and the watcher treats an errored notes fetch as "cannot verify the self-collision"
-and therefore **does not stamp** `customTrashDate` — the cache is still refreshed
-(harmless), but the date the whole window policy depends on is never written
+The watcher's two HTTP nodes were originally spliced into the **critical path** of the
+only workflow that sends verification SMS, at n8n's default abort-on-error — so
+bookkeeping could kill the gate (execution 13463 died at
+`FUB - Update Person (Watcher)` on a FUB 400 and never reached `Check Guards`). Both
+now carry `onError: continueRegularOutput` (`FUB - Get Recent Notes` also
+`alwaysOutputData`), and the watcher treats an errored notes fetch as "cannot verify the
+self-collision" and therefore **does not stamp** `customTrashDate` — the cache is still
+refreshed (harmless), but the date the whole window policy depends on is never written
 unverified.
-
 ### Scripts
 
 ```bash
@@ -1661,211 +1168,161 @@ node scripts/trash-tag-gate-verify.mjs                                  # 377 as
 ```
 Backups: `n8n/BEFORE-trash-tag-gate/`, `n8n/BEFORE-watcher-isolation/`,
 `n8n/BEFORE-watcher-scope/`, `n8n/BEFORE-zillow-search-include-trash/`.
-**`trash-tag-gate-verify.mjs` is the
-cheap check to re-run after any edit to this logic** — it pulls the live `jsCode`
-from all six nodes plus the watcher and runs 377 assertions (16 policy cases, the
-watcher's transition/self-collision/loop/scoping cases, real non-tenant stages from
-this account). Sends nothing, writes nothing.
+**`trash-tag-gate-verify.mjs` is the cheap check to re-run after any edit to this
+logic** — it pulls the live `jsCode` from all six nodes plus the watcher. Sends
+nothing, writes nothing.
 
-### Live verification and bugs found
+### Live verification, and two assumptions corrected
 
-**Applied 2026-08-07**, all 6 workflows, 0 failures; `active` flags confirmed
-unchanged by the PUT.
+**Applied 2026-08-07**, all 6 workflows, 0 failures, `active` preserved; the drift,
+scoping and isolation scenarios were each verified on real executions
+(`docs/n8n-history.md`). Two things the earlier docs got wrong:
 
-**Bug found during live testing, not shipped:** the first watcher built its PUT body
-as `{ id: person.id, ... }`. FUB's `PUT /people/{id}` rejects `id` as an invalid body
-field (400 — the id belongs in the URL), crashing before `Check Guards`. Fixed live
-and in the source script. Gotcha 19's pattern — a newly-added node needs its own
-request shape checked, not just its trigger logic.
+- **Our own writes are NOT webhook-silent in general.** A **custom-field-only** write
+  (the watcher's) doesn't fire `peopleUpdated`; a **`tags`** write does.
+- **`GET /notes?personId=undefined` is safe.** FUB returns `total: 0`, not an unfiltered
+  list — so the gotcha-17 class does **not** apply to that node.
 
-**Drift scenario, verified end-to-end** (execution 13468): person 2525 with
-`Temporary Trash`, `customTrashDate` 10 days ago, cache `"Trash"`, but current stage
-manually moved to `"Lead"` — exactly the auto-reactivation scenario. `Check Guards` →
-`{proceed:false, reason:"trash_temporary", needs_reapply_reroute:true,
-reapply_reroute_stage:"Trash", reapply_preserved_trash_date:"2026-07-28T00:28:00.496Z"}`
-(the original value, not "now") → PATCH back to `Trash` → note 2647. A direct FUB read
-confirmed the date unchanged.
-
-**Scoping verified live after the scope patch:** exec **13731** stamping (2525 moved
-to `Cold Rental Lead 1 month Hold` — use a trash-family stage that is **not** literal
-`Trash`, since a person in real Trash is invisible to the `?id=` endpoint); exec
-**13732** exclusion (moved to `Current Owners` → `out_of_scope`, and a direct read
-confirmed **neither** field was written). Exec **13489** ran the full chain
-end-to-end after the isolation patch.
-
-### Two documented assumptions corrected
-
-- **Our own writes are NOT webhook-silent in general.** The original conclusion (that
-  FUB suppresses delivery for same-`X-System` changes) is **wrong** — disproved by the
-  backfill's 5-record batch, which produced **6** `peopleUpdated` deliveries in ~2s.
-  The difference is *which fields change*: a **custom-field-only** write (the
-  watcher's) doesn't fire the webhook; a **`tags`** write does.
-- **`GET /notes?personId=undefined` is safe.** When a person is Trash-invisible,
-  `FUB - Get Recent Notes` builds that URL. Tested live: FUB returns `total: 0`, not
-  an unfiltered list — so the gotcha-17 class of silent misattribution does **not**
-  apply here.
-
+> **A newly-added node needs its own request shape checked, not just its trigger logic.**
+> The first watcher PUT included `id` in the body; FUB rejects that (the id belongs in the
+> URL) with a 400 that crashed the run before `Check Guards`.
 ### Known open issues
 
 - ~~**A trash tag with no `customTrashDate` does not block**~~ — **FIXED
-  2026-08-26, `DATELESS_TRASH_TAG_MARKER`. It was firing in production.** See
-  "Dateless trash tag" below. This was flagged here for weeks as needing
-  sign-off; the client's new manual process turned it from theoretical into a
-  live customer-facing bug.
+  2026-08-26, `DATELESS_TRASH_TAG_MARKER`. It was firing in production.** See below.
 - **Trash-invisible people, pre-existing, deliberately not fixed.** `FUB - Get Person`
   in four workflows builds its URL from FUB's webhook-supplied `uri`, which for every
   real event observed is the **list-style `?id=`** endpoint — which excludes
   Trash-stage people (gotcha 18). While someone sits in genuine Trash those workflows
-  see `person = {}`, so every downstream check reads falsy and they **fail safe**
-  (blocked, for a generic reason). It does **not** corrupt `customTrashDate` (the
-  watcher requires a trash-family *current* stage, and `""` isn't one); the only
-  effect is a stale cache, which self-corrects. Adding `&includeTrash=true` would
-  change behaviour for everything else those nodes do — a broader change than
-  "replace the trash gate", deserving its own decision.
+  see `person = {}`, so every downstream check reads falsy and they **fail safe**. It
+  does **not** corrupt `customTrashDate`; the only effect is a stale cache, which
+  self-corrects. Adding `&includeTrash=true` would change behaviour for everything
+  else those nodes do — a broader change deserving its own decision.
 
-### Sheets quota — measured, it's a testing artifact
+### Sheets quota — root cause and history
 
-Across 3,580 executions of the six active workflows: 121 errors, **101 of them Sheets
-quota**. Correlating against how many other executions started in the preceding 60s:
+**ROOT CAUSE, found 2026-08-31: the Identity Gate read 60 rows one at a time.** Quota
+failures looked like ambient bad luck for months. They were not.
+`Read Identity Verifications` was issuing **60** Sheets API requests per execution,
+against a quota of 60 read requests per minute per user: `Read Settings` emits one item
+per Settings row, n8n runs the next node once per input item, and that node had no
+`executeOnce` (gotcha 4).
 
-| Executions in preceding 60s | Total | Errors | Rate |
-|---|---|---|---|
-| 0 (isolated) | 1767 | 22 | **1.2%** |
-| 1–2 | 1747 | 76 | 4.4% |
-| 3–5 | 64 | 20 | **31.3%** |
-
-Quota failures are a **burst** phenomenon, and the by-day histogram lines up with
-active development days. At the client's real traffic — a couple of leads a day, each
-firing an isolated chain — this sits in the 1.2% band, and the two 5-minute crons
-contribute ~2 requests/min against a 60/min quota. **Decided: do not move to Supabase
-for this.** Retry standardisation was applied instead.
-
-### Dateless trash tag — `DATELESS_TRASH_TAG_MARKER` (2026-08-26, WAS LIVE)
-
-**A trash tag with no `customTrashDate` did not block, and the client's process
-creates exactly that state on every lead they retire.**
-
-```js
-const daysSinceTrash = Number.isFinite(trashDateMs) ? ... : Infinity;
-if (tagsLower.includes("no response trash")) { if (daysSinceTrash <= 90) block; }
+```
+Read Settings                   425ms     60 items
+Read Identity Verifications   23227ms   3600 items      <- 60 x 60
 ```
 
-`Infinity` never satisfies `<=`, so the tag read as **expired**. Nicole applies
-the tag **first** and moves the stage **second**; `customTrashDate` is only
-stamped on entering a trash-family stage, i.e. at step 2. Between the two, the
-person sits in a *gated tenant stage* carrying a trash tag with no date — and
-the gate returned `proceed: true, reason: "ok"` and sent them an ID-verification
-SMS.
+**One execution consumed the entire minute's budget by itself**, so two overlapping
+executions were a guaranteed 429 — and the automatic retry replayed the same 60-request
+read, so `SHEETS_RETRY_MARKER` could not recover from a condition it was itself
+creating. This is the actual cause of the 66% bail rate before the early stage filter
+and the 17% after, of the Cassandra Ferra and Quantez Guest losses, and of the "SMS
+sent, no verification row" failures — the append node does a header **read** first, so
+an exhausted read bucket starves writes too.
 
-> **Confirmed live, not theorised.** Seven people (2663, 2668, 2675, 2687, 2689,
-> 2690, 2692) hit that window in one burst on 2026-08-26. **All seven were saved
-> only by a Google Sheets quota error** — every one of those executions bailed
-> `sheets_unavailable` before reaching the send. Verified by replaying the
-> deployed `Check Guards` against a person shaped exactly like them:
-> `proceed: true` before the fix, `trash_temporary` after.
+> **The fan-out width equals the Settings row count.** Every Settings key added cost one
+> more request per gate execution. It crossed 60 on **2026-08-31**, when
+> `cal-booking-reminders-setup.mjs` added seven `cal_booking_reminder_*` keys (53 → 60).
+> **Adding a Settings key was a load change.**
 
-**The fix, in two places, because either alone is insufficient:**
-
-| Where | Change |
-|---|---|
-| `Check Guards` (+ sweep, inquiry flow, Zillow) | a tag seen with no date means **trashed NOW** — synthesise `Date.now()`, so both windows block with no special-casing |
-| `Trash Transition Watcher` | also stamp `customTrashDate` on seeing a trash **tag**, not only a stage transition |
-
-> **The watcher fix alone would not have worked.** `Check Guards` reads the
-> person from the **original** `FUB - Get Person` fetch, so a date the watcher
-> stamps in the same execution is invisible to it — the *first* event, the
-> dangerous one, would still have sent. The Check Guards change covers that
-> execution; the watcher covers every one after.
-
-**Deliberately unchanged:** tag-expiry cleanup still requires a **real** date
-(`hasRealTrashDate` reads the raw field) — absence of *our* field is not evidence
-about the *client's* tag, and cleaning on a synthesised date would delete their
-tags. `Permanent Trash` never consulted the date. The watcher never overwrites an
-existing date. Genuine expiry still works: a `No Response Trash` dated 100 days
-ago still does **not** block.
-
-> **Fixed in four nodes, not one.** The policy is duplicated across six nodes.
-> Patching only `Check Guards` left the sweep and inquiry flow still willing to
-> **send** to a dateless-tagged lead — `trash-tag-gate-verify.mjs` caught that
-> immediately (33 failures), which is precisely what it is for. The two LEGACY
-> workflows keep the old logic: archived, PUT-rejected, and unable to execute.
-> `LEGACY_POLICY_CASES` now encodes both their deviations (old tag name **and**
-> dateless-permissive) so the verifier tests what is actually deployed there.
+**Fixed with one node property**, `executeOnce: true` — 60 requests → 1.
 
 ```bash
-node scripts/n8n-fix-dateless-trash-tag.mjs [--apply] [--revert --apply]
+node scripts/n8n-fix-gate-read-fanout.mjs [--apply] [--revert --apply]
 ```
-Backup `n8n/BEFORE-dateless-trash-tag/`. Verifier was **335 assertions** at
-this change (377 today — see the launch runbook's verifier-state section).
+Backup `n8n/BEFORE-gate-read-fanout/`. The script refuses to apply unless
+`Check Guards` is still the node's **only** consumer, is Code v2 in
+`runOnceForAllItems`, and reads the node **purely** by named reference.
 
-### Sheets quota after the early stage filter — measured 2026-08-30
+> **Why this never produced a wrong verdict, only quota burn.** `Check Guards` was
+> receiving each real row 60 times over, and every check on that array is `.some()` /
+> `.find()` / `.filter()` — same answer on duplicates. The bug was invisible in
+> `runData` for the same reason gotcha 11 is: the item *count* was wrong in a way that
+> changed nothing about the item *contents*.
 
-The filter helped and is not enough. Across the last **200** Identity Gate
-executions: **34 `sheets_unavailable` bails (17%)**, down from the **66%**
-measured before it. Affecting 17 distinct people, of whom **16 were harmless**
-(non-gated stage, trash-tagged, or already holding a verification row).
+Verified live 2026-08-31 (execution 30603): 23227ms / 3600 items → **791ms / 61 items**,
+verdict unchanged.
 
-**One real casualty: Cassandra Ferra (2748), 2026-08-29.** She applied via
-Zillow at 22:00:23; the flow created her person and alerted Nicole; someone
-added her phone within the minute; both resulting gate runs died:
+### The two Properties pollers — 5-minute interval (2026-09-01)
 
-```
-21:59:56  person 1688  PROCEED  SMS sent          <- a different applicant
-22:01:03  person 2748  sheets_unavailable
-22:01:18  person 2748  sheets_unavailable
-```
+`TGGhSkTSZGYPrZo9` and `W6PoSadMxnoHwxhG` poll the **same** Properties tab, and
+neither set `pollTimes`, so both ran on n8n's every-minute default and failed in
+**matched pairs — same second** — against the shared 60-reads/min bucket
+(08-19, 08-20, 08-21, 08-27, 08-30 ×2, 08-31). Both are now every 5 minutes.
 
-> **The obvious hypothesis was wrong, and worth recording.** "Applied close
-> after another person" sounds like the Zillow flow's unexercised
-> multi-email-per-poll path. It was not: those two applications were 10 minutes
-> apart in separate single-item executions. The collision was **downstream** —
-> person created → phone added → `peopleUpdated` → two Sheets reads — all
-> landing inside one minute. Check the executions, not the arrival times.
+**Nothing was ever lost to those failures**, verified: 75 Properties rows, 73
+fully provisioned, and the 2 exceptions are old rows that *do* carry
+`cal_event_type_id`s. Every failure happened **at** the trigger with `items=0`,
+so its stored position never advanced and the next poll saw the same rows.
 
-The early stage filter behaved correctly throughout: she passed `scope=true`,
-and two unrelated people seconds later were correctly filtered at `scope=false`.
-
-**Finding stranded leads.** A bail is only harmful if the lead would otherwise
-have been served. The sweep that identifies them: scan recent gate executions
-for `Check Guards.reason === "sheets_unavailable"`, collect the person ids, then
-keep only those with a gated stage, a phone, no trash tag, **and no
-`Identity_Verifications` row**. Everything else is noise.
-
-### Sheets-unavailable alert — `SHEETS_UNAVAILABLE_ALERT_MARKER` (2026-08-30)
-
-Turns the silent drop into a text. `Sheets Unavailable?` hangs off
-`Check Guards` in parallel with `Should Proceed?` and `Tag Cleanup Needed?` —
-nothing inserted in front (gotcha 19).
-
-> **It cannot read Settings for its own configuration**, because Settings is
-> part of what may be unavailable. Recipient and sender fall back to hardcoded
-> constants (`+18038047847`, `+18548886242`) but PREFER the Settings values when
-> readable — in practice `Read Identity Verifications` is usually the failing
-> read while `Read Settings` succeeds.
-
-**It only alerts for leads who would actually have been served**: gated tenant
-stage + phone on file + no trash tag, all derived from the FUB person with no
-Sheets read. The early stage filter deliberately admits trash-family stages and
-trash-tagged people so the reapply-reroute stays reachable, so alerting on those
-would be pure noise. Declines are logged as `[sheets-unavailable] … no alert`.
+> **This is NOT gotcha 21**, and the distinction is the useful part: a trigger
+> that *fails* self-heals, because it never consumed anything. A trigger that
+> *emits* while a downstream node drops items does not, because `rowAdded` never
+> re-emits a row it has already reported.
 
 ```bash
-node scripts/n8n-add-sheets-unavailable-alert.mjs [--apply] [--revert --apply]
+node scripts/n8n-set-properties-poll-interval.mjs [--apply] [--revert --apply]
 ```
-Backup `n8n/BEFORE-sheets-unavailable-alert/`. If it stays silent through a
-bail, read the execution log for the `[sheets-unavailable]` line; the likely
-cause is the would-have-been-served filter declining.
+Backup `n8n/BEFORE-properties-poll-interval/`.
 
-> **Moved to the exhausted branch 2026-08-30** by `SHEETS_RETRY_MARKER` below.
-> It no longer fires on the first bail — only on a lead the automatic retry
-> could not save — and its copy says so rather than asking for a re-fire the
-> system has already attempted three times. Note this makes it a **strictly
-> rarer** alert: silence now means "recovered", not "never noticed".
+> **A wider poll window widens the chance of two rows per poll, and
+> `Prep Delete` still reads `$input.first()`.** Two properties marked `Delete`
+> inside one 5-minute window would delete only the first — exactly what
+> `MULTI_ROW_MARKER` fixed on the provisioning side. Pre-existing and untouched,
+> because deletion logic is too destructive to change without sign-off. Fix it
+> before anyone does a bulk cleanup.
 
-### Automatic retry for `sheets_unavailable` — `SHEETS_RETRY_MARKER` (2026-08-30)
+> **The same audit found nothing else.** Item counts were measured on every Sheets node
+> across the eight active workflows: everywhere else either carries `executeOnce` or has
+> a Code node collapsing the stream first. **This was the only compounding fan-out in
+> the estate.** Re-run with `node scripts/sheets-fanout-audit.mjs` after adding any
+> Sheets node downstream of another — a fan-out shows up as an item count far larger
+> than the tab it reads.
 
-The bail above is now recovered automatically instead of merely reported.
-This is what eliminates the manual recovery in
+**Earlier measurements, for context.** Across 3,580 executions: 121 errors, **101 Sheets
+quota**, scaling by concurrency (1.2% isolated / 4.4% at 1–2 / 31.3% at 3–5).
+**Decided: do not move to Supabase for this** (`docs/supabase-migration-plan.md` is the
+fallback lever). After the early stage filter, 17% of gate executions still bailed,
+costing one real lead (Cassandra Ferra, 2748); detail and the misdiagnosis that preceded
+it are in `docs/n8n-history.md`.
+
+**Finding stranded leads.** A bail is only harmful if the lead would otherwise have been
+served. Scan recent gate executions for
+`Check Guards.reason === "sheets_unavailable"`, collect the person ids, then keep only
+those with a gated stage, a phone, no trash tag, **and no `Identity_Verifications`
+row**. Everything else is noise.
+### Early stage filter — `EARLY_STAGE_FILTER_MARKER` (2026-08-26)
+
+**23 of 35 Identity Gate executions were silently doing nothing**, failing at
+`Read Identity Verifications` and returning the bail `sheets_unavailable`. **All report
+execution status `success`**, so no error monitoring can see it. One real lead (2721
+Detric Yoder) was dropped and never recovered.
+
+The filter is a short-circuit ahead of the Sheets reads, keyed on **stage**:
+
+```
+Watcher Needs Write? ─┬─> In Gated Scope? -> In Scope? ─┬─(true)──> Read Settings
+FUB - Update Person (Watcher) ─┘                        └─(false)─> Build Out-Of-Scope Result
+```
+
+Passes: the two gated tenant stages, **any trash-family stage**, or **any trash tag**.
+The last two clauses are load-bearing — they keep the reapply-reroute reachable,
+including for a tagged person who has drifted into some other stage. Everything else
+short-circuits; all of it already produced no action, it merely paid for two Sheets
+reads first. The stage list is **hardcoded**, same constraint as `WATCH_SCOPE_STAGES` —
+**if the production `allowed_stages` changes, update it too.** It removed ~43% of the
+load; the fan-out fix above was the actual cure. The watcher and the new-inquiry-lead
+alert sit **upstream** and are untouched.
+
+```bash
+node scripts/n8n-add-early-stage-filter.mjs [--apply] [--revert --apply]
+```
+Backup `n8n/BEFORE-early-stage-filter/`.
+### Sheets-unavailable alert + automatic retry — `SHEETS_UNAVAILABLE_ALERT_MARKER`, `SHEETS_RETRY_MARKER` (2026-08-30)
+
+A `sheets_unavailable` bail is retried automatically, and only alerts if the retry could
+not save the lead. This is what eliminated the manual recovery in
 `scripts/_oneoff-cassandra-recover.mjs`.
 
 ```
@@ -1874,344 +1331,153 @@ Check Guards -> Sheets Unavailable? [true] -> Retry Decision -> Retry?
         Retry? [false] -> Build Sheets-Unavailable Alert -> Send ... Alert
 ```
 
-**It re-POSTs the gate's own webhook rather than retrying inline.** A retry has
-to re-run the *whole* path — fresh Sheets reads, the watcher, every guard — not
-just the failed read, and it must leave no partial state. `already_sent` makes
-it idempotent by construction. Precedent for the shape: `Trigger Identity Gate`
-in the inquiry flow posts to this same webhook.
+**It re-POSTs the gate's own webhook rather than retrying inline.** A retry has to
+re-run the *whole* path — fresh Sheets reads, the watcher, every guard — and leave no
+partial state. `already_sent` makes it idempotent by construction.
 
-> **The counter rides in the webhook body and is load-bearing.** `body._retry`
-> is read back out of `$('Webhook')` on the next run and capped at
-> `MAX_RETRIES = 2` (3 executions per lead, worst case). Without it a sustained
-> quota outage becomes an **infinite self-POST loop that makes the outage
-> worse** — an unbounded failure mode that lands during an incident. It is
-> hardcoded, deliberately **not** a Settings key: Settings is part of what may
-> be unavailable. A non-numeric counter reads as `NaN`, which never satisfies
-> `<`, so a garbled body gives up rather than looping.
+> **The counter rides in the webhook body and is load-bearing.** `body._retry` is read
+> back out of `$('Webhook')` and capped at `MAX_RETRIES = 2` (3 executions per lead,
+> worst case). Without it a sustained quota outage becomes an **infinite self-POST loop
+> that makes the outage worse**. It is hardcoded, deliberately **not** a Settings key:
+> Settings is part of what may be unavailable. A non-numeric counter reads as `NaN`,
+> which never satisfies `<`, so a garbled body gives up rather than looping.
 
-**It only retries leads who would actually have been served** — gated tenant
-stage, phone on file, no trash tag — the same filter the alert applies, for the
-same reason: the early stage filter admits trash-family stages so the
-reapply-reroute stays reachable, and retrying those would add load in the exact
-minute the quota is exhausted. The filter is **duplicated** in `Retry Decision`
-and `Build Sheets-Unavailable Alert` (the alert must keep working standalone);
-`sheets-retry-verify.mjs` asserts the two agree case-for-case, because that is
-exactly the kind of duplication that drifts.
+**Both the retry and the alert only act for leads who would actually have been served**
+— gated tenant stage, phone on file, no trash tag, all derived from the FUB person with
+no Sheets read. The early stage filter deliberately admits trash-family stages so the
+reapply-reroute stays reachable; acting on those would add load in the exact minute the
+quota is exhausted. The filter is **duplicated** in `Retry Decision` and
+`Build Sheets-Unavailable Alert` (the alert must work standalone), and
+`sheets-retry-verify.mjs` asserts the two agree case-for-case. Declines are logged as
+`[sheets-unavailable] … no alert`.
 
-**Why two minutes.** The Sheets nodes already spend 5 × 15s retrying internally
-*before* `Check Guards` ever sees the error, so any bail means the outage
-already outlasted 75s. A shorter wait would just spend the budget inside the
-same bad minute. Quota exhaustion here is a burst measured in
-seconds-to-minutes, so one 2-minute wait should recover most of them.
+> **The alert cannot read Settings for its own configuration**, because Settings is part
+> of what may be unavailable. Recipient and sender fall back to hardcoded constants
+> (`+18038047847`, `+18548886242`) but PREFER the Settings values when readable.
 
-> **Gotcha 19 was a live concern here, not a ritual.** Two nodes ARE inserted
-> in front of `Build Sheets-Unavailable Alert`. That is safe only because it
-> reads `$('Check Guards')`, `$items("FUB - Get Person")` and
-> `$items("Read Settings")` — named references, never `$json`/`$input`. **The
-> builder script checks this and refuses to run if that ever stops being
-> true.** Nothing is inserted ahead of `Should Proceed?` or
-> `Tag Cleanup Needed?`, which do read their immediate input.
+**Why two minutes.** The Sheets nodes already spend 5 × 15s retrying internally *before*
+`Check Guards` sees the error, so any bail means the outage already outlasted 75s.
 
-**Cost:** a Wait node parks the execution, so a burst leaves several open. Fine
-at current volume. A parked execution is **invisible to
-`GET /executions`** until it resumes — do not read an empty list as "nothing
-happened" while a retry is in flight.
+> **Gotcha 19 was a live concern here, not a ritual.** Two nodes ARE inserted in front
+> of `Build Sheets-Unavailable Alert` — safe only because it reads `$('Check Guards')`,
+> `$items("FUB - Get Person")` and `$items("Read Settings")` by name. **The builder
+> refuses to run if that ever stops being true.** Nothing is inserted ahead of
+> `Should Proceed?` or `Tag Cleanup Needed?`, which read their immediate input.
 
-> **The Wait node had no precedent anywhere in this instance**, so it was
-> proved in a throwaway workflow first — both the in-process (10s) and the
-> DB-resume (2 min) paths — before touching the live gate. Worth repeating for
-> any node type this estate has never run.
+**Cost:** a Wait node parks the execution. A parked execution is **invisible to
+`GET /executions`** until it resumes — do not read an empty list as "nothing happened"
+while a retry is in flight. The Wait node had no precedent in this instance, so it was
+proved in a throwaway workflow first. Worth repeating for any node type this estate has
+never run.
 
 ```bash
+node scripts/n8n-add-sheets-unavailable-alert.mjs [--apply] [--revert --apply]
 node scripts/n8n-add-sheets-retry.mjs [--apply] [--revert --apply]
 node scripts/sheets-retry-verify.mjs                       # 62 assertions
 ```
-Backup `n8n/BEFORE-sheets-unavailable-retry/` — **note the name.**
+Backups `n8n/BEFORE-sheets-unavailable-alert/` and
+`n8n/BEFORE-sheets-unavailable-retry/` — **note the second name.**
 `n8n/BEFORE-sheets-retry/` is a *different* directory belonging to
-`n8n-set-sheets-retry.mjs` (the 68-node retry standardisation), and it holds
-that script's only revert data for 13 workflows. This script briefly used it
-and clobbered `L13GUyrWbjSJwn8p.json`; recovered from git, which is the sole
-reason it was recoverable. **Give every new script its own `BEFORE-` directory
-and grep for the name first.** `--revert` also restores the alert's
-original message text, and refuses if it can't find the block it patched.
+`n8n-set-sheets-retry.mjs` and holds that script's only revert data for 13 workflows.
+The retry script briefly used it and clobbered `L13GUyrWbjSJwn8p.json`; recovered from
+git, which is the sole reason it was recoverable.
 
-**Verified live 2026-08-30, end to end, on a forced bail.** `Read Identity
-Verifications` was pointed at a non-existent tab for ~12s while a fresh test
-person (2753, gated stage, phone) had a phone added:
+**Verified live 2026-08-30 on a forced bail**: execution 29900 bailed, decided
+`should_retry=true attempt=0`, waited and re-POSTed; execution 29901 (`_retry: 1`) found
+Sheets healthy and completed — Stripe session, **real verification SMS**, row written.
+Precisely the sequence Cassandra Ferra was lost to, recovered without a human. The
+**exhaustion** branch is covered by synthetic cases only, **not observed live**.
+### Dateless trash tag — `DATELESS_TRASH_TAG_MARKER` (2026-08-26, WAS LIVE)
 
-| Execution | `_retry` | Outcome |
-|---|---|---|
-| **29900** | (none) | `Check Guards` → `sheets_unavailable`; `Retry Decision` → `should_retry=true attempt=0`; Wait ran; `Re-POST Identity Gate` fired |
-| **29901** | `1` | Sheets healthy → `proceed=true reason="ok"` → Stripe session → **real verification SMS** `SM3e25b931…` `error_code: null` → `Log to Identity Verifications` wrote the row |
+**A trash tag with no `customTrashDate` did not block, and the client's process creates
+exactly that state on every lead they retire.** `daysSinceTrash` computed as `Infinity`,
+which never satisfies `<=`, so the tag read as **expired**. Nicole applies the tag
+**first** and moves the stage **second**, and `customTrashDate` is only stamped at step
+2 — so between the two, the person sits in a *gated tenant stage* carrying a trash tag
+with no date, and the gate returned `proceed: true` and sent them an ID-verification
+SMS. Seven people hit that window in one burst on 2026-08-26; **all seven were saved
+only by a Google Sheets quota error.**
 
-That is precisely the sequence Cassandra Ferra was lost to, recovered without a
-human. The **exhaustion** branch (cap reached → alert) is covered by the
-verifier's synthetic cases but has **not** been observed live.
+**The fix, in two places, because either alone is insufficient:**
 
-Test artifact: FUB person **2753**, moved to stage `Trash` after the run so the
-reminder workflow's guards block it — left in a gated stage it would have
-texted Andrew once a day for four days.
+| Where | Change |
+|---|---|
+| `Check Guards` (+ sweep, inquiry flow, Zillow) | a tag seen with no date means **trashed NOW** — synthesise `Date.now()`, so both windows block |
+| `Trash Transition Watcher` | also stamp `customTrashDate` on seeing a trash **tag**, not only a stage transition |
 
-### ROOT CAUSE of `sheets_unavailable`: the gate read 60 rows one at a time (2026-08-31)
+> **The watcher fix alone would not have worked.** `Check Guards` reads the person from
+> the **original** `FUB - Get Person` fetch, so a date the watcher stamps in the same
+> execution is invisible to it — the *first* event, the dangerous one, would still have
+> sent.
 
-**Everything above this section treats Sheets quota as ambient bad luck. It was
-not. `Read Identity Verifications` was issuing 60 Google Sheets API requests
-per execution, against a quota of 60 read requests per minute per user.**
+**Deliberately unchanged:** tag-expiry cleanup still requires a **real** date — absence
+of *our* field is not evidence about the *client's* tag, and cleaning on a synthesised
+date would delete their tags. `Permanent Trash` never consulted the date. The watcher
+never overwrites an existing date. Genuine expiry still works.
 
-`Read Settings` emits one item per Settings row, n8n runs the next node once
-per input item, and that node had no `executeOnce` (gotcha 4). Measured on live
-executions before the fix:
-
-```
-Read Settings                   425ms     60 items
-Read Identity Verifications   23227ms   3600 items      <- 60 x 60
-```
-
-3600 = 60 Settings rows × 60 Identity_Verifications rows. **One execution
-consumed the entire minute's budget by itself**, so two overlapping executions
-were a guaranteed 429 — and the automatic retry replays the same 60-request
-read, so `SHEETS_RETRY_MARKER` could not recover from a condition it was
-itself creating.
-
-> **The fan-out width equals the Settings row count.** Every Settings key added
-> cost one more request per gate execution. It crossed 60 on **2026-08-31**,
-> when `cal-booking-reminders-setup.mjs` added seven `cal_booking_reminder_*`
-> keys (53 → 60). **Adding a Settings key was a load change**, which is not
-> something anyone would have predicted from this document.
-
-This is the actual cause of the 66% bail rate before the early stage filter and
-the 17% after (the filter helped because it removes whole executions, i.e. 60
-requests at a time), of the Cassandra Ferra loss, of the Quantez Guest loss,
-and of the "SMS sent, no verification row" failures — the append node does a
-header **read** first, so the exhausted read bucket starves writes too.
-
-```
-Read Identity Verifications   23227ms  3600 items
-Send Verification SMS           335ms  SM4172f52…      <- delivered
-Log to Identity Verifications 20918ms  ERROR "Quota exceeded ... Read requests"
-```
-
-**Fixed with one node property**, `executeOnce: true` — 60 requests → 1.
+> **Fixed in four nodes, not one.** Patching only `Check Guards` left the sweep and
+> inquiry flow still willing to **send** to a dateless-tagged lead —
+> `trash-tag-gate-verify.mjs` caught that immediately (33 failures), which is precisely
+> what it is for. The two LEGACY workflows keep the old logic; `LEGACY_POLICY_CASES`
+> encodes both their deviations (old tag name **and** dateless-permissive).
 
 ```bash
-node scripts/n8n-fix-gate-read-fanout.mjs [--apply] [--revert --apply]
+node scripts/n8n-fix-dateless-trash-tag.mjs [--apply] [--revert --apply]
 ```
-Backup `n8n/BEFORE-gate-read-fanout/`. The script refuses to apply unless all
-of the following still hold, because they are the entire safety argument:
-`Check Guards` is the node's **only** consumer, it is Code v2 in
-`runOnceForAllItems` mode, and it reads the node **purely** by named reference
-(`$items("Read Identity Verifications")`, never `$json`/`$input`).
+Backup `n8n/BEFORE-dateless-trash-tag/`.
+### Alert coverage gap: `alert_cc_phones` misses rental applications — CLOSED
 
-> **Why this never produced a wrong verdict, only quota burn.** `Check Guards`
-> was receiving each real row 60 times over, and every check on that array is
-> `.some()` / `.find()` / `.filter()` — all of which give the same answer on
-> duplicates. The bug was invisible in `runData` for the same reason gotcha 11
-> is: the item *count* was wrong in a way that changed nothing about the
-> item *contents*.
+`alert_cc_phones` is read **only** by `Build Inquiry Alert`, which fires on FUB
+`eventsCreated`. **Rental applications do not produce an inquiry event**, so they alert
+`rental_application_alert_phone` (Nicole) via the Zillow flow's own three alert nodes.
+This caused real confusion 2026-08-30: the operator was CC'd on "leads" but received
+nothing for four applicants. Not overload; two disjoint alert paths.
 
-**Verified live 2026-08-31, execution 30603** (fired on a person holding a
-verification row, so it exercises the full read path and sends nothing):
+**Closed 2026-08-30 — `APPLICATION_ALERT_CC_MARKER`.** All three Zillow alert nodes
+(`Send Existing-Match Alert`, `Send Phone-Needed SMS`, `Send Parse-Failed Alert`) now
+fan out to `rental_application_alert_phone` **plus** `alert_cc_phones`, each fed by a
+new `Build …` node.
 
-| | before | after |
-|---|---|---|
-| `Read Identity Verifications` | 23227ms, 3600 items | **791ms, 61 items** |
-| `Check Guards` | `already_sent` | `already_sent` |
+> **Fan-out alone was NOT sufficient, and this is the part that is easy to get wrong.**
+> All three Twilio nodes resolved `to` through a **named-node** reference, not their
+> immediate input. Feeding a Twilio node N items only sends N different texts if `to`
+> reads `$json` — a named reference re-resolves the *same paired source item* every
+> time, so the fan-out would have texted one number N times and looked like it worked.
+> Each Twilio node is therefore repointed at `$json`, and its message template moves
+> into the build node with it.
 
-`trash-tag-gate-verify.mjs` (377) and `sheets-retry-verify.mjs` (62) both pass
-unchanged.
+> **Nicole is never dropped, unlike the inquiry alert.** `Build Inquiry Alert` treats an
+> empty `alert_cc_phones` as "notification off"; here it means "Nicole only". An
+> application alert is the **only** mechanism that moves an applicant forward, so it
+> must not acquire an off switch it never had. Recipients are deduped on the last 10
+> digits.
 
-> **The same audit found nothing else.** Item counts were measured on every
-> Sheets node across the eight active workflows: everywhere else either carries
-> `executeOnce` (the Cal Cron Poll's `Read Cal Bookings`, the Identity
-> Reminders' own `Read Identity Verifications`) or has a Code node collapsing
-> the stream first. **This was the only compounding fan-out in the estate.**
-> Re-run the measurement with `node scripts/sheets-fanout-audit.mjs` after
-> adding any Sheets node downstream of another. It reads recent executions and
-> prints each Sheets node's worst observed item count, so a fan-out shows up as
-> a number far larger than the tab it reads.
-
-### Alert coverage gap: `alert_cc_phones` misses rental applications
-
-`alert_cc_phones` is read **only** by `Build Inquiry Alert` in the Inquiry flow,
-which fires on FUB `eventsCreated`. **Rental applications do not produce an
-inquiry event**, so they never reach it — those alert `rental_application_alert_phone`
-(Nicole) via the Zillow flow's own three alert nodes.
-
-Consequence, and it caused real confusion 2026-08-30: the operator was CC'd on
-"leads" but received nothing for Cassandra, Omisha, Gabriel, or Tristian —
-every one of whom arrived as an **application**, not an inquiry. Nicole received
-all four correctly. Not overload; two disjoint alert paths.
-
-**CLOSED 2026-08-30 — `APPLICATION_ALERT_CC_MARKER`.** Client decision: extend
-the CC list to applications. All three Zillow alert nodes now fan out to
-`rental_application_alert_phone` **plus** `alert_cc_phones`.
-
-```
-FUB - Add Note To Existing -> Build Existing-Match Alert -> Send Existing-Match Alert
-FUB - Add Note             -> Build Phone-Needed Alert   -> Send Phone-Needed SMS
-Parse Failed?              -> Build Parse-Failed Alert   -> Send Parse-Failed Alert
-```
-
-> **Fan-out alone was NOT sufficient here, and this is the part that is easy
-> to get wrong.** All three Twilio nodes resolved `to` through a **named-node**
-> reference (`$('Parse & Resolve Application').item.json.alert_phone`), not
-> their immediate input. Feeding a Twilio node N items only sends N different
-> texts if `to` reads `$json` — a named reference re-resolves the *same paired
-> source item* every time, so the fan-out would have texted one number N
-> times and looked like it worked. Each Twilio node is therefore repointed at
-> `$json`, and its message template moves into the build node with it.
-
-> **Nicole is never dropped, unlike the inquiry alert.** `Build Inquiry Alert`
-> treats an empty `alert_cc_phones` as "notification off"; here it means
-> "Nicole only". An application alert is the **only** mechanism that moves an
-> applicant forward (an existing-match never changes their stage), so it must
-> not acquire an off switch it never had. Recipients are deduped on the last
-> 10 digits, so setting `alert_cc_phones` to Nicole's own number does not text
-> her twice.
-
-**Isolation was required, not optional.** None of the three carried `onError`,
-and each has a parallel `Append … Row` sibling. Fan-out means one bad CC
-number would fail the Twilio node and abort the execution, **taking the row
-append with it** — a new failure mode created by this change. All three now
-carry `onError: continueRegularOutput`.
+**Isolation was required, not optional.** None of the three carried `onError`, and each
+has a parallel `Append … Row` sibling — so one bad CC number would fail the Twilio node
+and abort the execution, **taking the row append with it**. All three now carry
+`onError: continueRegularOutput`.
 
 ```bash
 node scripts/n8n-add-application-alert-cc.mjs [--apply] [--revert --apply]
 node scripts/application-alert-cc-verify.mjs               # 63 assertions
 ```
 Backup `n8n/BEFORE-application-alert-cc/`, which also holds
-`original-twilio-params.json` — **`--revert` depends on that file** to restore
-the original templates and refuses without it.
+`original-twilio-params.json` — **`--revert` depends on that file** and refuses without
+it. The verifier's headline assertion is **message byte-identity**: the templates were
+retyped from n8n expression syntax into JS concatenation, exactly the transcription that
+silently drops an em-dash or the conditional `Review:` suffix, so it renders the
+originals with a small `{{ }}` evaluator and compares character for character.
 
-> **The verifier's headline assertion is message byte-identity.** The
-> templates were retyped from n8n expression syntax into JS concatenation,
-> exactly the transcription that silently drops an em-dash, a quote, or the
-> conditional `Review:` suffix — and nobody would notice from outside, Nicole
-> would just start getting subtly wrong texts. The verifier renders the
-> **original** templates (from that backup file) with a small `{{ }}`
-> evaluator and asserts the new output matches character for character, with
-> and without `review_link`.
-
-**Not live-verified.** n8n's public API cannot fire a Gmail Trigger
-(`POST /workflows/:id/run` → 405), so this needs the editor with pinned data,
-or the next real application. Everything is offline-verified against the
-deployed jsCode plus the connections graph. **The next real Zillow application
-is the live test** — expect Nicole *and* the CC number to both receive it.
-
-### Early stage filter — `EARLY_STAGE_FILTER_MARKER` (2026-08-26)
-
-**23 of 35 Identity Gate executions were silently doing nothing.** Every one
-failed at `Read Identity Verifications` with *"The service is receiving too many
-requests from you"*, after retrying 5 × 15s, and returned the read-isolation
-bail `sheets_unavailable`. **All of them report execution status `success`**, so
-no error monitoring can see it. One real lead — 2721 Detric Yoder, gated stage,
-phone on file — was dropped and never recovered.
-
-This is exactly what the launch runbook predicted when gate #17 came off:
-*"every `peopleUpdated` event across the whole FUB account now reaches
-`Read Settings` / `Read Identity Verifications` again… **watch for executions
-dying at `Read Identity Verifications`**."*
-
-The filter restores gate #17's *shape* — a short-circuit ahead of the Sheets
-reads — keyed on **stage** instead of `firstName`:
-
-```
-Watcher Needs Write? ─┬─> In Gated Scope? -> In Scope? ─┬─(true)──> Read Settings
-FUB - Update Person (Watcher) ─┘                        └─(false)─> Build Out-Of-Scope Result
-```
-
-Passes: the two gated tenant stages, **any trash-family stage**, or **any trash
-tag**. The last two clauses are load-bearing — they keep the reapply-reroute
-reachable, including for a tagged person who has drifted into some other stage,
-which is the exact case the reroute exists for. Everything else (owners, current
-tenants, PM pipeline stages, and Trash-invisible people whose `?id=` lookup
-returns nothing) short-circuits; all of those already produced no action, they
-merely paid for two Sheets reads first.
-
-The stage list is **hardcoded**, same constraint and convention as
-`WATCH_SCOPE_STAGES` — it runs before `Read Settings` so it cannot read
-`allowed_stages`. **If the production `allowed_stages` changes, update it too.**
-
-> **Sizing, honestly: this removes ~43% of the load, measured over 80 real
-> executions — not most of it.** The remainder is genuine tenant-stage traffic,
-> much of it the client bulk-tagging leads, where each `tags` write fires its own
-> `peopleUpdated`. Substantial, not a cure. If drops continue the next lever is
-> `docs/supabase-migration-plan.md`.
-
-The watcher and the new-inquiry-lead alert both sit **upstream** and are
-untouched — including the tag-stamping added by `DATELESS_TRASH_TAG_MARKER`,
-which must keep running for tagged people whatever their stage.
-
-```bash
-node scripts/n8n-add-early-stage-filter.mjs [--apply] [--revert --apply]
-```
-Backup `n8n/BEFORE-early-stage-filter/`.
-
-## Trash backfill + fall-through fix (2026-08-07)
-
-### Fall-through fix — `TRASH_FALLTHROUGH_MARKER`
-
-The policy was an `if / else-if` chain ending in the stage fallback, so matching
-**any** tag skipped the fallback — even when that tag produced no block. A dateless
-tag computes `Infinity`, never satisfies `<=`, and therefore silently suppressed the
-fallback. Net effect: a person with `Temporary Trash` and no date, sitting in stage
-`Trash`, was **not blocked**, while an identical *untagged* person **was**. The tag
-made them less protected. One such person existed live.
-
-Fixed by de-chaining: `if (!trashBlock && stage is trash-family)`. Behaviour moves in
-exactly one direction — toward blocking — and only for people already in a
-trash-family stage. An expired tag on someone who has genuinely **left** those stages
-still serves them (the reapply path, deliberately untouched).
-
-```bash
-node scripts/n8n-add-trash-fallthrough.mjs [--apply] [--revert --apply]
-```
-Applied to all 6, `active` preserved. Verifier extended to 299 assertions.
-
-### Data backfill — 593 people
-
-Client decision: stamp `customTrashDate = today` and apply the stage-matching tag to
-everyone currently in a trash-family stage. Client confirmed everyone in Cold is
-there for credit reasons, that the 365-day window is intended despite the stage name,
-and accepted that dating an old record as "today" restarts its timeout.
-
-| Stage | Count | Tag applied |
-|---|---|---|
-| `Trash` | 555 | `Temporary Trash` |
-| `Cold Rental Lead 1 month Hold` | 38 | `Denied Credit` |
-| `Permanent Trash` | 0 | — |
-
-**593 updated, 0 failures.** Never overwrites an existing `customTrashDate`, never
-removes an existing tag (appends), skips already-compliant records so it's safe to
-re-run or resume. Journal in `n8n/BEFORE-trash-backfill/journal.json`;
-`--revert --apply` restores from it.
-
-```bash
-node scripts/fub-trash-backfill.mjs [--apply] [--limit 5] [--revert --apply]
-```
-
-> **Behavioural consequence to remember:** those 593 are now blocked by *tag* rather
-> than by *current stage*. A tag persists across stage changes, so moving one of them
-> into a tenant stage will block them and — once the test gate is lifted — trigger the
-> reapply-reroute, PATCHing them back with an "Automation: reapply blocked" note.
-> Inert today because `not_test_mode` short-circuits first.
-
+**Not live-verified** — a Gmail Trigger can't be fired via the API. **The next real
+Zillow application is the live test.**
 ### Bulk writes: pace them, don't deactivate the consumer
 
-**Learned the hard way.** The backfill was run with the Identity Gate deactivated to
-avoid ~590 executions. **It did not work — FUB queues and retries failed deliveries**,
-so every one came back on reactivation: ~330 executions in 3 minutes, peaking at
-~140/min, **all failing** on Sheets quota.
-
-- Harmless but not free: all died at `Read Settings` / `Read Identity Verifications`,
-  upstream of `Check Guards`, so nothing acted on a real lead. But the quota was
-  saturated ~4 minutes, and a live test firing in that window did fail.
-- **The retry standardisation amplifies a storm rather than damping it.** 5 × 15s
-  means each failing execution holds 75s and spends 5 quota attempts: 330 × 5 ≈ 1,650
-  requests against a 60/min bucket. The setting is still right for isolated failures;
-  just don't expect it to help under a self-inflicted burst.
-- **The fix is to pace the writes** — ~1 write per 9s keeps deliveries under quota and
-  never queues a retry backlog. Deactivating only defers the load into a worse burst.
+**Learned the hard way.** The 593-person backfill was run with the Identity Gate
+deactivated to avoid ~590 executions. **It did not work — FUB queues and retries failed
+deliveries**, so every one came back on reactivation: ~330 executions in 3 minutes, all
+failing on Sheets quota. **The retry standardisation amplifies a storm rather than damping
+it** (330 × 5 ≈ 1,650 requests against a 60/min bucket). **The fix is to pace the
+writes** — ~1 write per 9s. Deactivating only defers the load into a worse burst.
 
 ### Expired-tag cleanup — `TAG_EXPIRY_CLEANUP_MARKER`
 
@@ -2219,12 +1485,9 @@ Removes a trash tag whose window has provably expired, at the moment the Identit
 evaluates that person, plus a FUB note so history isn't silently deleted.
 
 - Only `No Response Trash` (90d) and `Denied Credit` (365d) are removable.
-  `Permanent Trash` is **never** touched. (Renamed from `Temporary Trash` 2026-08-19
-  — see "FUB Trash-tag gate" above; the tag key in `TAG_WINDOW_DAYS` changed, the
-  90/365-day windows did not.)
+  `Permanent Trash` is **never** touched.
 - Requires a **real parsed** `customTrashDate`. A dateless tag reads as expired, but
-  absence of *our* field is not evidence about the *client's* tag — removing on that
-  basis would delete their data because we failed to stamp.
+  absence of *our* field is not evidence about the *client's* tag.
 - Runs regardless of block outcome — tag expiry is a fact about the tag.
 - All other tags are preserved (FUB's PUT replaces the whole array, so survivors are
   re-sent verbatim).
@@ -2232,47 +1495,33 @@ evaluates that person, plus a FUB note so history isn't silently deleted.
 **Wiring — the important bit.** `Tag Cleanup Needed?` fans out in **parallel** off
 `Check Guards`, alongside `Should Proceed?`. It is deliberately **not** inserted in
 front: `Should Proceed?` reads `{{ $json.proceed }}`, its immediate input, so anything
-ahead of it would feed it an HTTP response and break the entire gate. Gotcha 19.
+ahead of it would feed it an HTTP response and break the entire gate (gotcha 19).
 
-**Known limitation**: the cleanup fields ride on only two of `Check Guards`' return
-paths (trash-blocked and success). The other `fail()` paths don't carry them, so
-cleanup doesn't fire there — observed live, a first attempt returned
-`verification_already_pending` and correctly did nothing.
+**Known limitation**: the cleanup fields ride on only two of `Check Guards`' return paths
+(trash-blocked and success), so cleanup doesn't fire on the other `fail()` paths.
 
 > **Entering a trash stage re-stamps `customTrashDate`**, so a previously-expired tag
 > becomes in-window again. Correct (a new trash event), but it means **you cannot test
 > the cleanup by moving someone into a trash stage** — the watcher runs first. Test by
 > letting them settle, then rewinding `customTrashDate` with a custom-field-only write
-> (webhook-silent).
+> (webhook-silent). Seeding a tag test **overwrites the whole tags array** — capture the
+> original set first.
 
 ```bash
 node scripts/n8n-add-tag-expiry-cleanup.mjs [--apply] [--revert --apply]
 ```
-Backup `n8n/BEFORE-tag-expiry-cleanup/`. Verifier now at **323 assertions**.
-
-**Verified live, execution 14441** — one run proving this and the fall-through fix
-together. Person 2525, settled in `Cold Rental Lead 1 month Hold` with a
-`Temporary Trash` tag dated 200 days ago: `Check Guards →
-{reason:"trash_untagged_fallback", needs_tag_cleanup:true, expired_tags:["Temporary
-Trash"], cleaned_tags:["Moncks Corner","29461"]}` → tags now
-`["29461","Moncks Corner"]`, others preserved → note 2650. **Pre-fix that person
-would have been unblocked**, since the expired tag suppressed the stage fallback.
-
-> Seeding a tag test **overwrites the whole tags array** — capture the original set
-> before testing. 2525 restored to baseline afterwards.
+Backup `n8n/BEFORE-tag-expiry-cleanup/`. Verified live (execution 14441) together with
+the fall-through fix: expired tag removed, other tags preserved, note written —
+**pre-fix that person would have been unblocked.**
 
 ### Resolved — the shared-date precedence problem
 
-All three tags share **one** `customTrashDate`, always the most recent transition. So
-a lead whose `Denied Credit` window expires, who reapplies and is later trashed again
-for an unrelated reason, ends up carrying **both** tags with a fresh date — and
-`Denied Credit` governs, giving them 365 days instead of 90 and rerouting them to the
-wrong stage. Precedence logic alone can't fix this: with one shared date both tags
-look equally current. The only moment the staleness is knowable is *while the window
-is still expired* — hence the expired-tag cleanup above. Client sign-off 2026-08-07.
-
-The "nonresponsive tag" question is **closed** — the client confirmed they meant
-`Temporary Trash`. There is no fourth tag.
+All three tags share **one** `customTrashDate`, always the most recent transition, so a
+lead re-trashed for an unrelated reason carries **both** tags with a fresh date and
+`Denied Credit` governs — 365 days instead of 90. Precedence logic alone can't fix it:
+with one shared date both tags look equally current. The only moment the staleness is
+knowable is *while the window is still expired* — hence the cleanup above. Client
+sign-off 2026-08-07. There is no fourth tag.
 
 ## Sheets retry strategy
 
@@ -2280,29 +1529,26 @@ The "nonresponsive tag" question is **closed** — the client confirmed they mea
 `waitBetweenTries: 15000`. Two gaps closed:
 
 1. **The retry window didn't span the quota window.** Nodes that already retried used
-   5 × 8000ms = 40s. The quota is a **per-minute** bucket, so all five tries could be
+   5 × 8000ms = 40s, and the quota is a **per-minute** bucket, so all five tries could be
    spent inside the same exhausted 60s window. 5 × 15s = 75s clears it.
-2. **Several nodes in ACTIVE workflows had no retry at all.** The consequential ones:
-   the Cron Poll's `Read Settings (Cron)` / `Read Cal Bookings` (highest-frequency
-   readers in the system); Immediate Sends' two `Read Cal Bookings (Dedup Check)`
-   nodes — these **are** the booking idempotency guard, so a quota failure aborted
-   before the row was recorded; the Reconfirm Webhook's read (a guest clicking their
-   link); and the Properties write/delete (`TGGhSkTSZGYPrZo9` / `W6PoSadMxnoHwxhG`).
+2. **Several nodes in ACTIVE workflows had no retry at all** — notably the Cron Poll's
+   `Read Settings (Cron)` / `Read Cal Bookings`, Immediate Sends' two
+   `Read Cal Bookings (Dedup Check)` nodes (these **are** the booking idempotency guard,
+   so a quota failure aborted before the row was recorded), the Reconfirm Webhook's read,
+   and the Properties write/delete.
 
 **Scope**: every `googleSheets` node **except polling triggers** (a retry there is
-meaningless — the two `Watch Properties` triggers are deliberately untouched), plus
-every `httpRequest` hitting `sheets.googleapis.com` directly. **Excluded**: the two
-legacy cal-link workflows, `Populife Code Test`, and `Test Helper: Reset + Trigger` —
-none are production paths, so they still read `retry=false` in a survey.
+meaningless — the two `Watch Properties` triggers are deliberately untouched), plus every
+`httpRequest` hitting `sheets.googleapis.com`. **Excluded**: the two legacy cal-link
+workflows, `Populife Code Test`, `Test Helper: Reset + Trigger`.
 
-**Tradeoff**: under sustained exhaustion a single node can spend ~60s retrying, so a
-5-minute cron tick could overlap the next. That only happens while the quota is
-already exhausted — exactly when backing off is correct — and both crons dedup off
-sheet state rather than execution timing.
+**Tradeoff**: under sustained exhaustion a node can spend ~60s retrying, so a 5-minute
+cron tick could overlap the next — but only while the quota is already exhausted, and
+both crons dedup off sheet state rather than execution timing.
 
-> **n8n editor note**: `waitBetweenTries` has a UI slider capped at 5000ms, but the
-> API accepts and stores larger values. Opening one of these nodes in the editor and
-> saving by hand may clamp it back down — re-run the script if that happens.
+> **n8n editor note**: `waitBetweenTries` has a UI slider capped at 5000ms, but the API
+> accepts larger values. Opening one of these nodes in the editor and saving by hand may
+> clamp it back down — re-run the script if that happens.
 
 ```bash
 node scripts/n8n-set-sheets-retry.mjs [--apply] [--revert --apply]
@@ -2311,266 +1557,39 @@ Backups `n8n/BEFORE-sheets-retry/`. All 13 PUTs preserved `active`.
 
 ## DoorLoop Occupancy Sync
 
-DoorLoop is the source of truth for vacant/occupied. Workflow `4bMsEAi18j4CPK8k`
-writes the `status` column on Properties directly — it does **not** go through the
-Next.js app's API. Header Auth credential `DoorLoop API` (`MWIyvOyigeoPRVbz`).
-**Active** — the hourly schedule is running.
+Full reference: **`docs/doorloop-sync.md`** — the workflow, the reconciliation report on
+the dashboard's "Sync now" button, the panel's Link/Add/Remove actions, the multi-row
+provisioning fix, and the `owner_label` convention.
 
-- **Occupancy rule:** a unit is occupied iff its id appears in the `units[]` of a
-  lease with `calculatedStatus == "ACTIVE"`.
-- **Join key is the unit id, not the property id.** The twin properties
-  (`127 West End LLC`, `432 Farrell st LLC`) put two sheet rows under one DoorLoop
-  property id, so only the unit id identifies a row uniquely.
-  `scripts/doorloop-match.mjs` populates `doorloop_property_id`.
-- **Override contract:** if `status_override` is non-empty, the sync writes that
-  instead. `doorloop_status` always records what DoorLoop actually reported.
-- **Rows with an empty `doorloop_property_id` are never touched** — status stays
-  manual.
-- **Fails loudly:** the Code node throws if DoorLoop returns zero units, if a page
-  was truncated, or if no row is writable. All three would otherwise mark the whole
-  portfolio vacant.
-- **Blocked units:** the Tyler Portfolio units have wrong `address` fields in
-  DoorLoop and are deliberately unmatched — a client-side data fix, not code.
-  (`42 Peppertree Lane` was in this list and has since been fixed and linked.)
+DoorLoop is the source of truth for vacant/occupied. Workflow `4bMsEAi18j4CPK8k` writes
+the `status` column on Properties directly — it does **not** go through the Next.js app's
+API. Header Auth credential `DoorLoop API` (`MWIyvOyigeoPRVbz`). **Active** — the hourly
+schedule is running.
+
+- **Occupancy rule:** a unit is occupied iff its id appears in the `units[]` of a lease
+  with `calculatedStatus == "ACTIVE"`.
+- **Join key is the unit id, not the property id** — twin properties put two sheet rows
+  under one DoorLoop property id. `scripts/doorloop-match.mjs` populates
+  `doorloop_property_id`.
+- **Override contract:** a non-empty `status_override` is written instead;
+  `doorloop_status` always records what DoorLoop actually reported.
+- **Rows with an empty `doorloop_property_id` are never touched** — status stays manual.
+- **Fails loudly:** the Code node throws on zero units, a truncated page, or no writable
+  row — all three would otherwise mark the whole portfolio vacant.
+- **`doorloop_property_id` is not in `SAFE_COLUMNS` and must not be added** — that is
+  what stops an ordinary edit clobbering DoorLoop's link.
+- **Sync now does not provision anything** — it only writes status columns. A new property
+  seemingly "fixed by Sync now" is coincidence with the 1-minute provisioning poll of
+  `TGGhSkTSZGYPrZo9`; check that workflow's executions.
 
 ```bash
-node scripts/n8n-create-doorloop-sync.mjs --apply   # recreate from scratch
 node scripts/doorloop-sync-preview.mjs              # diff a run, writes nothing
-```
-Recreating fills the `REPLACE_WITH_DOORLOOP_CREDENTIAL_ID` placeholders and prints a
-new id, which goes into `doorloop_occupancy_sync` in
-`src/app/api/settings/route.ts`. It refuses to run if a workflow of that name exists.
-**Manual test runs:** the production webhook path only routes when the workflow is
-active — activate → POST → deactivate, or use the editor's test-webhook URL.
-
-### Reconciliation report on the "Sync now" button (2026-08-07)
-
-The dashboard's **Sync now** button returns a read-only report of what a human needs
-to do about properties existing on one side and not the other. The occupancy write is
-unchanged.
-
-| Category | Meaning | 2026-08-07 |
-|---|---|---|
-| `create` | DoorLoop unit with **no dashboard row at all** | 5 |
-| `link` | Row exists but `doorloop_property_id` is empty | 0 (was 8–13) |
-| `remove` | Row points at a unit DoorLoop no longer returns | 0 |
-| `known` | Blocked / excluded by design / orphan rows | 16 |
-
-> **A naive unit-id set difference is wrong and dangerous here.** It reports **19**
-> "create" items, because it can't tell an *unlinked* row from a *missing* one — 13
-> of those already had a dashboard row, and telling the client to create them would
-> produce duplicates. The report does full address matching (exact, then suffix-only
-> core match) before deciding something is genuinely missing.
->
-> Equally, **an unlinked row is NOT a removal candidate.** 15 rows had no DoorLoop
-> unit at match time, but almost all were suffix spelling differences ("102 Braeford"
-> vs "102 Braeford Ct"). `remove` is populated **only** from rows whose *non-empty*
-> `doorloop_property_id` is absent from the units response.
-
-Known/blocked items are **shown, not omitted** — collapsed behind a "Known — no
-action needed (N)" line. Omitting them means that when the client fixes a DoorLoop
-address, nothing visibly changes and nobody can tell "suppressed" from "matched".
-
-**Workflow changes** (7 nodes → 9): a new `Fetch Properties` node (the report needs
-parent property *names* for the exclusion rules; the sync never did); a new
-`Build Reconciliation Report` Code node **after** the write, with
-`onError: continueRegularOutput` so read-only bookkeeping can never fail a sync that
-already wrote (gotcha 19); and `Manual Sync Trigger` `responseMode` →
-**`lastNode`** so the dashboard's POST gets the report as the HTTP response
-(deliberately *not* a `Respond to Webhook` node — `lastNode` is inert on the schedule
-path). `Compute Occupancy` and `Write Status to Properties` are **not** touched.
-
-**Button-only, by client preference.** The report short-circuits on the hourly run,
-returning `{ skipped: 'scheduled_run', status_rows_written: N }`. Trigger detection is
-`try { $('Manual Sync Trigger').all().length > 0 } catch { false }` — referencing a
-node that never executed throws. There's nobody to hand a report to on a cron run.
-**Consequence for the verify scripts: they must stub `Manual Sync Trigger` or the
-report short-circuits and the preview comes back empty.** Both already do.
-
-**Source of truth is `n8n/doorloop-recon-report.js`**, not the builder script, so the
-verifier can execute the same file the workflow runs. `normAddr` / `coreAddr` /
-`SUFFIXES` / `EXCLUDED_PROPERTY_NAMES` / `findUntrustworthyUnits` are ported
-**verbatim** from `src/lib/doorloop/address-matcher.mjs`. **If that file's matching
-rules change, change them here too** or the report and the matcher will disagree.
-
-**Two copies of the matching rules, not three (2026-08-08).** The rules used to be
-duplicated by hand between the CLI and the n8n node; adding the panel's Link button
-would have made a third, so the CLI's copy was extracted instead:
-
-```
-scripts/doorloop-match.mjs (CLI) ─┐
-                                  ├─→ src/lib/doorloop/address-matcher.mjs
-dashboard Link button ────────────┘        (one shared implementation)
-
-n8n/doorloop-recon-report.js ─────→ manually-synced twin (Code node can't import)
+node scripts/doorloop-recon-verify.mjs [--live]     # the report; --live diffs deployed jsCode
+node scripts/doorloop-recon-cases.mjs               # 21 assertions
+node scripts/doorloop-match.mjs [--apply] [--accept-near-matches]
 ```
 
-The n8n twin is now the **only** copy anyone maintains by hand. The module is `.mjs`,
-not `.ts`, so the CLI imports it with no build step; Next.js types come from the
-colocated `address-matcher.d.ts`. The extraction was verified behaviour-preserving by
-diffing the CLI's full dry-run output before and after — **byte-identical**
-(`exact=54 near=8 blocked=7 ambiguous=0 collisions=0 dl-only=3 sheet-only=15
-skipped=4`).
-
-```bash
-node scripts/doorloop-recon-verify.mjs [--live]   # --live also diffs deployed jsCode
-node scripts/doorloop-recon-cases.mjs             # 21 assertions
-node scripts/n8n-add-doorloop-recon.mjs [--apply] [--revert --apply]
-```
-Backup `n8n/BEFORE-doorloop-recon/`.
-`doorloop-recon-cases.mjs` exists because **live data leaves `link` and `remove`
-empty**, so a live run proves nothing about the two categories most likely to cause
-harm if wrong. It re-runs against live data with small in-memory mutations (clear a
-row's id; point one at a dangling id; fake a truncated page; omit the manual trigger).
-
-**Known divergence from `doorloop-match.mjs`, intentional.** The matcher reports 7
-blocked units; the report shows 6. `7636 Winchester st B` is already linked **by id**,
-so the report skips it — a direct id link doesn't depend on address matching. The
-matcher answers "is this address matchable?"; the report answers "is this linked?".
-
-**The `link` category was emptied 2026-08-07** by
-`node scripts/doorloop-match.mjs --apply --accept-near-matches`, writing
-`doorloop_property_id` to 8 rows (column Z only, zero overwrites, `ambiguous=0
-collisions=0`). Now 61 linked / 6 unlinked; `Compute Occupancy` writes 61 rows
-instead of 53. The 8 were exact address matches whose id had never been written. The
-eight *near-match* pairs the matcher reports already held correct ids and needed no
-write — the matcher keeps listing them because their sheet address differs from
-DoorLoop's by a street suffix, which id-linking doesn't change.
-
-> **Linking is not always status-neutral.** `296 Blue Haw Drive` and
-> `12 Lighthouse Drive` went `vacant` → `occupied`, because linking handed their
-> status to DoorLoop. Neither had a `status_override`. Correct outcome — but run
-> `doorloop-sync-preview.mjs` before linking rows whose manual status you care about.
-
-**Next.js side:** `src/app/api/properties/sync-doorloop/route.ts` now *waits* for the
-workflow rather than firing and forgetting, so it carries `maxDuration = 60` and a 45s
-`AbortSignal.timeout`. The ceiling is Sheets quota retries (5 × 15s), not normal
-runtime — a live run is ~2s. On timeout it returns
-`{started: true, report: null, timedOut: true}`: the sync is still running in n8n and
-its write still lands, only the report is abandoned.
-
-Verified live 2026-08-07, executions 14669/14670: both `success`, all 8 nodes, webhook
-returned the full report over HTTP in ~2.1s, matching `doorloop-recon-verify.mjs`
-exactly (`create=5 link=0 remove=0 known=16`). **Not yet observed:** an `Every Hour`
-run after the patch.
-
-### Acting on the report from the panel (2026-08-08)
-
-The panel is no longer read-only advice. Three actions, both new routes
-`requireRole(["admin"])`:
-
-| Action | Route | Notes |
-|---|---|---|
-| **Link all N** | `POST /api/properties/doorloop/link` | Recomputes matching server-side from live DoorLoop (not the browser's report), writes `doorloop_property_id` for every exact **and** near match not already holding it. **409** if anything is ambiguous or a row is claimed by two units — same refusal the CLI makes. |
-| **Add** | `POST /api/properties/doorloop/add`, one `unit_id` | Creates the property, then links it. |
-| **Remove** | the **existing** `[propertyKey]/deactivate` | No new route; it already does deactivate + audit + webhook. Confirmation dialog in front. |
-
-**Add goes through `createProperty()` deliberately** — that is what appends the row
-the two-step way the spill formulas need, writes the audit entry, and lets the route
-fire `property.created`. A raw sheet write would produce a row that looks right and
-is never provisioned.
-
-> **`doorloop_property_id` is still not in `SAFE_COLUMNS`, and must not be added.**
-> Keeping it out is what stops an ordinary edit clobbering DoorLoop's link. The link
-> write goes through `setDoorLoopUnitIds()` — a separate single-column write reachable
-> only from these two admin routes, never `updateProperty(patch)`. It addresses rows
-> by **row index, not `property_key`**, because a just-appended row's key comes from a
-> spill formula that may not have evaluated yet.
-
-**`owner_label` is resolved from DoorLoop.** A Property carries only
-`owners: [{ owner: <id> }]` with no name inline, so Add spends one `GET /owners/{id}`.
-Company owners get `companyName`, individuals `fullName`; no owner falls back to the
-street address. The owner record's own `name` field is deliberately **not** used — for
-companies it is the combined `"127 West End LLC | Justin Artis"` form. **Do not use
-the `/owners` list endpoint** (gotcha 20).
-
-**One action at a time, panel-wide.** Any click disables every other button until it
-resolves. Not cosmetic: the Sheets quota is shared per GCP project, and the
-provisioning workflow processes one row at a time. **This lock is necessary but not
-sufficient** — it serialises HTTP requests, while the provisioning trigger batches by
-wall-clock minute. See "Multi-row provisioning fix".
-
-**Refreshing deliberately avoids "Sync now"** (60s debounce, meant for full occupancy
-runs). A completed action drops its item from the report in local React state and
-reloads the table. `Link all` clears the whole section, because the route recomputes
-live and may link a different set than the report listed.
-
-New env requirement: **`DOORLOOP_API_KEY` in the Vercel project.** Nothing in the
-Next.js app called DoorLoop before this — only n8n and the CLI scripts.
-
-### Multi-row provisioning fix — `MULTI_ROW_MARKER` (2026-08-09, applied)
-
-Found immediately after the Add button shipped, by adding three properties in quick
-succession: two provisioned, the third never would have.
-
-`TGGhSkTSZGYPrZo9 New Property → Provision` uses a Google Sheets `rowAdded` poll
-(~1/min), so **two properties added inside one minute arrive as two items**. Two Code
-nodes then collapsed the stream: `Build Cal.com Body`
-(`$('Google Sheets - Watch Properties').first()`) and `Prepare Sheet Update` (three
-more `.first()` calls). Execution **15828**: `Watch=2 → Skip=2 → Get Event Types=2 →
-Build Cal.com Body=1 → … → Update Properties=1`. `5815 Hume Ave` was dropped, and
-**`rowAdded` never re-emits an existing row**, so it sat at `pending_create` with no
-error anywhere. Gotcha 11 in two places; see also gotcha 21.
-
-**Not caused by the Add button** — the defect predates it and the same collision was
-possible via the Add Property dialog; Add just makes it easy to hit.
-
-Both nodes now loop. Index alignment across `Build Cal.com Body → Create Event Type →
-Create Resource → Prepare Sheet Update` is safe, verified against the live workflow
-first: all nodes `runOnceForAllItems`, none `executeOnce`, strictly linear 1:1 chain.
-
-```bash
-node scripts/provision-multi-row-verify.mjs           # offline, against deployed jsCode
-node scripts/n8n-fix-provision-multi-row.mjs [--apply] [--revert --apply]
-```
-
-Backup `n8n/BEFORE-provision-multi-row/`. The verifier runs the **deployed** code
-against a synthetic two-row payload — run it before the fix and it fails (the bug
-reproduced against real code, not described); after, 13 assertions pass, including
-that both rows get distinct slugs, titles, addresses, `cal_event_type_id`s and
-`google_resource_id`s. Applied `active=true`, nodes 8 → 8.
-
-**Recovering the stuck row.** Rewound the trigger's own cursor by exactly one —
-`staticData["node:Google Sheets - Watch Properties"].lastIndexChecked` `72` → `71` via
-a workflow PUT — so the next poll re-emitted only that row. Execution **16050**
-provisioned it (`cal_event_type_id=6606658`). Rewinding further re-emits
-already-provisioned rows; `Skip If Already Provisioned` would catch them, but there's
-no reason to lean on it.
-
-> **Sync now does not provision anything.** It runs the DoorLoop *occupancy* sync,
-> which only writes status columns. A new property appearing to be "fixed by Sync now"
-> is coincidence with the 1-minute provisioning poll — check `TGGhSkTSZGYPrZo9`
-> executions, not the sync.
-
-### owner_label convention (2026-08-09)
-
-**The owner's name is the convention everywhere** — client decision, after Add started
-writing real owner names and made the drift visible. `owner_label` had three forms:
-the street address (`createProperty`'s fallback, most legacy rows), a DoorLoop
-*property* name (`Tyler Portfolio`, `127 West End LLC`), and the actual owner name.
-
-```bash
-node scripts/properties-owner-label-backfill.mjs [--apply] [--revert --apply]
-```
-
-**61 written, 5 already correct, 6 left alone**, column B only. Journal of every prior
-value in `n8n/BEFORE-owner-label-backfill/journal.json`. Re-running reports
-`change=0 already correct=66`, so it is idempotent. The naming rule is identical to
-`resolveOwnerLabel` in `src/lib/doorloop/client.ts` so backfilled and newly-added rows
-agree — **if one changes, change the other.**
-
-- **The 6 unlinked rows keep their old labels** (15, 41, 42, 57, 61, 62 — `129 West
-  End`, `432`/`438 Farrell`, `7309 Stoney Moss Way`, `109 Hidden Forest Court`,
-  `312 Sabal Palmetto ct`). No `doorloop_property_id`, nothing to resolve from. Same
-  blocked/orphan rows the report already lists — residual inconsistency is that data
-  gap, not the backfill.
-- **A portfolio can split across owners.** `Hayden's Portfolio` → `Hayden Albert` for
-  `36 Peppertree Lane` / `100 English rd` but **AK Capital** for `42 Peppertree Lane`.
-  Correct per DoorLoop, and exactly what the portfolio label was hiding.
-
-Not re-synced hourly — one-off. It feeds the properties-page owner filter and
-`Build Cal.com Body`'s `fallbackBase`/`address` when `cal_event_type_name` is empty,
-so future drift shows up in new cal.com titles, not existing ones.
+Requires **`DOORLOOP_API_KEY` in the Vercel project** for the dashboard routes.
 
 ## Cal.com Reminder System
 
@@ -2611,7 +1630,7 @@ independent webhook subscriptions, so a second one was registered
   > which only works if that node already executed; a parallel branch gave n8n no
   > edge forcing that order and the first live test failed exactly this way.
   > `Read Cal Bookings` carries `executeOnce: true` because chaining it after a
-  > Settings read (one item per row) would otherwise fan it out N times (gotcha 4).
+  > Settings read would otherwise fan it out N times (gotcha 4).
 
 - **Reconfirm Webhook** (`41HFRjgWiPEFJwTU`) — `GET /webhook/reconfirm?token=...`.
   Cal.com has no native "guest reconfirmed" status, so this is the from-scratch
@@ -2639,7 +1658,6 @@ booking was made is **skipped permanently** rather than fired on the next tick.
 
 Symptom it fixes: an 8:00am showing booked at 8:32pm the night before got its "24 hour
 reminder" at T-11.4h, two minutes after the confirmation text.
-`now >= startMs - offsetHours` is trivially true when the target is in the past.
 
 ```js
 if (Number.isFinite(bookedMs) && bookedMs > targetMs) continue;
@@ -2671,215 +1689,142 @@ Marker `LATE_REMINDER_MARKER`, backup `n8n/BEFORE-late-reminder-guard/`.
 
 ### Cron Poll send isolation (2026-08-06, was launch-blocking)
 
-Confirmed live: a booking with a syntactically invalid phone reached its
-`reminder_2h_sms`. `Send SMS` threw (Twilio 21211) and n8n's default aborts the
-**whole execution** — so `Mark Step Sent` never ran, the flag stayed `false`, and
-because `Find Due Notifications` re-selects any unsent-and-due row, **the next tick
-crashed on the same booking**. Confirmed as a real infinite crash loop across two
-consecutive ticks (13273, 13277). Bad phone/email data isn't an edge case in a live
-CRM; left unfixed this turns one bad data point into a standing denial-of-service
-against reminders for **every** lead, forever.
+A booking with an invalid phone reached its `reminder_2h_sms`, `Send SMS` threw, and
+n8n's default aborted the **whole execution** — so `Mark Step Sent` never ran and the next
+tick crashed on the same booking. A real infinite crash loop: one bad data point becomes a
+standing denial-of-service against reminders for **every** lead, forever.
 
-**Fix, three parts:** (1) `Send Email`/`Send SMS` get
-`onError: "continueRegularOutput"`; (2) a new `Send Failed?` IF routes errors to
-`Build Send-Failure Record` → `Mark Step Failed` → `Send Failure Alert`, then rejoins
-`Loop Back` so `SplitInBatches` always advances and one bad recipient can't starve the
-rest of the batch; (3) `Mark Step Failed` writes the sentinel `"failed"` into the
-step's own `sentCol`, and `Find Due Notifications` treats `"failed"` as resolved — so
-a permanently-bad recipient gives up after **exactly one** attempt instead of
-crash-looping. **Deliberately no retry** — malformed contact info doesn't self-heal,
-and one attempt plus a human alert is simpler and safer than a retry counter across
-~19 step keys. Alerts go to `cal_send_failure_alert_phone`.
+**Fix, three parts:** `Send Email`/`Send SMS` get `onError: "continueRegularOutput"`;
+`Send Failed?` routes errors to `Build Send-Failure Record` → `Mark Step Failed` →
+`Send Failure Alert`, rejoining `Loop Back` so `SplitInBatches` always advances; and
+`Mark Step Failed` writes the sentinel `"failed"`, which `Find Due Notifications` treats
+as resolved, so a bad recipient gives up after **exactly one** attempt. **Deliberately no
+retry** — malformed contact info doesn't self-heal. Alerts go to
+`cal_send_failure_alert_phone`.
 
 > **A bug in the fix itself, caught in testing, not shipped.** The first
-> `Send Failure Alert` read `={{ $json.from_number }}` etc. Live test reproduced a
-> **second** crash — Twilio 21604, "A 'To' phone number is required" — aborting the
-> execution and starving the good booking behind it: *the exact bug this fix exists to
-> prevent, reintroduced one node downstream, in the node added to fix it.* Root cause:
-> `$json` there is `Mark Step Failed`'s HTTP response, not the alert data (gotcha 12).
-> Fixed with named-node references **and** `onError` on the alert node itself. See
-> gotcha 19.
+> `Send Failure Alert` read `$json` — which there is `Mark Step Failed`'s HTTP response
+> (gotcha 12) — reproducing the exact bug this fix exists to prevent, one node downstream,
+> in the node added to fix it. Fixed with named-node references **and** `onError` on the
+> alert node itself (gotcha 19).
 
-```bash
-node scripts/n8n-add-cron-send-isolation.mjs [--apply] [--revert --apply]
-```
-Backup `n8n/BEFORE-cron-send-isolation/`. Verified live 2026-08-06, execution 13430:
-two bookings (one bad phone, one good) with due steps in the same poll — all 4 items
-processed in **one** execution with no error; the bad SMS was isolated, marked
-`"failed"`, and a real alert SMS delivered. The next tick showed **zero** due items
-for it — no crash loop.
+`node scripts/n8n-add-cron-send-isolation.mjs [--apply] [--revert --apply]`, backup
+`n8n/BEFORE-cron-send-isolation/`. Verified live 2026-08-06.
 
 ### Consults booked from the public link have NO phone — every SMS step fails
 
-**Observed live 2026-08-28**, booking `3bjyKisHCT5skSgwRmP2g7` (Isaac Usen):
-
-```
-reminder_2h_email_sent   TRUE    18:15:33   <- he DID get the reminder, by email
-reminder_2h_sms_sent     failed  18:15:34   <- Twilio rejected an empty To
-host_sms_1h_sent         TRUE    19:15:33   <- Justin's SMS fine, different recipient
-```
-
-`invitee_phone` is only populated from Cal.com `metadata.phone`, which is set by
-the **identity-verified per-property showing links** the inquiry flow builds. The
-**consult** URL (`cal_consult_url`) is a generic public link carrying no
-metadata, and its booking page does not ask for a phone. So **every consult
-booked from the website has no phone, and every SMS step for it will fail.**
-2 of 3 non-test bookings are already in this state, both consults.
-
-The send isolation handled it exactly as designed: the email twin of the same
-reminder succeeded a second earlier, the SMS was marked with the `"failed"`
-sentinel so it cannot crash-loop, one alert fired, and the rest of the schedule
-kept running. **The lead was not missed** — only the SMS duplicate.
-
-Which steps still fire depends on the anchor, and this is the useful part:
+`invitee_phone` is only populated from Cal.com `metadata.phone`, set by the
+**identity-verified per-property showing links** the inquiry flow builds. The **consult**
+URL (`cal_consult_url`) is a generic public link carrying no metadata, and its booking
+page does not ask for a phone. So **every consult booked from the website has no phone,
+and every SMS step for it will fail** — 2 of 3 non-test bookings are already in this
+state. The send isolation handled it as designed and **the lead was not missed**, only the
+SMS duplicate: the email twin succeeded, the SMS was marked `"failed"`, one alert fired.
 
 | Anchor | Behaviour on a phoneless booking |
 |---|---|
 | `start` (24h, 2h, reconfirm) | suppressed permanently by the **late-booking guard** when booked after the target time — no alert |
 | `end` (followup 1/2/3/7-day) | deliberately **unguarded** so they catch up → each fires, fails, and alerts |
 
-Isaac would therefore have generated **2 more failure alerts** (3-day and
-7-day SMS). Fixed below before either fired.
-
+That alert noise is what the no-phone skip below removes.
 ### No-phone SMS skip — `NO_PHONE_SKIP_MARKER` (2026-08-30)
 
-An invitee SMS step whose recipient is **empty** is now marked
-`skipped_no_phone` instead of being attempted. An empty phone can never
-succeed, so the alert carried no actionable information. A **malformed**
-phone still attempts and still alerts — that IS a data error a human can fix.
+An invitee SMS step whose recipient is **empty** is marked `skipped_no_phone` instead of
+being attempted — an empty phone can never succeed, so the alert carried no actionable
+information. A **malformed** phone still attempts and still alerts: that IS a data error
+a human can fix.
 
 ```
 Build Message -> Missing Recipient? [true]  -> Mark Step Skipped -> Loop Back
                                    [false] -> Channel?   (unchanged)
 ```
 
-> **Two corrections to the design as originally sketched here — both would
-> have shipped bugs.**
+> **Two corrections to the design as originally sketched — both would have shipped
+> bugs.**
 >
-> 1. *"`Find Due Notifications` already treats any non-`false` value as
->    resolved, so a new sentinel needs no other changes."* **False.** The
->    deployed check is an explicit two-value allowlist —
->    `sentColValue === 'true' || sentColValue === 'failed'`. A
->    `skipped_no_phone` sentinel would have been **inert**, and because
->    end-anchored follow-ups have no upper bound the step would have
->    re-queued every 5 minutes **forever** — the exact crash-loop shape the
->    sentinel exists to prevent. The patch adds it to that allowlist.
-> 2. *Skip on `channel === 'sms'`.* That would have **silently killed the
->    host's SMS.** `host_sms_1h` is channel `sms` but `Build Message` sends it
->    to `settings.cal_justin_phone`, not `invitee_phone` — it succeeds on
->    exactly the bookings whose invitee SMS fail (see the table above). The
->    skip is therefore keyed on the **recipient**, not the channel.
+> 1. *"`Find Due Notifications` already treats any non-`false` value as resolved."*
+>    **False.** The deployed check is an explicit two-value allowlist —
+>    `sentColValue === 'true' || sentColValue === 'failed'`. A `skipped_no_phone`
+>    sentinel would have been **inert**, and because end-anchored follow-ups have no
+>    upper bound the step would have re-queued every 5 minutes **forever**. The patch
+>    adds it to that allowlist.
+> 2. *Skip on `channel === 'sms'`.* That would have **silently killed the host's SMS.**
+>    `host_sms_1h` is channel `sms` but goes to `settings.cal_justin_phone`, not
+>    `invitee_phone` — it succeeds on exactly the bookings whose invitee SMS fail. The
+>    skip is keyed on the **recipient**, not the channel.
 
-Rules carry `recipient`: `host_sms_1h` → `'host'`, `nicole_2h` → `'nicole'`,
-everything unmarked defaults to `'invitee'`. Only `channel === 'sms' &&
-recipient === 'invitee' &&` an empty `to` is skipped.
+Rules carry `recipient`: `host_sms_1h` → `'host'`, `nicole_2h` → `'nicole'`, everything
+unmarked defaults to `'invitee'`. Only `channel === 'sms' && recipient === 'invitee' &&`
+an empty `to` is skipped. **An empty `cal_justin_phone` deliberately still attempts and
+still alerts** — that is a Settings misconfiguration affecting *every* booking, and
+silently marking it resolved one booking at a time would bury it.
 
-> **An empty `cal_justin_phone` deliberately still attempts and still alerts.**
-> That is a Settings misconfiguration affecting *every* booking, not a property
-> of one — silently marking it resolved one booking at a time would bury it.
+`Mark Step Skipped` writes into `$('Build Message').item.json.range`, like
+`Mark Step Sent` / `Mark Step Failed`, but carries `onError: continueRegularOutput`:
+nothing reads its output, and a failed mark must not starve the batch. Every path
+rejoins `Loop Back`.
 
-`Mark Step Skipped` writes into `$('Build Message').item.json.range`, the same
-way `Mark Step Sent` / `Mark Step Failed` do. Unlike those two it carries
-`onError: continueRegularOutput`: nothing reads its output, and a failed mark
-must not starve the batch — worst case the next tick re-evaluates, which is
-harmless because no send is attempted either way. Every path rejoins
-`Loop Back`, so `SplitInBatches` always advances.
-
-> **Gotcha 19.** `Channel?` reads `$json.channel` from its immediate input, so
-> inserting ahead of it is only safe because an IF passes items through
-> unchanged. `Mark Step Sent`, `Mark Step Failed` and `Build Send-Failure
-> Record` all reach back via `$('Build Message').item`, which the insertion
-> preserves. The verifier asserts all four.
+> **Gotcha 19.** `Channel?` reads `$json.channel` from its immediate input, so inserting
+> ahead of it is only safe because an IF passes items through unchanged.
+> `Mark Step Sent`, `Mark Step Failed` and `Build Send-Failure Record` all reach back via
+> `$('Build Message').item`, which the insertion preserves. The verifier asserts all four.
 
 ```bash
 node scripts/n8n-add-no-phone-skip.mjs [--apply] [--revert --apply]
 node scripts/no-phone-skip-verify.mjs                      # 53 assertions
 ```
-Backup `n8n/BEFORE-no-phone-skip/`. **`--revert` does not rewrite rows already
-stamped `skipped_no_phone`** — they become unresolved again and those SMS
-steps will re-fire (and fail). The script says so when reverting.
+Backup `n8n/BEFORE-no-phone-skip/`. **`--revert` does not rewrite rows already stamped
+`skipped_no_phone`** — they become unresolved again and those SMS steps will re-fire
+(and fail).
 
-**Verified live 2026-08-30, execution 29918.** A test booking was appended
-whose *only* unresolved step was a phoneless invitee SMS follow-up — every
-email step pre-marked `TRUE`, every start-anchored step days past — so no send
-was possible in either direction. The tick ran:
-
-```
-Find Due Notifications=1 | Any Due?=1 | Process One at a Time runs=2
-Build Message=1 | Missing Recipient?=1 | Mark Step Skipped=1 | Loop Back=1
-```
-
-`Channel?`, `Send SMS`, `Send Failed?` and `Send Failure Alert` **never ran**,
-the sentinel landed in the sheet, and the batch completed. Test row deleted
-afterwards.
-
-> **Constructing the fixture was the only way to see it today.** Isaac's next
-> real SMS step is not due until ~8/31 21:00Z, and the verifier's synthetic
-> cases prove the logic but not the wiring under n8n's own engine.
-
+**Verified live 2026-08-30, execution 29918**, on a constructed fixture whose *only*
+unresolved step was a phoneless invitee SMS follow-up: `Mark Step Skipped=1`, while
+`Channel?`, `Send SMS` and `Send Failure Alert` **never ran**. Test row deleted after.
 ### Immediate Sends booking idempotency (2026-08-06, was launch-blocking)
 
-Confirmed live: replaying a captured `BOOKING_CREATED` payload — the kind of
-at-least-once redelivery any webhook sender can do on a timeout — produced **two**
-`Cal Bookings` rows for one `booking_uid` and sent the confirmation and Nicole emails
-twice. Two rows for one event also doubles every subsequent reminder and follow-up.
+Replaying a captured `BOOKING_CREATED` payload — at-least-once redelivery any webhook
+sender does on a timeout — produced **two** `Cal Bookings` rows for one `booking_uid` and
+sent the confirmation and Nicole emails twice, which also doubles every subsequent
+reminder and follow-up.
 
-- **CREATED**: new `Read Cal Bookings (Dedup Check)` → `Check Duplicate (Created)` →
-  `Already Recorded?` before `Classify & Build Row`. True → `Log Duplicate Skip`,
-  terminal. This is the single choke point for both sends.
+- **CREATED**: `Read Cal Bookings (Dedup Check)` → `Check Duplicate (Created)` →
+  `Already Recorded?` before `Classify & Build Row`; true → `Log Duplicate Skip`,
+  terminal. Single choke point for both sends.
 - **CANCELLED**: audited rather than assumed safe — it had **no** guard either. Same
-  shape, checking the row's own `cancellation_sent` flag.
-- **RESCHEDULED**: audited, deliberately **not** patched. It sends no email/SMS, so a
-  replay just re-writes the same time and re-resets the flags. The only exposure is a
-  narrow race (if a reminder fired between the original and the retry, the retry
-  un-marks it). Retries land within seconds-to-minutes and the cron runs every 5
-  minutes, so the window is small and the consequence is one duplicate reminder — far
-  lower blast radius than a duplicate booking.
+  shape, on the row's own `cancellation_sent` flag.
+- **RESCHEDULED**: audited, deliberately **not** patched — it sends nothing, so a replay
+  just re-writes the same time; the only exposure is a narrow race worth one duplicate
+  reminder.
 
 > **A bug in the fix itself, caught in testing, not shipped.** The first
-> `Check Duplicate (Created)` returned only `{ uid, alreadyRecorded }`. The appended
-> row then had `event_category: "showing"` (should be walkthrough) and
-> `is_test: false` (it *was* test-gated). Root cause: `Classify & Build Row` reads
-> `$input.first().json` — its **immediate** input — which the new node had replaced
-> with a slim object. Fixed by spreading the original fields back in
-> (`{ ...b, alreadyRecorded }`). `Check Already Cancelled` did **not** need this:
-> `Build Cancellation Email` already reads via a named lookup. See gotcha 19.
+> `Check Duplicate (Created)` returned only `{ uid, alreadyRecorded }`, so the appended
+> row had the wrong `event_category` and `is_test` — `Classify & Build Row` reads
+> `$input.first().json`, its **immediate** input (gotcha 19). Fixed by spreading the
+> original fields back in.
 
-```bash
-node scripts/n8n-add-booking-idempotency.mjs [--apply] [--revert --apply]
-```
-Backup `n8n/BEFORE-booking-idempotency/`. Verified live 2026-08-06 for both CREATED
-and CANCELLED replays: the replay routed to `Log Duplicate Skip`, no second email,
-exactly one row.
+`node scripts/n8n-add-booking-idempotency.mjs [--apply] [--revert --apply]`, backup
+`n8n/BEFORE-booking-idempotency/`. Verified live for both replays.
 
 > **Known limitation surfaced (not introduced) by this testing:** firing CREATED twice
-> with *no* delay — two genuinely concurrent deliveries — reproduced the same Sheets
-> append race as Inquiries/Cal Bookings (gotcha 15); one append was silently lost. This
-> fix targets redelivery-after-timeout; the near-instant concurrent case remains the
-> same accepted risk as everywhere else in this system.
+> with *no* delay reproduced the Sheets append race (gotcha 15); one append was silently
+> lost. The near-instant concurrent case remains the same accepted risk as everywhere
+> else.
 
 ### Same-time SMS merging — considered, not built
 
-Auditing every SMS rule turned up exactly **one** real collision: a showing at T-1h
-gets the `reconfirm_sms` (Cron Poll, `Cal Bookings`) and the access code SMS (Access
-Code Dispatch, `Showings`) at the same moment, to the same phone. Nothing else
-overlaps — the consult's steps are at distinct times, and `host_sms_1h` goes to a
-different recipient. Merging would couple two independent crons across two tabs for a
-single case. **The free fix, if ever needed, is to move
-`cal_showing_reconfirm_offset_hours` off 1 hour.**
-
-> Worth knowing if revisited: with both at T-1h the reconfirm is **not** gating access
-> — the code arrives regardless. If the intent is ever "confirm before you get the
-> code", the fix is an earlier reconfirm offset, not a merge.
-
+Exactly **one** real collision exists: a showing at T-1h gets the `reconfirm_sms` (Cron
+Poll, `Cal Bookings`) and the access code SMS (Access Dispatch, `Showings`) at the same
+moment, to the same phone. Merging would couple two independent crons across two tabs for
+one case. **The free fix, if ever needed, is to move
+`cal_showing_reconfirm_offset_hours` off 1 hour.** Note the reconfirm is **not** gating
+access — the code arrives regardless.
 ### Test gate
 
 No FUB `firstName` to gate on here. A booking is a test booking if Cal.com
 `metadata.fub_person_id` is `"2545"` (Test Test9) **or** the attendee email is
-`merritt.andrewt@gmail.com` (Andrew's manual bookings). Applied in
-`Classify & Build Row`, mirrored in the cancel/reschedule branches and in
-`Find Due Notifications` (which reads the `is_test` column set at log time). Real
-bookings are still logged; only their sends are gated.
+`merritt.andrewt@gmail.com`. Applied in `Classify & Build Row`, mirrored in the
+cancel/reschedule branches and in `Find Due Notifications` (which reads the `is_test`
+column set at log time). Real bookings are still logged; only their sends are gated.
 
 ### Settings keys
 
@@ -2898,17 +1843,14 @@ scripts.
 
 ### Judgment calls made during this build — flagged, not buried
 
-- **Rental Showing "Calendar invitation"** → sent as a normal confirmation email.
-  Calendly's calendar-invite mode was a workaround for not syncing calendars; Cal.com
-  already creates a real calendar event, so a synthetic invite would be redundant.
+- **Rental Showing "Calendar invitation"** → sent as a normal confirmation email;
+  Cal.com already creates a real calendar event, so a synthetic invite is redundant.
 - **Reconfirm timing for walkthrough/consult** (`cal_reconfirm_offset_hours`, 48h) —
-  the spec has no offset for these two. 48h gives response time without colliding
-  with the 24h reminder. Adjust freely.
-- **Per-category toggles instead of one per step** — the spec asked for a toggle per
-  notification step (~19 keys). Scaled to one master plus one per category.
+  the spec has no offset for these two. Adjust freely.
+- **Per-category toggles instead of one per step** — the spec asked for ~19 keys.
 - **Cancellation copy for Self Guided Rental Showing** — the spec has none; reuses the
-  consult's wording rather than inventing new copy.
-- **Reschedule sends no notice** — the spec has no copy and it wasn't asked for.
+  consult's wording. **Reschedule sends no notice** — no copy exists and it wasn't asked
+  for.
 - **Reconfirm/cancel links** point at `https://cal.com/booking/{uid}` rather than a
   bespoke deep link, to avoid inventing an unverified URL shape.
 
@@ -2921,287 +1863,254 @@ per-property cal.com showing link and hasn't booked a time. Client request
 **Created INACTIVE. Activating is a separate, deliberate step** — run
 `cal-booking-reminders-preview.mjs` first and read the due list.
 
-Reminders on days **1–4** after the link (day 0), one per day, stopping the
-moment they book that property. Cadence, send hour, hourly-tick-plus-in-code-ET-hour
-check, 20h floor and calendar-day arithmetic are all deliberately identical to
-`R3rhuCYEGoBFArBa` — including the 2026-08-30 day-calc fix, so a link sent at
-3pm produces its first nudge at 10am the **next** morning rather than the one
-after.
+Reminders on days **1–4** after the link (day 0), one per day, stopping the moment
+they book that property. Cadence, send hour, hourly-tick-plus-in-code-ET-hour check,
+20h floor and calendar-day arithmetic are all deliberately identical to
+`R3rhuCYEGoBFArBa` — including the 2026-08-30 day-calc fix.
 
 ### "Have they booked?" — joined on event type id, never on address
 
 The obvious join is `Cal Bookings.property_address` against the Inquiries row's
-address. **It matches nothing.** Inquiries stores what FUB sent
-(`130 Sandtrap Rd`); Cal Bookings stores the cal.com event type title
-(`130 Sandtrap Road`). Every live showing booking differs from its inquiry by a
-street suffix, so exact compare fails and fuzzy compare means a fourth copy of
-the address matcher.
+address. **It matches nothing.** Inquiries stores what FUB sent (`130 Sandtrap Rd`);
+Cal Bookings stores the cal.com event type title (`130 Sandtrap Road`). Every live
+showing booking differs from its inquiry by a street suffix, so exact compare fails
+and fuzzy compare means a fourth copy of the address matcher.
 
-The join runs `Cal Bookings.cal_event_type_id` → Properties → `property_key`
-instead. Verified live: all **73** Properties rows carry a `cal_event_type_id`,
-**no id is shared by two properties**, and every existing showing booking
-resolves to exactly one `property_key`. No address matching anywhere.
+The join runs `Cal Bookings.cal_event_type_id` → Properties → `property_key` instead.
+Verified live: all **73** Properties rows carry a `cal_event_type_id`, **no id is
+shared by two properties**, and every existing showing booking resolves to exactly one
+`property_key`. No address matching anywhere.
 
-The **person** side is deliberately permissive — `fub_person_id` **or** phone
-(last 10) **or** email. Missing a booking means nagging a customer who already
-booked; a false positive only cancels an optional nudge, so over-matching is
-the safe direction. Consequence worth knowing: several test contacts share
-Andrew's one phone number, so the phone arm can attribute a booking to the
-wrong test person. Harmless by construction, and real leads don't share phones.
+The **person** side is deliberately permissive — `fub_person_id` **or** phone (last
+10) **or** email. Missing a booking means nagging a customer who already booked; a
+false positive only cancels an optional nudge, so over-matching is the safe direction.
+Consequence: several test contacts share Andrew's one phone number, so the phone arm
+can attribute a booking to the wrong test person. Harmless by construction.
 
 **A cancelled booking does not count as booked** — the lead is nudged again.
 
 ### `fub_person_id` on Cal Bookings — `CAL_BOOKINGS_PERSON_ID_MARKER`
 
-New column, populated on every new booking by `Append Booking Row`. The value
-was **already in hand and thrown away**: the inquiry flow enriches every
-per-property cal link with `metadata[fub_person_id]`, `Parse Booking` already
-reads it into `personId`, and `Classify & Build Row` already spreads it. This
-adds the mapping only — no new lookup, no extra API call, no change to any send.
+New column, populated on every new booking by `Append Booking Row`. The value was
+**already in hand and thrown away**: the inquiry flow enriches every per-property cal
+link with `metadata[fub_person_id]`, `Parse Booking` already reads it into `personId`,
+and `Classify & Build Row` already spreads it. This adds the mapping only — no new
+lookup, no extra API call, no change to any send. Closes the gap recorded under
+"Message logging to FUB — Known gap".
 
-Closes the gap recorded under "Message logging to FUB — Known gap", which named
-exactly this as the right shape.
+> Pre-existing bookings have an empty `fub_person_id` and always will — nothing
+> backfills it. They still resolve through the phone/email arms.
 
-> Pre-existing bookings have an empty `fub_person_id` and always will —
-> nothing backfills it. They still resolve through the phone/email arms, which
-> is how the preview detects 3 real bookings today.
-
-The builder **refuses to apply** if `Parse Booking` stops emitting `personId`
-or `Classify & Build Row` stops spreading it, rather than silently mapping an
-empty column forever.
+The builder **refuses to apply** if `Parse Booking` stops emitting `personId` or
+`Classify & Build Row` stops spreading it, rather than silently mapping an empty
+column forever.
 
 ### Go-forward only — `cal_booking_reminder_start_at`
 
-Same discipline as `inquiry_flow_start_at`: a row whose `link_sent_at` predates
-it is never nudged, so **activating the workflow messages nobody**. It defaults
-to the moment `cal-booking-reminders-setup.mjs` first runs. A missing or
-unparseable value fails **closed** (nothing due), not open.
+Same discipline as `inquiry_flow_start_at`: a row whose `link_sent_at` predates it is
+never nudged, so **activating the workflow messages nobody**. A missing or unparseable
+value fails **closed** (nothing due), not open.
 
-**Preview at setup time: 0 to nudge**, 19 rows `before_start_at`, 3 `booked`.
-
-> **Do not move it backwards without running the preview first.** It is the
-> only thing between activation and nudging the whole history of the tab —
-> 22 delivered links, most of them months old.
+> **Do not move it backwards without running the preview first.** It is the only thing
+> between activation and nudging the whole history of the tab — 22 delivered links,
+> most of them months old.
 
 ### State lives on the Inquiries row, not in new rows
 
-`booking_reminder_count`, `booking_reminder_last_at`, `booked_at`, updated in
-place and matched on `event_id`.
+`booking_reminder_count`, `booking_reminder_last_at`, `booked_at`, updated in place
+and matched on `event_id`.
 
-> **This is the opposite of the ID reminders, and the difference matters.**
-> That workflow appends a row per reminder because every Stripe `session_id`
-> it mints must stay findable by the Result Handler. Here there is no such
-> constraint, and appending would be **actively harmful**: the cal-link sweep
-> (`UbO0l29GtILMm1sP`) selects Inquiries rows on `link_sent === "false"`, so an
-> extra row per lead per day would put unsent-looking rows in front of the very
-> thing that sends cal links.
+> **This is the opposite of the ID reminders, and the difference matters.** That
+> workflow appends a row per reminder because every Stripe `session_id` must stay
+> findable by the Result Handler. Here appending would be **actively harmful**: the
+> cal-link sweep selects Inquiries rows on `link_sent === "false"`, so an extra row
+> per lead per day would put unsent-looking rows in front of the very thing that sends
+> cal links.
 
 `booked_at` is stamped by a parallel `Find Newly Booked` → `Any Booked?` →
-`Mark Booked` branch, so a booked row stops being re-evaluated and a human can
-see why it went quiet. It is idempotent — an already-stamped row is skipped.
+`Mark Booked` branch, so a booked row stops being re-evaluated and a human can see why
+it went quiet. It is idempotent.
 
 ### Only rows that actually received a link
 
-Selection requires `link_sent === "true"`. Every `skipped_*` value is a
-**recorded non-send** — there is no link in that lead's hands, so nudging them
-about one would be incoherent. The verifier asserts this for `false`,
-`skipped_test_gate`, `skipped_stage_gate` and `skipped_trash_permanent`.
+Selection requires `link_sent === "true"`. Every `skipped_*` value is a **recorded
+non-send** — there is no link in that lead's hands. The verifier asserts this for
+`false`, `skipped_test_gate`, `skipped_stage_gate` and `skipped_trash_permanent`.
 
 ### Guards, blunt on purpose
 
-Re-checked against FUB at send time, up to 4 days after the link. As with the
-ID reminders the guard may only ever **under**-send: any of the three trash
-tags with no expiry arithmetic, any trash-family stage, any stage outside
-`allowed_stages`, and an empty `allowed_stages` still means allow-everything.
-A Trash-invisible person (gotcha 18) returns `{}` and fails safe as
-`person_not_found`.
+Re-checked against FUB at send time, up to 4 days after the link. As with the ID
+reminders the guard may only ever **under**-send: any of the three trash tags with no
+expiry arithmetic, any trash-family stage, any stage outside `allowed_stages`, and an
+empty `allowed_stages` still means allow-everything. A Trash-invisible person (gotcha
+18) returns `{}` and fails safe as `person_not_found`.
 
-**Phone and email are read LIVE from FUB, not from the Inquiries row.** Not
-polish — required. That row's `phone` is a snapshot taken at inquiry time and
-demonstrably goes stale: person **2738** has `phone=""` on the inquiry row yet
-booked with a real number.
+**Phone and email are read LIVE from FUB, not from the Inquiries row.** Not polish —
+required. That row's `phone` is a snapshot taken at inquiry time and demonstrably goes
+stale: person **2738** has `phone=""` on the inquiry row yet booked with a real number.
 
-**A lead with only one channel still gets nudged on it** — `Has Phone?` /
-`Has Email?` route around the missing one rather than calling Twilio with an
-empty `To` (21604) or Gmail with an empty `to`. Only a lead with **neither**
-is skipped. In principle a phone always exists by this point (a cal link
-implies Stripe Identity, which implies a phone); the guard costs nothing and
-the live data shows the snapshot lying about it.
+**A lead with only one channel still gets nudged on it** — `Has Phone?` / `Has Email?`
+route around the missing one rather than calling Twilio with an empty `To` (21604) or
+Gmail with an empty `to`. Only a lead with **neither** is skipped.
 
 ### Sends are isolated, and every send is logged to FUB
 
-Both sends carry `onError: continueRegularOutput`, each followed by an
-`X Failed?` IF into a success or failure FUB note — the same four-note shape
-applied across the estate on 2026-08-30. Every note node also carries
-`onError: continueRegularOutput`: bookkeeping must never abort a send that
-already happened.
+Both sends carry `onError: continueRegularOutput`, each followed by an `X Failed?` IF
+into a success or failure FUB note — the same four-note shape applied across the
+estate on 2026-08-30. Every note node also carries `onError: continueRegularOutput`.
 
 The failure IFs are byte-shaped like the already-deployed `SMS Send Failed?`
-(`typeVersion 2.2`, `typeValidation: loose`, `rightValue` a **raw boolean**,
-no `singleValue`) — the shape an earlier attempt elsewhere got wrong, where
-the IF silently never matched.
+(`typeVersion 2.2`, `typeValidation: loose`, `rightValue` a **raw boolean**, no
+`singleValue`) — the shape an earlier attempt elsewhere got wrong, where the IF
+silently never matched.
 
 ### Loop safety and quota
 
-The send chain is **strictly linear** — `Build Nudge → Has Phone? → SMS →
-note → Has Email? → email → note → Mark Nudge Sent → Loop Back` — so
-`SplitInBatches` receives exactly one advance per lead. Two parallel branches
-both rejoining `Loop Back` would advance it twice and silently skip a lead.
-A guard rejection, a Twilio failure, a Gmail failure and a failed
-`Mark Nudge Sent` all still reach `Loop Back`.
+The send chain is **strictly linear** — `Build Nudge → Has Phone? → SMS → note →
+Has Email? → email → note → Mark Nudge Sent → Loop Back` — so `SplitInBatches`
+receives exactly one advance per lead. Two parallel branches both rejoining
+`Loop Back` would advance it twice and silently skip a lead.
 
-**The three heavy Sheets reads sit BEHIND the send-hour gate.** `Check Send
-Window` runs on `Read Settings` alone and the out-of-window branch is
-terminal, so 23 of every 24 ticks cost **one** read rather than four. The ID
-reminders read everything first and decide after; that shape was not copied,
-because this estate has already lost real leads to Sheets quota.
+**The three heavy Sheets reads sit BEHIND the send-hour gate.** `Check Send Window`
+runs on `Read Settings` alone and the out-of-window branch is terminal, so 23 of every
+24 ticks cost **one** read rather than four. The ID reminders read everything first
+and decide after; that shape was not copied, because this estate has already lost real
+leads to Sheets quota.
 
-It runs on the **main-project** Sheets credential (`Nre1YnwWyB67bKje`), not
-Project 2 — Project 2 also carries the Identity Gate, documented at ~17%
-`sheets_unavailable` bails, and there is no reason to add to it.
+It runs on the **main-project** Sheets credential (`Nre1YnwWyB67bKje`), not Project 2
+— Project 2 also carries the Identity Gate.
 
 ```bash
 node scripts/cal-booking-reminders-setup.mjs [--apply]        # columns + settings
 node scripts/n8n-add-cal-bookings-person-id.mjs [--apply] [--revert --apply]
 node scripts/n8n-create-cal-booking-reminders.mjs [--apply]   # creates it INACTIVE
 node scripts/n8n-create-cal-booking-reminders.mjs --emit-js <dir>
-node scripts/cal-booking-reminders-preview.mjs [--verbose]    # who would be nudged? read-only
+node scripts/cal-booking-reminders-preview.mjs [--verbose] [--start-at <iso>] [--with-guards]
 node scripts/cal-booking-reminders-verify.mjs                 # 108 synthetic assertions
 node scripts/n8n-fix-booking-join-live-identity.mjs [--apply] [--revert --apply]
-node scripts/cal-booking-reminders-preview.mjs --start-at <iso> --with-guards
 ```
 
-Backups `n8n/BEFORE-cal-booking-reminders/`,
-`n8n/BEFORE-cal-bookings-person-id/`.
+Backups `n8n/BEFORE-cal-booking-reminders/`, `n8n/BEFORE-cal-bookings-person-id/`.
 
-`cal-booking-reminders-verify.mjs` exists because the workflow is
-go-forward-only, so for the first days **nothing can be due** and the preview
-necessarily reports zero. That proves the filter can say no and nothing about
-the day arithmetic, the cap, the one-per-day rule, the per-property join, or
-any guard — which are exactly what causes harm if wrong. Same reasoning as
-`identity-reminders-verify.mjs` and `doorloop-recon-cases.mjs`. It asserts the
-deployed `connections` graph and the onError/executeOnce config as well as
-behaviour.
+`cal-booking-reminders-verify.mjs` exists because the workflow is go-forward-only, so
+for the first days **nothing can be due** and the preview necessarily reports zero.
+That proves the filter can say no and nothing about the day arithmetic, the cap, the
+one-per-day rule, the per-property join, or any guard. It asserts the deployed
+`connections` graph and the onError/executeOnce config as well as behaviour.
 
-> **Setup had to widen the sheet grid, not just append headers.** The
-> `Inquiries` tab shipped with `columnCount` exactly 13, so writing `N1:P1`
-> failed `Range exceeds grid limits` before any value was written. The setup
-> script now issues an `appendDimension` batchUpdate first. Expect this on any
-> tab whose grid was never over-provisioned.
+> **Setup had to widen the sheet grid, not just append headers.** The `Inquiries` tab
+> shipped with `columnCount` exactly 13, so writing `N1:P1` failed `Range exceeds grid
+> limits` before any value was written. The setup script now issues an
+> `appendDimension` batchUpdate first. Expect this on any tab whose grid was never
+> over-provisioned.
 
 ### Live-identity backstop — `BOOKING_JOIN_LIVE_IDENTITY_MARKER` (2026-08-31)
 
-**Found in live data before a single nudge was sent, and it would have nagged
-a real customer.** Erick Silva (2738) booked 104 Hawthorne Landing Dr on
-08-30. `Find Due Nudges` did not notice, because every arm of the person join
-was reading the wrong copy of his identity:
+**Found in live data before a single nudge was sent, and it would have nagged a real
+customer.** Erick Silva (2738) booked 104 Hawthorne Landing Dr on 08-30.
+`Find Due Nudges` did not notice, because every arm of the person join was reading the
+wrong copy of his identity:
 
 | Source | Phone | Email |
 |---|---|---|
 | Cal Bookings row | `12673449270` | `ericklagares.silva@gmail.com` (`fub_person_id` empty) |
-| Inquiries row | `""` — snapshot predates his phone | `1tvught…@convo.zillow.com` (Zillow relay) |
+| Inquiries row | `""` — snapshot predates his phone | Zillow relay |
 | **FUB person 2738** | **`2673449270`** — matches the booking | the relay |
 
-He would have received four days of "your showing isn't booked yet" about a
-showing he had already booked.
-
-**Not a one-off.** Zillow leads systematically arrive with no phone and an
-anonymised relay email — 54 of 76 Inquiries rows carry a relay — and they
-book with their real details. The join was right; its inputs were stale.
+**Not a one-off.** Zillow leads systematically arrive with no phone and an anonymised
+relay email — 54 of 76 Inquiries rows carry a relay — and they book with their real
+details. The join was right; its inputs were stale.
 
 `Find Due Nudges` now passes the property's booked identity tokens out as
-`booked_tokens`, and `Check Nudge Guards` — which **already** fetches the live
-FUB person, at no extra cost — re-tests them against the live phone/email and
-skips `already_booked_live:*`.
+`booked_tokens`, and `Check Nudge Guards` — which **already** fetches the live FUB
+person, at no extra cost — re-tests them against the live phone/email and skips
+`already_booked_live:*`.
 
-> Placed in the guard, not the selector, deliberately: the selector has no FUB
-> access, and adding one would mean a FUB call per candidate row on every
-> tick. The selector's own cheap check still runs first and still catches the
-> common case; the guard is the backstop for stale-snapshot leads.
+> Placed in the guard, not the selector, deliberately: the selector has no FUB access,
+> and adding one would mean a FUB call per candidate row on every tick. The selector's
+> own cheap check still runs first and still catches the common case.
 
-Verified live: the deployed guard now returns `already_booked_live:phone` for
-2738 while the two genuinely-unbooked leads still pass.
+Verified live: the deployed guard returns `already_booked_live:phone` for 2738 while
+the two genuinely-unbooked leads still pass.
 
 ### The backfill question — answered 2026-08-31, mostly "there is nobody"
 
-Client asked whether every already-ID-verified lead could start receiving
-these. Investigated before changing anything, and the intuitive change —
-moving `cal_booking_reminder_start_at` far back — **does almost nothing**,
-because the window is days 1–4 from `link_sent_at` and every older link is
-`window_over`. Widening to 2026-08-01 yields **3** candidate rows, not dozens.
+Client asked whether every already-ID-verified lead could start receiving these. Moving
+`cal_booking_reminder_start_at` far back **does almost nothing**: the window is days 1–4
+from `link_sent_at`, so every older link is `window_over`. Of the 19 unbooked delivered
+links, **16 belong to test contacts** (now in `Trash`, blocked three times over) and 3 are
+real and recent. The cutoff was set to **`2026-08-28T00:00:00.000Z`**, reaching exactly
+those 3; **2 would be messaged**, 1 blocked as already-booked.
 
-Of the 19 unbooked delivered links:
+**Two verified leads are stranded differently and reminders cannot help them** — they were
+never sent a link at all. 2712 Marchae McNair (`link_sent = skipped_test_gate`) was owed
+her **original** link and was **repaired 2026-08-31**
+(`scripts/_oneoff-2026-08-31-marchae-repair.mjs`, journal
+`n8n/BEFORE-2026-08-31-marchae-repair/`) — one row flipped to `false` and her person uri
+re-POSTed to the sweep webhook. 2726 Cheyla Zinck is verified with the same kind of row
+but is now `Tenants Awaiting Move In`: **housed. Do not contact.**
 
-- **16 belong to test contacts** — Test Test8/9/10/11/12/13 (persons 2525,
-  2545, 2633–2636), all now in stage `Trash`, all 25–32 days old. Blocked
-  three times over: `before_start_at`, `window_over`, and `trash_stage`.
-- **3 are real and recent**: 2738 Erick Silva (booked — now correctly
-  suppressed), 2747 Joseph Kincaid, 2748 Cassandra Ferra.
+> **The repair script re-checks five preconditions live and refuses if any fails** —
+> notably *"is the property still vacant?"*, which is the Cheyla Zinck guard. **A bulk
+> flip of `skipped_test_gate` would have texted her about a house she already lives in.
+> 45 live rows depend on that value staying inert — never flip it in bulk.**
 
-So the cutoff was moved to **`2026-08-28T00:00:00.000Z`**, which reaches
-exactly those 3 and no test rows. Verified after the write:
-**2 would be messaged**, 1 blocked as already-booked.
+**Not yet verified live.** The workflow is inactive and nothing has been due. Before
+activating: run the preview, confirm the due list, then watch the first 10am ET tick — it
+is also the first live proof of the FUB note logging, the Gmail send, and the booking join
+suppressing a lead who books mid-window.
 
-**Two verified leads are stranded in a different way, and reminders cannot
-help them** — they were never sent a link at all, so there is nothing to
-remind them about:
+## Message logging to FUB — every lead-facing send, success or failure (2026-08-30)
 
-| Lead | State | Action |
-|---|---|---|
-| 2712 Marchae McNair | verified, gated stage, row has a `cal_link` but `link_sent = skipped_test_gate` | genuinely owed her **original** link — a sweep repair, not a reminder |
-| 2726 Cheyla Zinck | verified, stage `Tenants Awaiting Move In` | **housed. Do not contact.** |
+Every lead-facing send now writes a FUB Note (success **and** failure) across four
+workflows: the Identity Gate's verification SMS, the Identity Reminders' SMS, the sweep's
+cal-link SMS **and** email, and Access Code Dispatch's code SMS. Two Cal.com workflows are
+**deliberately excluded** — see "Known gap".
 
-Marchae is the "verification is not coupled to deliverability" class.
-**Repaired 2026-08-31** — see below. Cheyla is not, and must not be.
+**The shape, everywhere:** `Send X (now onError: continueRegularOutput)` →
+`X Failed? (IF !!$json.error)` → true: a new `FUB - Log Note (X Failed)` node; false: the
+existing/new success note. Every note node reads pre-send data via a NAMED node reference
+(`.item` where a lead can have >1 item on the path — the sweep's two-property case,
+gotcha 11 — `.first()` only where the batch size is 1) and carries
+`onError: continueRegularOutput` itself.
 
-#### Marchae McNair (2712) — repaired 2026-08-31
+**Three of the four sends previously had NO `onError` at all**, meaning a Twilio failure
+aborted the whole execution — not just no note, no sheet row either. Adding it is a
+genuine behaviour change (crash → continue), approved 2026-08-30.
 
-She inquired on `165 River Hill Rd` at **08-21T18:38Z**, inside the pre-launch
-window (last `skipped_test_gate` inquiry 08-25T16:06, first delivered
-08-27T16:05), so `Resolve Inquiry` recorded the row and sent nothing. Working
-as designed — lifting a gate deliberately never fires a backlog.
+The sweep's SMS branch needed extra care: a naive `onError` would have let the existing
+3-way fan-out fire on the failure path too, and **`Mark Inquiry Sent` would have stamped
+`link_sent = true` for a message that was never delivered**, permanently hiding that
+inquiry from every future sweep. The failure branch is therefore terminal (just the note),
+leaving `link_sent = false` so the next sweep retries. Access Dispatch gets the same
+treatment: a failed send skips `Update Showings Row (Cron)` and goes straight to
+`Loop Back`.
 
-She then verified anyway, driven by the reminder workflow:
+**Known limitation, surfaced not fixed.** `Log to Identity Verifications` /
+`Log Reminder Row` hardcode `status: "pending"` regardless of branch, so a failed send
+still logs a `pending` row — the closest existing status, but not literally true. Before
+this change a failed *initial* verification SMS produced **no row at all**.
 
-```
-08-28 15:55  verification SMS   -> pending
-08-30 14:01  reminder #1        <- R3rhuCYEGoBFArBa converting a real lead
-08-31 11:54  VERIFIED           -> Result Handler replayed the sweep
-```
-
-Execution **30516** at 11:54:39 is that replay finding nothing: the sweep
-selects `link_sent === "false"` and hers read `skipped_test_gate`. **She
-verified into silence, that morning.**
-
-Repaired by flipping **one** row (`event_id 1835`) to `false` and re-POSTing
-her person uri to the sweep webhook — the same call the Result Handler makes,
-necessary because that handler had already fired and will not fire again.
-Execution **30560**: SMS to `+18392012646` and the cal-link email both sent,
-both `… Failed? items=0`, `Mark Inquiry Sent -> link_sent="true"`, FUB notes
-logged for both channels.
+**Known gap — Cal.com Immediate Sends / Cron Poll are NOT logged.** Neither calls the FUB
+API, and at the time `Cal Bookings` had no `fub_person_id` column. Client decision: skip
+these rather than add a live per-send FUB lookup (an extra call per message, with
+soft-match misattribution risk in the class of gotcha 17). The right shape is populating
+`fub_person_id` where the row is created — which `CAL_BOOKINGS_PERSON_ID_MARKER` has since
+done for Immediate Sends.
 
 ```bash
-node scripts/_oneoff-2026-08-31-marchae-repair.mjs [--apply] [--revert --apply] [--no-trigger]
+node scripts/n8n-add-send-failure-note-identity-gate.mjs      [--apply] [--revert --apply]
+node scripts/n8n-add-note-logging-identity-reminders.mjs      [--apply] [--revert --apply]
+node scripts/n8n-add-send-failure-note-sweep.mjs              [--apply] [--revert --apply]
+node scripts/n8n-add-send-failure-note-access-dispatch.mjs    [--apply] [--revert --apply]
 ```
-Journal `n8n/BEFORE-2026-08-31-marchae-repair/journal.json`.
-
-> **The script re-checks five preconditions live and refuses if any fails** —
-> notably *"is the property still vacant?"*. That is the Cheyla Zinck guard:
-> person 2726 is also verified with a `skipped_test_gate` row, and must NOT be
-> contacted because she is now `Tenants Awaiting Move In`. A bulk flip of
-> `skipped_test_gate` would have texted her about a house she already lives
-> in. **45 live rows depend on that value staying inert — never flip it in
-> bulk.**
-
-A useful consequence: her row now carries `link_sent_at` of 08-31, so she
-enters the booking-reminder track anchored today (`too_soon(0d)` on the
-08-31 preview) and becomes nudge #1 at 10am ET on 09-01 if she has not booked.
-
-**Not yet verified live.** The workflow is inactive and nothing has been due.
-Before activating: run the preview, confirm the due list is what you expect,
-then watch the first 10am ET tick. The first real nudge is also the first live
-proof of the FUB note logging, the Gmail send, and the booking join
-suppressing a lead who books mid-window.
+Backups `n8n/BEFORE-send-failure-note-identity-gate/`,
+`n8n/BEFORE-note-logging-identity-reminders/`, `n8n/BEFORE-send-failure-note-sweep/`,
+`n8n/BEFORE-send-failure-note-access-dispatch/`. All four applied live 2026-08-30; the
+five relevant verifiers still pass. **Not yet observed on a real send** — the IF condition
+shape was cross-checked against the deployed `Send Failed?` node (`typeVersion: 2.2`,
+`rightValue: true` as a raw boolean, no `singleValue`) after an initial version got it
+wrong; watch the next real send to confirm the note lands in FUB.
 
 ## Backing Google Sheet
 
@@ -3219,9 +2128,7 @@ The "requests per minute per user" quota (default 60) is bucketed **per GCP proj
 not per service-account identity — creating multiple service accounts in the *same*
 project does **not** multiply it. The only way to get real headroom is a separate GCP
 project with its own service account, sharing the spreadsheet as Editor. Verified live
-2026-07-30: splitting across two service accounts in the original project did **not**
-stop quota errors; moving the Identity Gate to a service account in a second project
-did.
+2026-07-30.
 
 Current split: `Identity Verification Gate` runs on the Project 2 service account
 (n8n credential `eB6JrDkriJ1BATPy`) so rapid manual testing doesn't compete with the
@@ -3231,8 +2138,7 @@ delete.
 
 New GCP projects commonly hit "Service account key creation is disabled" (org policy
 `iam.disableServiceAccountKeyCreation`) — see
-`docs/gcp-service-account-key-creation.md` for the fix (a project-scoped `gcloud`
-override, not the newer `iam.managed.*` constraint).
+`docs/gcp-service-account-key-creation.md` for the fix.
 
 ## API patterns
 
@@ -3271,8 +2177,8 @@ body = {"name": w["name"], "nodes": w["nodes"], "connections": w["connections"],
   Manage with `node scripts/fub-register-inquiry-webhook.mjs` (list / `--apply` /
   `--delete <id>`).
 - **A person created via the FUB API fires `peopleCreated` only, not `peopleUpdated`**
-  — verified 2026-08-08 across persons 2649, 2650, 2656. FUB's *own* lead-flow
-  creation (e.g. a Zillow inquiry) does fire `peopleUpdated`, within ~1 second.
+  — verified 2026-08-08. FUB's *own* lead-flow creation (e.g. a Zillow inquiry) does
+  fire `peopleUpdated`, within ~1 second.
 - De-duplication: FUB matches an incoming event to a person by **phone or email**. A
   Zillow inquiry carries the real phone, so a second inquiry lands on the same Person
   even after our flow overwrites the anonymized `…@convo.zillow.com` email. An inquiry
@@ -3287,8 +2193,9 @@ body = {"name": w["name"], "nodes": w["nodes"], "connections": w["connections"],
    — exactly what happens after an IF split. Use `mode: "append"`.
 3. **SplitInBatches** emits batches on `branch[1]`, the "done" signal on `branch[0]`.
    Loop-back goes to branch[1].
-4. **Read Settings emits N items** (one per row). Downstream HTTP nodes fire N times
-   unless you set `executeOnce: true`.
+4. **Read Settings emits N items** (one per row). Downstream nodes fire N times unless
+   you set `executeOnce: true`. This compounded into the estate's worst quota bug —
+   see "Sheets quota — root cause and history".
 5. **`specifyBody: "form"` silently mangles form params** on some Populife endpoints.
    Use `specifyBody: "string"` with a manually URL-encoded body.
 6. **Cal.com reschedule payload:** `uid` is the *new* booking UID, `rescheduleUid` is
@@ -3307,9 +2214,9 @@ body = {"name": w["name"], "nodes": w["nodes"], "connections": w["connections"],
 11. **`$('Node').first()` is wrong on any path carrying more than one item.** It
     returns item 0 every time, so a 2-item stream sends the *first* item's message
     twice. Use `$('Node').item`. This bit the inquiry sweep: two SMS went out both
-    saying "203 Topsaw Ln" while the other property was never sent — and it looked
-    fine in `runData`, which showed `Send SMS items=2`. **Item counts being right does
-    not mean item contents are.**
+    naming the same property while the other was never sent — and it looked fine in
+    `runData`, which showed `Send SMS items=2`. **Item counts being right does not mean
+    item contents are.**
 12. **After a Twilio node, `$json` is Twilio's response** (`sid`/`status`/`to`), not
     your data. A downstream Sheets update keyed on `={{ $json.event_id }}` silently
     matched zero rows and reported success with `items=0`. Reference the source node
@@ -3322,11 +2229,9 @@ body = {"name": w["name"], "nodes": w["nodes"], "connections": w["connections"],
     `String(x).trim().toLowerCase()`.
 15. **Sheets `append` is not a reliable dedup boundary under sub-second concurrency.**
     Two nearly-simultaneous `values:append` calls can race and one row silently never
-    lands — confirmed live (two inquiry events ~800ms apart, one row survived) even
-    though the node is documented as concurrency-safe. A row that never appends looks
-    identical to "nothing happened" — no error, no clue in `runData`. If a lost row
-    would be silently costly, **re-read the tab and verify the row before trusting
-    it.**
+    lands — confirmed live even though the node is documented as concurrency-safe. A
+    row that never appends looks identical to "nothing happened". If a lost row would
+    be silently costly, **re-read the tab and verify the row before trusting it.**
 16. **A gate that's only called once per lead doesn't stay that way once another
     workflow calls it repeatedly.** `Check Guards` had guards for stage/trash/rejected
     but nothing checking whether a session was already open — fine when triggered once
@@ -3334,12 +2239,12 @@ body = {"name": w["name"], "nodes": w["nodes"], "connections": w["connections"],
     every inquiry. If a downstream gate can legitimately be invoked more than once for
     the same entity before the first call resolves, it needs its own in-flight check.
 17. **A malformed FUB API path can silently fall back to a list endpoint instead of
-    erroring.** `GET /v1/people/undefined` did not 404 or 400 — FUB returned the
-    unfiltered people list, and a defensive `?? personPayload` fallback took whoever
-    was first, misattributing the record. **A broken id in a REST path is not
-    guaranteed to error just because it looks like it should** — if a lookup result
-    decides something consequential (here: who an SMS goes to), verify the returned
-    identity matches what you asked for and throw if it doesn't.
+    erroring.** `GET /v1/people/undefined` did not 404 — FUB returned the unfiltered
+    people list, and a defensive `?? personPayload` fallback took whoever was first.
+    **A broken id in a REST path is not guaranteed to error just because it looks like
+    it should** — if a lookup result decides something consequential (here: who an SMS
+    goes to), verify the returned identity matches what you asked for and throw if it
+    doesn't.
 18. **`includeTrash=true` only matters on FUB's list/filter endpoints, not the
     single-resource one — and a plausible root cause still needs reproducing, not
     inferring from a parameter name.** A report that a Trash lead got an SMS came with
@@ -3348,49 +2253,36 @@ body = {"name": w["name"], "nodes": w["nodes"], "connections": w["connections"],
     endpoint returns `stage: "Trash"` either way; only list-style calls (`?id=`,
     `?name=`, `?stage=`) exclude Trash by default. The real cause was FUB's own
     lead-flow un-trashing the person server-side seconds before our node read them.
-    Reproducing the failure end to end — not just testing the proposed fix in
-    isolation — is what surfaced this; applying the requested fix blind would have
-    shipped a no-op and left the real gap open.
+    Applying the requested fix blind would have shipped a no-op and left the real gap
+    open.
 19. **A newly-added recovery/alert path needs the same isolation and
     named-node-reference discipline as the path it's recovering from.** Building error
     isolation for the Cron Poll introduced `Send Failure Alert`, which itself used
     `$json` and had no `onError` — so live testing reproduced the exact bug being
     fixed, one node downstream. Building idempotency for Immediate Sends inserted nodes
     in front of `Classify & Build Row`, which reads its *immediate* input — invisible
-    until a replay test showed the wrong category and `is_test`. Both were caught by
-    testing the actual failure/replay scenario end to end, not by testing the new logic
-    in isolation. **Any node inserted in front of an existing node must be checked for
-    whether that node reads `$json`/`$input` (fragile) versus a named-node reference
-    (safe). Any node added to a failure/alert path needs the same `onError` treatment
-    as the primary path.**
+    until a replay test showed the wrong category and `is_test`. **Any node inserted in
+    front of an existing node must be checked for whether that node reads
+    `$json`/`$input` (fragile) versus a named-node reference (safe). Any node added to
+    a failure/alert path needs the same `onError` treatment as the primary path.**
 20. **A list endpoint can silently omit records that the single-resource endpoint
     returns — and `page_size` is not always honoured.** DoorLoop's `/owners` caps at
-    **50 per page** regardless of `page_size=1000` (returns `total: 78` with 50 rows),
-    *and* even after following every page it still omits owners that
-    `GET /owners/{id}` returns perfectly well. An analysis pass built on the list
-    concluded "25 properties have no owner in DoorLoop"; resolving each owner
-    individually showed the real answer was **zero** — every linked property has an
-    owner. Same shape as gotcha 18 (FUB list endpoints hiding Trash records), on a
-    different vendor, which is what makes it worth stating as a general rule rather
-    than a FUB quirk: when a lookup drives a write, resolve by id. The production
-    code was never wrong here because `resolveOwnerLabel` uses `/owners/{id}`; the
-    throwaway analysis script was, and it would have produced a 25-row-wrong backfill
-    had the numbers not been sanity-checked against a row whose owner was already
-    known.
-21. **A per-item Code node is only correct until something upstream sends two
-    items — and a polling trigger will eventually do exactly that.** `New Property →
-    Provision` (`TGGhSkTSZGYPrZo9`) ran correctly for months because properties were
-    added one at a time by hand. Its `Google Sheets Trigger` is `rowAdded`, polling
-    roughly once a minute, so the instant two rows were added inside one poll window
-    it emitted 2 items — and `Build Cal.com Body` (`$('...').first()`) plus
-    `Prepare Sheet Update` (three more `.first()` calls) each returned a single item,
-    provisioning the first row and silently discarding the second. This is gotcha 11
-    again, but the lesson on top of it is about **who controls the item count**: a
-    trigger that batches by time is not a "one item" path, it is a "usually one item"
-    path, and usually-one is what makes the bug invisible until traffic changes.
-    Worse, `rowAdded` never re-emits an existing row, so the dropped property does
-    **not** self-heal — it sat at `pending_create` forever with no error anywhere.
-    See "Multi-row provisioning fix".
+    **50 per page** regardless of `page_size=1000`, *and* even after following every
+    page it still omits owners that `GET /owners/{id}` returns perfectly well. An
+    analysis pass built on the list concluded "25 properties have no owner in
+    DoorLoop"; resolving each owner individually showed the real answer was **zero**.
+    Same shape as gotcha 18 on a different vendor: **when a lookup drives a write,
+    resolve by id.**
+21. **A per-item Code node is only correct until something upstream sends two items —
+    and a polling trigger will eventually do exactly that.** `New Property → Provision`
+    ran correctly for months because properties were added one at a time. Its
+    `rowAdded` trigger polls ~1/min, so the instant two rows were added inside one poll
+    window it emitted 2 items and two `.first()`-based Code nodes silently discarded
+    the second. This is gotcha 11 again, but the lesson on top of it is about **who
+    controls the item count**: a trigger that batches by time is not a "one item" path,
+    it is a "usually one item" path, and usually-one is what makes the bug invisible
+    until traffic changes. Worse, `rowAdded` never re-emits an existing row, so the
+    dropped property does **not** self-heal.
 
 ## Test cadence
 
@@ -3422,73 +2314,40 @@ curl -X POST https://automation.rentingfreedom.com/webhook/send-cal-link-after-v
 
 ### Offline verifiers — the cheap check after any edit
 
-All pull the **live** `jsCode` and run it against synthetic/real data. They send
-nothing, write nothing, and touch no n8n state.
+All pull the **live** `jsCode` and run it against synthetic/real data. They send nothing,
+write nothing, and touch no n8n state.
 
 | Script | Covers |
 |---|---|
 | `stage-gate-verify.mjs` | the three stage-gate nodes, both directions |
 | `trash-tag-gate-verify.mjs` | **377 assertions** — all 6 trash-tag nodes + the watcher |
-| `new-inquiry-lead-alert-verify.mjs` | **47 assertions** — detection, wiring, isolation config |
+| `new-inquiry-lead-alert-verify.mjs` | **47** — detection, wiring, isolation config |
 | `zillow-flow-verify.mjs` | parse + dedup against the **real** FUB search endpoint |
-| `application-alert-cc-verify.mjs` | **63 assertions** — message byte-identity, recipient fan-out |
+| `application-alert-cc-verify.mjs` | **63** — message byte-identity, recipient fan-out |
 | `doorloop-recon-verify.mjs` / `doorloop-recon-cases.mjs` | the report; `--live` diffs deployed jsCode |
-| `sheets-retry-verify.mjs` | **62 assertions** — the retry cap, the served-filter, the wiring |
-| `no-phone-skip-verify.mjs` | **53 assertions** — the sentinel allowlist, recipient keying |
-| `application-inquiry-row-verify.mjs` | **64 assertions** — cal_link resolution, both dedup rules, fail-closed, wiring |
-| `stage-gate-race-verify.mjs` | **36 assertions** — race recovery, recency guard, both nodes |
-| `cal-booking-reminders-verify.mjs` | **108 assertions** — day arithmetic, per-property booking join, guards, wiring |
+| `sheets-retry-verify.mjs` | **62** — the retry cap, the served-filter, the wiring |
+| `no-phone-skip-verify.mjs` | **53** — the sentinel allowlist, recipient keying |
+| `application-inquiry-row-verify.mjs` | **64** — cal_link resolution, both dedup rules, fail-closed |
+| `stage-gate-race-verify.mjs` | **36** — race recovery, recency guard, both nodes |
+| `cal-booking-reminders-verify.mjs` | **108** — day arithmetic, booking join, guards, wiring |
+| `identity-reminders-verify.mjs` | **41** — day arithmetic, cap, guards |
+| `cal-link-email-verify.mjs` | **31** — the parallel email branch and its note logging |
+| `inquiry-alert-verify.mjs` | **36** — all three `Row Recorded?` wirings, fan-out |
 | `launch-audit.mjs` | all 12 workflows, 16 hard gates, 3 alert phones |
 
-> **Two verifiers were silently testing nothing, and were repaired 2026-08-31.**
-> Both had pinned expectations to **mutable CRM state**, so they began failing
-> for reasons unrelated to the code they exist to check. Worth knowing as a
-> pattern, because it is the failure mode of every verifier here that reads
-> live data.
->
-> - `stage-gate-verify.mjs` (7 failures) took the live **Test Test9 (2545)**
->   record as-is and used `person.stage` as its "allowed" value. That contact
->   was later moved to `Trash` and tagged by the 593-person backfill, so the
->   trash gate short-circuited **above** the stage logic being asserted — the
->   script was no longer testing the stage gate at all. Fixed by neutralising
->   the trash dimension on the subject (tags stripped, `customTrashDate`
->   cleared, stage forced to a gated tenant stage) while keeping the live record
->   for its shape. It now throws if `withoutStage` ever stops excluding the
->   subject's stage, which would make the negative case vacuous.
-> - `zillow-flow-verify.mjs` (2 failures) asserted that `"Test ZillowFlowCheck"`
->   matched **nothing** in FUB — which broke the moment a 2026-08-07 test run
->   created person **2649** under exactly that name and left it in place — and
->   that person **2607** was untrashed, which stopped being true. Case A now
->   randomises the name per run so no previous run can have created it. Case B
->   keeps the live search (it proves the real endpoint and parsing) but asserts
->   only what is invariant — found, and the right id — and checks the verdict is
->   *coherent* with whatever the live record says. The trash **decision** moved
->   to a new synthetic **Case B2**: 14 cases over `Check Existing Match` on data
->   nobody can move, covering the dateless tag, both expiry windows,
->   `Denied Credit` precedence, the untagged stage fallback, and tag-casing
->   normalisation. Net: more coverage of the branch that was unexercised until
->   2026-08-28, and no drift.
->
-> **The lesson: a fixture pinned to a live CRM record is a test that expires.**
-> Pin behaviour to synthetic data; use live data to prove the plumbing.
->
-> **`stage-gate-verify.mjs`'s sweep section was also passing vacuously**, and was
-> tightened in the same change. The subject has no unsent `Inquiries` rows, so
-> the positive case bailed `no_pending_inquiries` and the only assertion was
-> "the reason isn't `stage_not_allowed`" — which would still have passed with
-> the gate deleted. It now injects a synthetic pending row into the stubbed
-> `Read Inquiries` (nothing is written; `$items()` is fully stubbed), so the
-> positive case must actually build a message — asserting the enriched
-> `metadata[fub_person_id]` / `metadata[phone]`, an E.164 `to`, and **no
-> unresolved `{{ }}` placeholders** in the rendered SMS — and the negative case
-> must *suppress a send that would otherwise have happened*. The synthetic
-> `cal_link` is one that cannot appear in `Text Log`, so the per-property dedup
-> can never mask the result and the outcome does not depend on `isTestMode`.
->
-> Non-vacuity was confirmed by removing the row and checking the new assertions
-> fail (`skipped=true reason="no_pending_inquiries"`). **Worth doing to any
-> assertion whose subject comes from live data** — a green verifier proves
-> nothing until you have seen it go red.
+> **A fixture pinned to a live CRM record is a test that expires.** Two verifiers were
+> silently testing nothing and were repaired 2026-08-31 — `stage-gate-verify.mjs` used
+> Test Test9's live stage, which the 593-person backfill later trash-tagged so the trash
+> gate short-circuited **above** the stage logic being asserted; `zillow-flow-verify.mjs`
+> asserted a name matched nothing in FUB, which a later test run created. Its sweep
+> section was also vacuous: the subject had no unsent rows, so the only assertion would
+> have passed with the gate deleted. Both now **pin behaviour to synthetic data and use
+> live data only to prove the plumbing** — neutralised subjects, randomised names, a
+> synthetic pending row injected into the stubbed `Read Inquiries`, and 14 synthetic
+> trash-policy cases. Non-vacuity was confirmed by making the new assertions fail on
+> purpose. **Worth doing to any assertion whose subject comes from live data — a green
+> verifier proves nothing until you have seen it go red.** Detail in
+> `docs/n8n-history.md`.
 
 For a live negative stage-gate test, flip the setting, fire, and restore:
 
@@ -3501,89 +2360,9 @@ curl -X POST https://automation.rentingfreedom.com/webhook/phone-added-send-text
 node scripts/stage-gate-setup.mjs --apply                # restore
 ```
 
-> The **positive** path on that webhook creates a Stripe session and sends a real SMS
-> to Andrew's personal phone. The negative path sends nothing, which makes it the safe
-> one to re-run.
-
-## Message logging to FUB — every lead-facing send, success or failure (2026-08-30)
-
-Client request: log all messages we send in general, not just the verification SMS.
-Every lead-facing send now writes a FUB Note (success **and** failure) across four
-workflows. Two Cal.com workflows (Immediate Sends, Cron Poll) are **deliberately
-excluded** — see "Known gap" below.
-
-| Workflow | Send | Before | After |
-|---|---|---|---|
-| `L13GUyrWbjSJwn8p` Identity Gate | verification SMS | success only, no `onError` | success + failure |
-| `R3rhuCYEGoBFArBa` Identity Reminders | reminder SMS | not logged at all | success + failure |
-| `UbO0l29GtILMm1sP` Sweep | cal-link SMS | success only, no `onError` | success + failure |
-| `UbO0l29GtILMm1sP` Sweep | cal-link email | not logged at all (dead end) | success + failure |
-| `ztUEx7Htu620SLbj` Access Code Dispatch | access-code SMS | success only, no `onError` | success + failure |
-
-**The shape, everywhere:** `Send X (now onError: continueRegularOutput)` →
-`X Failed? (IF !!$json.error)` → true: a new `FUB - Log Note (X Failed)` node;
-false: the existing/new success note. Every new note node reads the pre-send data
-via a NAMED node reference (`.item` where a lead can have >1 item on the path —
-the sweep's two-property case, gotcha 11 — `.first()` only where the loop's
-`SplitInBatches` batch size is 1) and carries `onError: continueRegularOutput`
-itself, so bookkeeping can never abort a send that already happened.
-
-**Three of the four sends previously had NO `onError` at all**, meaning a Twilio
-failure aborted the whole execution before anything downstream ran — not just no
-note, no sheet row either. Adding `onError` there is a genuine behaviour change
-(crash → continue), approved 2026-08-30, matching the isolation pattern already
-used elsewhere in this system (Cron Poll's send isolation, the access-gate). The
-sweep's SMS branch needed one extra layer of care: a naive `onError` addition
-would have let the existing unconditional 3-way fan-out (`Log to Text Log`,
-`FUB - Log Note`, `Mark Inquiry Sent`) fire on the failure path too —
-`Mark Inquiry Sent` would have stamped `link_sent = true` for a message that was
-never delivered, permanently hiding that inquiry from every future sweep. The
-failure branch is therefore terminal (just the note), leaving `link_sent = false`
-so a failed send is retried by the next sweep, same as if nothing had run. The
-access-dispatch SMS gets the same treatment: a failed send skips
-`Update Showings Row (Cron)` (so `status` never becomes `code_sent`) and goes
-straight to `Loop Back`, letting the next 5-minute tick retry it.
-
-**Known limitation, surfaced not fixed.** `Log to Identity Verifications` /
-`Log Reminder Row` hardcode `status: "pending"` regardless of which branch ran,
-so a failed initial verification SMS or reminder still logs a `pending` sheet
-row — the closest existing status, but not literally true (nothing was ever
-sent). Before this change, a failed *initial* verification SMS produced **no
-row at all** (the execution aborted first), so this is strictly more visible
-than before, just not perfectly labeled. A dedicated failure status (and
-whether it needs its own alert) is a separate decision, out of scope here.
-
-**Known gap — Cal.com Immediate Sends / Cron Poll are NOT logged.** Neither
-workflow ever calls the FUB API, and `Cal Bookings` has no `fub_person_id`
-column — there is no person to attach a note to. Client decision 2026-08-30:
-skip these for now rather than add a live per-send FUB lookup (an extra API
-call per message, with a soft-match misattribution risk in the same class as
-gotcha 17) or a schema change to backfill a person id at booking time. Revisit
-if this becomes a priority — the right shape would be populating
-`fub_person_id` wherever a `Cal Bookings` row is created (Booking Handler's
-`Build Showing Row` / Immediate Sends' `Classify & Build Row`), not a lookup
-per message.
-
-```bash
-node scripts/n8n-add-send-failure-note-identity-gate.mjs      [--apply] [--revert --apply]
-node scripts/n8n-add-note-logging-identity-reminders.mjs      [--apply] [--revert --apply]
-node scripts/n8n-add-send-failure-note-sweep.mjs              [--apply] [--revert --apply]
-node scripts/n8n-add-send-failure-note-access-dispatch.mjs    [--apply] [--revert --apply]
-```
-Backups: `n8n/BEFORE-send-failure-note-identity-gate/`,
-`n8n/BEFORE-note-logging-identity-reminders/`,
-`n8n/BEFORE-send-failure-note-sweep/`,
-`n8n/BEFORE-send-failure-note-access-dispatch/`. All four applied live
-2026-08-30; `identity-reminders-verify.mjs` (41), `cal-link-email-verify.mjs`
-(31, updated — the email branch is no longer a dead end), `inquiry-alert-verify.mjs`
-(36), `stage-gate-race-verify.mjs` (36), and `trash-tag-gate-verify.mjs` (377)
-all still pass unchanged against the patched workflows. **Not yet observed on a
-real send** — the IF node's condition shape was cross-checked against the
-already-deployed `Send Failed?` node in the Cron Poll workflow
-(`typeVersion: 2.2`, `rightValue: true` as a raw boolean, no `singleValue`) after
-an initial version got that shape wrong; watch the next real verification SMS,
-reminder, sweep send, and access-code dispatch to confirm the note actually
-lands in FUB.
+> The **positive** path on that webhook creates a Stripe session and sends a real SMS to
+> Andrew's personal phone. The negative path sends nothing, which makes it the safe one to
+> re-run.
 
 ## Full system context
 

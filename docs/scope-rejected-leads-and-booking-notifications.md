@@ -79,6 +79,43 @@ several nodes, and `docs/n8n-workflows.md` records the rule that if the
 production `allowed_stages` ever changes, `WATCH_SCOPE_STAGES` and the early
 stage filter's list must change with it.
 
+### Does rejecting someone actually stop the sends? Verified 2026-09-01
+
+Asked directly, because "the allow-list handles it" is only true where the
+allow-list is consulted. Measured by reading the live `jsCode` of every active
+sender:
+
+| Sender | Re-checks stage | Re-checks trash tags |
+|---|---|---|
+| Verify SMS — Identity Gate `Check Guards` | yes | yes, with expiry windows |
+| Cal-link SMS + email — sweep | yes | yes |
+| Inquiry recording / sending | yes | yes |
+| ID verification reminders `Check Reminder Guards` | yes | yes (blunt, no expiry math) |
+| Cal booking nudges `Check Nudge Guards` | yes | yes (blunt) |
+| **Access code SMS — Access Code Dispatch** | **no** | **no** |
+| **Cal.com confirmations / reminders / follow-ups** | **no** | **no** |
+
+Both reminder workflows hardcode
+`TRASH_STAGES = ["trash", "permanent trash", "cold rental lead 1 month hold"]`
+and `TRASH_TAGS = ["permanent trash", "no response trash", "denied credit"]`,
+and re-fetch the FUB person at send time. So **the moment Nicole tags a lead and
+moves them, every nudge and reminder stops** — no change needed.
+
+> **The residual gap, and it is a real one for this process.** A rejected lead
+> who **already holds a confirmed booking** still receives their door code and
+> Cal.com's own reminder and follow-up emails. Access Code Dispatch is
+> deliberately stage-ungated (decision 2026-07-28: a booking can only exist if
+> the lead already passed both gates, and stranding a verified tenant at the
+> door was judged worse), and the three Cal.com workflows have no FUB person in
+> scope at all. **Nothing cancels a booking when someone is rejected.**
+>
+> This is not a defect to fix silently — it is a question for the client:
+> *if you deny someone's credit and they have a self-guided showing booked for
+> tomorrow, should they still get the lockbox code?* If the answer is no, the
+> cheapest fix is a stage/tag re-check in `Find Ready Showings`, which would
+> reverse a documented decision and must not be done without sign-off. Today
+> the answer is "cancel the Cal.com booking by hand."
+
 ### Proposed change
 
 **Option 1 — retire the dead guard (recommended).**
@@ -224,16 +261,16 @@ Three consequences worth naming before building:
 3. **Staff cancellation notices are entirely new** for all three categories.
    Today `Build Cancellation Email` sends to `b.attendeeEmail` only.
 
-**Justin's address is not in Settings.** There is a `cal_justin_phone` but no
-email. His Cal.com account is `contact@rentingfreedom.com` — **confirm that is
-the right destination** rather than a personal address before defaulting to it.
+**Justin's address is not in Settings** — there is a `cal_justin_phone` but no
+email. Confirmed 2026-09-01: use **`contact@rentingfreedom.com`**, the same
+address as his Cal.com account.
 
 ### Proposed change
 
 **Settings — two new keys plus a routing table.**
 
 - `cal_emily_email` → `emilye@rentingfreedom.com`
-- `cal_justin_email` → `contact@rentingfreedom.com` (pending confirmation)
+- `cal_justin_email` → `contact@rentingfreedom.com` (**confirmed 2026-09-01**)
 - `cal_notify_walkthrough_to`, `cal_notify_showing_to`, `cal_notify_consult_to`
   — each a **comma-separated list**, so a category can be routed to more than
   one person later without another code change. Gmail's `sendTo` accepts a
