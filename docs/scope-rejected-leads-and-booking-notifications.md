@@ -201,7 +201,7 @@ this system has ever written a cancellation to Cal.com. `POST
 discipline used for the Wait node, which had no precedent in this instance and
 was proved in a scratch workflow first.
 
-#### Client questions — one answered, two still blocking
+#### Client questions — all answered 2026-09-01
 
 1. ~~Which tags cancel a booking?~~ **ANSWERED 2026-09-01: all three** —
    `["permanent trash", "no response trash", "denied credit"]`, identical to the
@@ -210,14 +210,24 @@ was proved in a scratch workflow first.
    implies: **608 people carry `No Response Trash`** — the
    `rejection_cancel_start_at` cutoff in question 3 is what keeps a first run
    from acting on all of them.
-2. **The lead will receive Cal.com's standard cancellation email**, because
-   cancelling fires the existing CANCELLED branch. That contradicts "no more
-   notifications period" — but the alternative is a rejected lead driving to a
-   house they cannot enter. Recommend keeping it; needs an explicit yes.
-3. **Go-forward cutoff.** 626 people sit in `Trash` and 608 carry a trash tag. A
-   first run with no cutoff could cancel a large backlog at once. Add
-   `rejection_cancel_start_at`, same discipline as `inquiry_flow_start_at`, and
-   run a preview script before activating.
+2. ~~Should the lead receive Cal.com's cancellation email?~~ **ANSWERED
+   2026-09-01: yes.** Cancelling fires the existing CANCELLED branch, which
+   emails the invitee. No extra work — this is the default behaviour.
+3. ~~Go-forward cutoff (`rejection_cancel_start_at`)?~~ **DROPPED 2026-09-01 —
+   measured, not assumed.** The concern was that a first tick would cancel a
+   backlog belonging to the 608 people already carrying `No Response Trash`.
+   Checked live: the whole system has **exactly one** future scheduled booking
+   (Isaac Usen, 2026-11-02 walkthrough), whose lead is in `PM Lead Onboarding`
+   with no trash tag. There is no backlog, because only *future, still-scheduled*
+   bookings are candidates and bookings are rare.
+
+   **The preview script is still required** — it is the real safeguard, and it
+   is cheap. Re-run it immediately before activating rather than trusting this
+   paragraph: the count was 1 on 2026-09-01 and will not stay 1.
+
+**All client questions on A-2 are now answered.** Remaining unknown is
+technical, not a decision: the Cal.com cancellation endpoint has never been
+called by this system and must be proved on a throwaway booking first.
 
 > **Hard limitation the client must be told about — gotcha 8.** If the access
 > code has **already been sent** (it goes at T-60min), cancelling only deletes
