@@ -137,7 +137,16 @@ ok("Confirm Still Unsent fans out to all three", outs("Confirm Still Unsent"),
 ok("Send SMS is still fed ONLY by Confirm Still Unsent", feeds("Send SMS"), ["Confirm Still Unsent"]);
 ok("Build Cal Link Email fed ONLY by Confirm Still Unsent", feeds("Build Cal Link Email"), ["Confirm Still Unsent"]);
 ok("Send Cal Link Email fed ONLY by Build Cal Link Email", feeds("Send Cal Link Email"), ["Build Cal Link Email"]);
-ok("email branch is terminal (feeds nothing)", outs("Send Cal Link Email"), []);
+// 2026-08-30: no longer a dead end — SEND_FAILURE_NOTE_MARKER (sweep) added a
+// success/failure FUB-note branch off this node. It's still the LAST send in
+// the chain; the note nodes are the new terminal.
+ok("email branch now feeds the send-failure/sent note split", outs("Send Cal Link Email"), ["Email Send Failed?"]);
+const allBranches = (src) => (C[src]?.main ?? []).flat().map((c) => c && c.node).filter(Boolean);
+ok("Email Send Failed? true+false branches both terminate in a FUB note",
+   allBranches("Email Send Failed?").sort(),
+   ["FUB - Log Note (Email Failed)", "FUB - Log Note (Email Sent)"]);
+ok("those two note nodes are themselves terminal",
+   allBranches("FUB - Log Note (Email Failed)").length + allBranches("FUB - Log Note (Email Sent)").length, 0);
 ok("Check & Build Message still feeds Should Send?", outs("Check & Build Message"), ["Should Send?"]);
 
 // ── 4. Isolation config ────────────────────────────────────────────────────
