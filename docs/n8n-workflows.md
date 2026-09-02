@@ -116,10 +116,15 @@ not a deploy — it is this list of state changes. `node scripts/launch-audit.mj
    field any more, so neither can misroute today. Retiring both is probably right;
    wants sign-off. Retiring `HwXpYAqwbG1zwGls` would also free a `peopleUpdated`
    webhook slot (both are currently full).
-6. **Rejected-lead handling** — tabled by decision. `rejected_stage_label` stays
-   inert until the client decides whether they want it at all. It is set to
-   `"Rejected"` and **no stage by that name exists**, so the guard has never
-   matched anything.
+6. ~~**Rejected-lead handling**~~ — **CLOSED 2026-09-01.** Client confirmed the
+   process: Nicole applies one of the three trash tags, then moves the lead to
+   `Cold Rental Lead 1 month Hold`. Both halves were already handled — the
+   `Denied Credit` tag blocks for 365 days, and every cold stage is outside
+   `allowed_stages`. The `rejected_stage_label` guard was dead (no FUB stage
+   has ever been named `Rejected`) and is **retired**; see "Retired: the
+   `rejected_stage` guard" below. What the client *did* newly ask for is that a
+   rejected lead's **booking be cancelled** — that is A-2, scoped in
+   `docs/scope-rejected-leads-and-booking-notifications.md`.
 
 ### Already decided — do not re-litigate
 
@@ -373,10 +378,36 @@ the Inquiry flow calls it on every inquiry from an unverified lead. So
 `Check Guards` has to be safe to call more than once while a session is open.
 
 `Check Guards` returns structured `proceed`/`reason` pairs for every block
-condition (`not_test_mode`, `no_phone`, `stage_trash`, `rejected_stage`,
+condition (`not_test_mode`, `no_phone`, `stage_trash`,
 `stage_not_allowed:<stage>`, `already_sent`, `verification_already_pending`,
 `sheets_unavailable`). `Should Proceed?` wires only its **true** branch onward — a
 `proceed: false` execution ends cleanly with no Stripe session and no SMS.
+
+### Retired: the `rejected_stage` guard (2026-09-01)
+
+`Check Guards` used to carry a seventh reason, `rejected_stage`, comparing the
+lead's stage against a `rejected_stage_label` Settings key. **It never matched
+anything and could not**: the key was the placeholder `"Rejected"` and
+`GET /v1/stages` has never returned a stage by that name (re-verified live
+2026-09-01 — 24 stages, zero matching `/reject/i`).
+
+Both the guard and the Settings key are **gone**. Rejection is handled by the
+`Denied Credit` trash tag (365-day window) and by `allowed_stages`, which
+excludes every cold stage; both re-check at send time. A tombstone comment
+marks the removal site in the node, so a future reader grepping for "rejected"
+finds the reasoning rather than nothing.
+
+```bash
+node scripts/n8n-retire-rejected-guard.mjs [--apply] [--revert --apply]
+```
+Backup `n8n/BEFORE-retire-rejected-guard/` — which holds the workflow JSON
+**and** `settings-row.json`, the deleted row's only copy. **`--revert` depends
+on that file** for the Settings half and refuses without it. Applied live
+2026-09-01; `trash-tag-gate-verify.mjs` (377) and `stage-gate-verify.mjs` both
+pass unchanged either side of the change.
+
+> Side effect worth noting given the fan-out history: Settings dropped from 60
+> keys to 59. That is load *off* every gate execution, not onto it.
 
 ### Pending-verification guard (2026-08-05)
 
@@ -898,6 +929,196 @@ isn't a reason to strand them at the door with no code. Re-checking would only a
 FUB lookup inside the 5-minute cron (which has no FUB person in hand) for no gain.
 **Do not "fix" this by adding a stage check to the cron.** That decision was about
 the **stage** gate only — this workflow *is* test-gated as of 2026-07-31.
+
+> **Narrowed 2026-09-01, and only narrowed.** The client decided a *rejected* lead
+> must get no code. That is `ACCESS_REJECTION_MARKER` below — a check for trash
+> **tags/stages only**, which is a different question from "is this lead in an
+> allowed stage". The reasoning above still stands for everything else, and the new
+> gate deliberately fails **open** so a FUB outage can never strand a verified
+> tenant at the door. Do not widen it into a stage gate.
+
+## Rejected leads → cancel the booking (A-2, built 2026-09-01, NOT applied)
+
+Client decision 2026-09-01: *"If they get rejected, they should not get any more
+notifications period — no reminder updates, no code sent, and the appointment
+should be cancelled."* Rejection is Nicole applying one of the three trash tags
+and moving the lead to `Cold Rental Lead 1 month Hold`.
+
+**Cancelling the booking is the single action that satisfies all of it**, and this
+was **proved live** rather than reasoned about. A throwaway Cal.com event type was
+created, booked and cancelled through the API on 2026-09-01; Cal.com fired
+BOOKING_CANCELLED, Immediate Sends flipped the row to `status = cancelled` and
+stamped `cancellation_sent`, and the invitee got the cancellation email — with no
+new wiring. `Find Due Notifications` skips cancelled rows and `Find Ready Showings`
+requires `status === 'scheduled'`, so reminders, follow-ups and access codes all
+stop by themselves.
+
+> **The endpoint, now proven:** `POST /v2/bookings/{uid}/cancel`, header
+> `cal-api-version: 2024-08-13`, body `{ cancellationReason }` → `200`,
+> `status: "cancelled"`. n8n auth is the existing `httpHeaderAuth` credential
+> `Uyhr5FNmPBQkGhp3`, the same one the provisioning workflow uses.
+
+### Layer 1 — a sibling branch on the Cal.com Cron Poll
+
+Hangs off the existing `Read Cal Bookings` in `3hGnl6mPnu2AMbZ1`, **not** a new
+workflow: that cron already ticks every 5 minutes and already holds the rows, so
+this costs **zero additional Sheets requests**. A separate cron would have added a
+read per tick against the same 60/min bucket and one more cron that can land in
+the same minute as the others.
+
+```
+Read Cal Bookings ─┬─> Find Due Notifications      (existing, untouched)
+                   └─> Find Rejection Candidates   -> Process Rejections
+                       -> FUB - Get Person (Rejection) -> Check Rejection Guards
+                       -> Rejected? -> Cal.com - Cancel Booking -> Rejection Loop Back
+```
+
+**Three deliberate deviations from the scope doc, each a safety narrowing:**
+
+1. **`allowed_stages` is NOT consulted**, though `Check Nudge Guards` does. The
+   scope said "reuse it verbatim"; doing so would have been a serious bug. Skipping
+   an optional nudge for a lead outside the allow-list is right; *cancelling their
+   appointment* is not. **The only real future booking in the system belongs to a
+   lead in `PM Lead Onboarding`** — outside `allowed_stages` — so a verbatim port
+   would have cancelled a real customer's walkthrough on the first tick. Rejection
+   is the three trash tags or the three trash stages, and nothing else.
+2. **A `fub_person_id` is required; there is no phone/email fallback.** The nudge
+   guard's permissive join is safe because over-matching only suppresses a nudge;
+   here it would cancel a real showing. Bookings predating
+   `CAL_BOOKINGS_PERSON_ID_MARKER` are therefore out of scope forever — as of
+   2026-09-01 that is exactly one row, Isaac Usen's 2026-11-02 walkthrough.
+   **Do not "fix" that by backfilling his `fub_person_id`.** Client confirmed
+   2026-09-02 that he is an **owner / property-manager lead, not a tenant
+   applicant** — he is outside this feature's remit entirely, and pulling him in
+   would put a non-tenant inside a tenant-rejection mechanism. His stage
+   (`PM Lead Onboarding`) is a KEEP for the same reason; the verifier pins it.
+3. **Only FUTURE, still-`scheduled` bookings** are candidates.
+
+`Check Rejection Guards` fails **closed** — a FUB error, an empty person (gotcha
+18) or an id mismatch (gotcha 17) all mean *keep*, because doing nothing is
+recoverable next tick and cancelling is not.
+
+### Layer 2 — a backstop before the door code
+
+A door code is the highest-consequence send in the system (gotcha 8: once sent,
+cancelling deletes only the Populife *cloud* record), so it gets a second,
+independent check in `ztUEx7Htu620SLbj`. **Two things forced it away from the
+obvious design, both found by reading the live code:**
+
+- **It sits between `Read Settings (Cron)` and `Calc Code Window (Cron)`**, not
+  before `Read Settings` as scoped — a gate placed there could not read the kill
+  switch, leaving layer 2 with no off switch. The cost is landing downstream of a
+  Settings read with no `executeOnce`, so the FUB node carries `executeOnce: true`;
+  without it that is **~59 FUB calls per showing** (gotcha 4).
+- **A blocked showing is stamped `status = blocked_rejected` before looping**, not
+  merely skipped. The whole downstream chain reads `$('Find Ready Showings')
+  .first()`, so item 0 is re-read every batch iteration; a skipped row would stay
+  item 0 for its entire 60-minute window and **starve a second legitimate showing
+  behind it**. The stamp makes it fail `status === 'scheduled'` next tick. The gate
+  reads `.first()` too, so gate and action always concern the same booking — **if
+  the `.first()` bug is fixed, fix the gate in the same pass.**
+
+This layer fails **open** (the opposite of layer 1): it blocks only on a positive,
+verified rejection signal.
+
+> **Pre-existing defect, surfaced not fixed.** That same `.first()` chain means two
+> showings ready in the *same* 5-minute tick produce a duplicate Populife code and
+> duplicate SMS for the first, and delay the second by one tick. It has not fired —
+> person 2712's two bookings on 2026-09-01 were 15 minutes apart and the first was
+> resolved before the second became ready — but a tighter pair would trigger it.
+> Same family as gotcha 11/21 and `Prep Delete` in `W6PoSadMxnoHwxhG`. Not fixed
+> here: it is the highest-consequence send path and deserves sign-off.
+
+### Kill switch and rollout
+
+`rejection_cancel_enabled`, created **`false`**, shared by both layers. The scope
+asked for the workflow to ship inactive the way Cal Booking Reminders did; that is
+not available when the host workflow is live, so the Settings key is the
+equivalent — applying the patches changes nothing until it is flipped, and
+`Find Rejection Candidates` returns `[]` while it is off.
+
+```bash
+node scripts/n8n-add-rejection-cancel.mjs [--apply] [--revert --apply] [--emit-js <dir>]
+node scripts/n8n-add-access-rejection-backstop.mjs [--apply] [--revert --apply]
+node scripts/rejection-cancel-preview.mjs [--verbose]      # READ-ONLY. run before enabling
+node scripts/rejection-cancel-verify.mjs [--js <dir>]      # 56 assertions
+```
+Backups `n8n/BEFORE-rejection-cancel/`, `n8n/BEFORE-access-rejection-backstop/`.
+Both builders **refuse to apply** if their preconditions have moved — `Read Cal
+Bookings` losing `executeOnce`, Settings no longer ordered first, or
+`Calc Code Window (Cron)` starting to read its immediate input.
+
+The verifier exists **because the preview necessarily reports zero**: as of
+2026-09-01 there are 0 candidates, which proves the filter can say no and nothing
+about the identity check, the fail-open/fail-closed split, or the must-not-cancel
+cases. Its assertions were confirmed non-vacuous by making them fail on purpose.
+
+> **Run the preview immediately before flipping the switch**, not this paragraph.
+> The count was 0 on 2026-09-01 and will not stay 0.
+
+## Per-category booking notifications (B, built 2026-09-01, NOT applied)
+
+Client request 2026-09-01, with routing confirmed the same day. Replaces the
+hardcoded `appliesToCategory = walkthrough || showing` in `Build Nicole Immediate
+Email` (`5LwTZS4dw5qmInL2`) with a per-category lookup.
+
+| Category | Booked | Cancelled |
+|---|---|---|
+| Self-guided showing | Nicole | Nicole |
+| 45 Minute Initial Consult (`6483828`) | **Justin** | **Justin** |
+| Property Walk Through (`6483829`) | **Emily** | **Emily** |
+
+> **Two of these are changes, not additions, and the client should hear so.**
+> Walkthroughs move **off Nicole** (she has had them since 2026-08-28), and
+> **staff cancellation notices did not exist at all** — today the cancellation
+> email goes to the invitee only.
+
+**Node names and the `nicole_immediate_sent` marker column are deliberately
+unchanged** — renaming breaks scripts and verifiers that reference them, which is
+dearer than an inaccurate name. The column now means "staff notified".
+
+**New Settings keys:** `cal_emily_email`, `cal_justin_email`,
+`cal_notify_walkthrough_to`, `cal_notify_showing_to`, `cal_notify_consult_to`.
+Each routing value is a **comma-separated list**, and each entry is either a
+literal address **or the name of another Settings key** holding one — so
+`cal_notify_walkthrough_to = cal_emily_email` keeps the address in one place.
+**An empty value is that category's off switch; a missing key degrades to the old
+walkthrough+showing→Nicole behaviour** rather than to silence. Gmail accepts a
+comma list, so no fan-out is needed (the Twilio 21211 constraint is SMS-only).
+
+### Two pre-existing defects fixed in the same change
+
+1. **`Build Nicole Immediate Email` raced its own Settings read.** It reads
+   `$('Read Settings (Immediate)').all()` while wired **parallel** to that node,
+   both off `Append Booking Row` — working only because n8n v1 runs the
+   first-listed branch first. Exactly the failure the Cron Poll hit on its first
+   live test. Had it lost, `settings` would be empty, `to` would be `''`, and
+   `shouldSend` would still be `true`. Now chained **downstream** of the Settings
+   read so a real edge forces the order.
+2. **`Send Nicole Immediate Email` had no `onError`** — a bad address aborted the
+   execution and `Mark Nicole Immediate Sent` never ran, leaving the row looking
+   unsent. Now `continueRegularOutput`, and the build node returns `[]` rather than
+   handing Gmail an empty `to`.
+
+The staff cancellation branch hangs off `Read Settings (Cancel)` as a sibling of
+`Build Cancellation Email` (gotcha 19: nothing inserted in front of anything).
+**It needs no new sent-marker column** — `Already Cancelled?` short-circuits
+upstream of that Settings read, so the branch is idempotent for free, and adding a
+column to the 63-wide `Cal Bookings` tab would mean widening the grid first.
+
+```bash
+node scripts/n8n-add-booking-notify-routing.mjs [--apply] [--revert --apply] [--emit-js <dir>]
+node scripts/cal-booking-notify-verify.mjs [--js <dir>]    # 34 assertions
+```
+Backup `n8n/BEFORE-cal-booking-notify/`, which also holds
+`original-nicole-build.js` — **`--revert` depends on that file** and refuses
+without it. The verifier asserts the **connections graph**, because defect 1 was
+an ordering bug that behaved correctly by luck: a rewire back to the parallel
+shape would pass every behavioural assertion while silently reintroducing it.
+
+**Not live-verified.** Booking idempotency means a replayed `BOOKING_CREATED` is
+caught by `Already Recorded?` and skipped, so testing the send path needs a
+genuinely new `booking_uid`.
 
 ### Booking / access code test gate
 
@@ -2273,6 +2494,20 @@ body = {"name": w["name"], "nodes": w["nodes"], "connections": w["connections"],
     DoorLoop"; resolving each owner individually showed the real answer was **zero**.
     Same shape as gotcha 18 on a different vendor: **when a lookup drives a write,
     resolve by id.**
+22. **A PUT that returns `400 Cannot publish workflow` has still SAVED the
+    workflow.** Applying the access-rejection backstop hit
+    `400 ... Missing required credential: googleSheetsOAuth2Api` — and the four
+    new nodes were live anyway, on an `active: true` workflow, with a broken
+    credential. The script correctly reported failure and exited non-zero, so the
+    obvious reading ("nothing was pushed") was wrong; only re-fetching showed it.
+    **After any failed PUT, re-fetch before concluding the state is unchanged** —
+    and note the idempotency check will then say "already applied" and refuse to
+    repair it. The fix is `--revert --apply` then `--apply`.
+    The underlying cause is the one already recorded for the identity reminders:
+    this estate mixes `googleSheetsOAuth2Api` and `serviceAccount` Sheets nodes
+    **inside the same workflow**, so copying the wrong neighbour is easy. Don't
+    hardcode a Sheets credential in a builder — **copy it, and the
+    `authentication` parameter, from the node already writing that tab.**
 21. **A per-item Code node is only correct until something upstream sends two items —
     and a polling trigger will eventually do exactly that.** `New Property → Provision`
     ran correctly for months because properties were added one at a time. Its
@@ -2331,6 +2566,8 @@ write nothing, and touch no n8n state.
 | `stage-gate-race-verify.mjs` | **36** — race recovery, recency guard, both nodes |
 | `cal-booking-reminders-verify.mjs` | **108** — day arithmetic, booking join, guards, wiring |
 | `identity-reminders-verify.mjs` | **41** — day arithmetic, cap, guards |
+| `rejection-cancel-verify.mjs` | **56** — A-2 both layers; `--js <dir>` before it is applied |
+| `cal-booking-notify-verify.mjs` | **34** — B routing, both defects, the connections graph |
 | `cal-link-email-verify.mjs` | **31** — the parallel email branch and its note logging |
 | `inquiry-alert-verify.mjs` | **36** — all three `Row Recorded?` wirings, fan-out |
 | `launch-audit.mjs` | all 12 workflows, 16 hard gates, 3 alert phones |

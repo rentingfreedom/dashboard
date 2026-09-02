@@ -1,5 +1,13 @@
 # Scope: rejected-lead handling + booking email notifications
 
+> **STATUS 2026-09-01 — this document is now a record of the scope, not the
+> build.** A-1 is **applied live**. A-2 and B are **built, verified and NOT
+> applied**. The build made several deliberate departures from what is scoped
+> below — most importantly, **reusing `Check Nudge Guards` verbatim (as A-2
+> proposes) would have cancelled a real customer's walkthrough**, because that
+> guard also acts on `stage_not_allowed`. `docs/n8n-workflows.md` records what
+> was actually built and why; **prefer it over this file where they disagree.**
+
 Written 2026-09-01 from client answers relayed by Andrew. **Nothing here is
 implemented.** Every "today" claim below was verified live against FUB, Cal.com,
 n8n and the Sheet on 2026-09-01 — but re-verify before editing, because several
