@@ -140,17 +140,47 @@ machinery does the rest.
 
 **Build two layers, not one.**
 
-1. **Primary — a new workflow, `Rejected Lead → Cancel Bookings`.** A cron, not
-   a webhook: both FUB `peopleUpdated` slots are full. Every N minutes read
-   `Cal Bookings` for rows with `status = scheduled` and `start_time` in the
-   future — a small set — resolve the FUB person, and cancel if rejected.
+1. **Primary — a new branch on the Cal.com Cron Poll (`3hGnl6mPnu2AMbZ1`), NOT
+   a new workflow.** Revised 2026-09-01 after asking what this costs in Sheets
+   quota, which is the right question for this estate.
+
+   That workflow already ticks **every 5 minutes** and already reads Settings
+   and `Cal Bookings` (`executeOnce: true`). Hanging a rejection branch off the
+   existing `Read Cal Bookings`, as a **sibling** of `Find Due Notifications`,
+   costs **zero additional Sheets requests** — the rows are already in hand.
+
+   ```
+   Read Cal Bookings ─┬─> Find Due Notifications        (existing)
+                      └─> Find Rejection Candidates     (NEW)
+                          -> FUB - Get Person (Rejection)
+                          -> Check Rejection Guards
+                          -> Rejected? -> Cal.com - Cancel Booking
+   ```
+
+   A **sibling** branch is safe here: gotcha 19 is about inserting a node *in
+   front* of one that reads its immediate input. `Find Due Notifications` keeps
+   its existing input and its `$('Read Settings (Cron)')` named reference
+   unchanged.
 
    **Reuse `Check Nudge Guards` from `5UvuzQwLjCB4D25A` verbatim.** It already
-   implements exactly the right person join (`fub_person_id` **or** phone
-   last-10 **or** email, deliberately permissive) and exactly the right policy
-   (`TRASH_TAGS` = the three tags; `TRASH_STAGES` including
-   `cold rental lead 1 month hold`). Copying it keeps one definition of
-   "rejected" rather than introducing a fourth.
+   implements the right person join (`fub_person_id` **or** phone last-10 **or**
+   email, deliberately permissive) and the right policy. Copying it keeps one
+   definition of "rejected" rather than introducing a fourth.
+
+   > **A separate cron workflow was the first proposal and is worse.** It would
+   > add one `Cal Bookings` read per tick against the same 60-reads/min bucket,
+   > and — more to the point than the average rate — one more cron that can land
+   > in the same minute as the others. Every quota failure in this estate has
+   > been a concurrency spike, not a throughput problem.
+   >
+   > **`5UvuzQwLjCB4D25A` was also considered and rejected**: it already reads
+   > everything needed, but only acts in the 10am ET hour, so a rejection could
+   > sit up to 24h before the booking was cancelled — too slow when the showing
+   > is tomorrow morning.
+
+   The only new load is a FUB person lookup per **future scheduled** booking,
+   currently 2–4 rows. FUB has no comparable quota pressure, and the estate
+   already does per-lead FUB reads in both reminder workflows.
 
 2. **Backstop — gate `Find Ready Showings` anyway.** A door code is the
    highest-consequence send in the system, and layer 1 can fail: Cal.com API
@@ -171,11 +201,15 @@ this system has ever written a cancellation to Cal.com. `POST
 discipline used for the Wait node, which had no precedent in this instance and
 was proved in a scratch workflow first.
 
-#### Three questions for the client, all blocking
+#### Client questions — one answered, two still blocking
 
-1. **Which tags cancel a booking?** `Denied Credit` alone (43 people), or all
-   three? `No Response Trash` carries **608 people** and means "unresponsive",
-   not "rejected". This decides the blast radius.
+1. ~~Which tags cancel a booking?~~ **ANSWERED 2026-09-01: all three** —
+   `["permanent trash", "no response trash", "denied credit"]`, identical to the
+   `TRASH_TAGS` array both reminder workflows already use, which is why
+   `Check Nudge Guards` can be reused unmodified. Note the blast radius this
+   implies: **608 people carry `No Response Trash`** — the
+   `rejection_cancel_start_at` cutoff in question 3 is what keeps a first run
+   from acting on all of them.
 2. **The lead will receive Cal.com's standard cancellation email**, because
    cancelling fires the existing CANCELLED branch. That contradicts "no more
    notifications period" — but the alternative is a rejected lead driving to a
