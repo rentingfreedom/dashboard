@@ -47,7 +47,7 @@ workflows should read this file first.
 | `3hGnl6mPnu2AMbZ1` | Cal Reminder - Cron Poll | Every 5 min. Due reminders + follow-ups. **ACTIVE, test-gated.** `n8n/cal-reminder-cron.json`. |
 | `41HFRjgWiPEFJwTU` | Cal Reminder - Reconfirm Webhook | Webhook `reconfirm` (GET `?token=`). Marks `confirmed`, returns static HTML. **ACTIVE.** `n8n/cal-reconfirm-webhook.json`. |
 | `R3rhuCYEGoBFArBa` | Identity Verification Reminders | Hourly tick, sends in the 10am ET hour. One reminder SMS/day for 4 days to leads who haven't verified. **ACTIVE since 2026-08-25.** |
-| `5UvuzQwLjCB4D25A` | Cal Booking Reminders | Hourly tick, sends in the 10am ET hour. One SMS **and** email per day for 4 days to a lead sent a per-property cal link who hasn't booked. **CREATED INACTIVE 2026-08-31.** |
+| `5UvuzQwLjCB4D25A` | Cal Booking Reminders | Hourly tick, sends in the 10am ET hour. One SMS **and** email per day for 4 days to a lead sent a per-property cal link who hasn't booked. **ACTIVE since 2026-09-01** (created inactive 2026-08-31; activated in a later session). |
 | `TGGhSkTSZGYPrZo9` | New Property → Provision | Sheets `rowAdded` poll (**every 5 min** since 2026-09-01) → cal.com event type + Google resource. |
 | `W6PoSadMxnoHwxhG` | Delete Property | Sheets `anyUpdate` poll (**every 5 min**) on the SAME tab → filter `active == "Delete"` → deletes the cal.com event type, the Google resource, and the sheet row. **ACTIVE.** |
 
@@ -84,11 +84,12 @@ not a deploy — it is this list of state changes. `node scripts/launch-audit.mj
    (person 2545) to `Tenant Still Looking For Rental` first** or this disables your own
    test path.
 
-3. **Reassign the alert-phone placeholders** — `unmatched_inquiry_alert_phone`,
-   `rental_application_alert_phone`, `cal_send_failure_alert_phone` are all still
-   `+18038047847` (Andrew's personal number). `launch-audit.mjs` checks all three.
-   `rental_application_alert_phone` drives **two** alerts (Zillow application + new
-   inquiry-lead); reassigning moves both.
+3. **Reassign the alert-phone placeholders** — **two of three done.**
+   `unmatched_inquiry_alert_phone` and `rental_application_alert_phone` are now
+   `+18434945244` (verified live 2026-09-03). `cal_send_failure_alert_phone` is
+   **still `+18038047847`** (Andrew's personal number). `launch-audit.mjs` checks all
+   three. `rental_application_alert_phone` drives **two** alerts (Zillow application +
+   new inquiry-lead); reassigning moved both.
 
 4. ~~**Add Properties rows for the unmatched live Zillow addresses**~~ —
    **RESOLVED, do not add any of them.** `296 Blue Haw Dr` and `5464 Crown Ave` already
@@ -937,7 +938,7 @@ the **stage** gate only — this workflow *is* test-gated as of 2026-07-31.
 > gate deliberately fails **open** so a FUB outage can never strand a verified
 > tenant at the door. Do not widen it into a stage gate.
 
-## Rejected leads → cancel the booking (A-2, built 2026-09-01, NOT applied)
+## Rejected leads → cancel the booking (A-2, built 2026-09-01, APPLIED and LIVE)
 
 Client decision 2026-09-01: *"If they get rejected, they should not get any more
 notifications period — no reminder updates, no code sent, and the appointment
@@ -1037,11 +1038,18 @@ not available when the host workflow is live, so the Settings key is the
 equivalent — applying the patches changes nothing until it is flipped, and
 `Find Rejection Candidates` returns `[]` while it is off.
 
+> **It is now `true` — verified live 2026-09-03.** Both layers are armed. The
+> `cal_notify_*` routing keys for B are populated too. **Nothing in the 2026-09-01
+> to 09-03 execution history shows either layer firing**, and
+> `rejection-cancel-preview.mjs` still reports 0 candidates — but the preview was
+> the pre-flip check and the switch is already flipped, so the next time it matters
+> is the first real rejection. Watch it.
+
 ```bash
 node scripts/n8n-add-rejection-cancel.mjs [--apply] [--revert --apply] [--emit-js <dir>]
 node scripts/n8n-add-access-rejection-backstop.mjs [--apply] [--revert --apply]
 node scripts/rejection-cancel-preview.mjs [--verbose]      # READ-ONLY. run before enabling
-node scripts/rejection-cancel-verify.mjs [--js <dir>]      # 56 assertions
+node scripts/rejection-cancel-verify.mjs [--js <dir>]      # 73 assertions
 ```
 Backups `n8n/BEFORE-rejection-cancel/`, `n8n/BEFORE-access-rejection-backstop/`.
 Both builders **refuse to apply** if their preconditions have moved — `Read Cal
@@ -1056,7 +1064,7 @@ cases. Its assertions were confirmed non-vacuous by making them fail on purpose.
 > **Run the preview immediately before flipping the switch**, not this paragraph.
 > The count was 0 on 2026-09-01 and will not stay 0.
 
-## Per-category booking notifications (B, built 2026-09-01, NOT applied)
+## Per-category booking notifications (B, built 2026-09-01, APPLIED)
 
 Client request 2026-09-01, with routing confirmed the same day. Replaces the
 hardcoded `appliesToCategory = walkthrough || showing` in `Build Nicole Immediate
@@ -1108,7 +1116,7 @@ column to the 63-wide `Cal Bookings` tab would mean widening the grid first.
 
 ```bash
 node scripts/n8n-add-booking-notify-routing.mjs [--apply] [--revert --apply] [--emit-js <dir>]
-node scripts/cal-booking-notify-verify.mjs [--js <dir>]    # 34 assertions
+node scripts/cal-booking-notify-verify.mjs [--js <dir>]    # 48 assertions
 ```
 Backup `n8n/BEFORE-cal-booking-notify/`, which also holds
 `original-nicole-build.js` — **`--revert` depends on that file** and refuses
@@ -1119,6 +1127,27 @@ shape would pass every behavioural assertion while silently reintroducing it.
 **Not live-verified.** Booking idempotency means a replayed `BOOKING_CREATED` is
 caught by `Already Recorded?` and skipped, so testing the send path needs a
 genuinely new `booking_uid`.
+
+### Vacant properties with no `populife_lock_id` — a showing there HARD-FAILS
+
+`Build Showing Row` throws `No Populife lock ID on property <key> — assign a lockbox
+first` and the Booking Handler execution **dies at `Find Property`**. No `Showings` row
+is written, so nothing downstream ever retries and no access code is dispatched.
+
+> **The customer sees none of it.** Cal.com Immediate Sends records the `Cal Bookings`
+> row on its own separate webhook, so the confirmation email and every reminder still
+> go out normally. The lead is told their self-guided showing is booked and arrives at
+> a door that will not open. **This is the loudest failure in the system to a human and
+> the quietest one in the sheet.**
+
+Fired live 2026-08-30 (execution 30008): Erick Silva, `104-hawthorne-landing-dr`.
+
+**Audit 2026-09-03 — 5 of the 9 active vacant properties have an empty
+`populife_lock_id`:** `104-sweet-cherry-ln`, `214-devonshire-drive`,
+`129-towering-pine-drive`, `104-hawthorne-landing-dr`, `270-ivory-shadow-rd` — which
+are precisely the addresses currently being inquired on. **This is an operations task
+(assign the lockboxes), not a code change**, but it is worth re-checking whenever a
+property flips to vacant, because provisioning does not assign one.
 
 ### Booking / access code test gate
 
@@ -1465,6 +1494,77 @@ Backup `n8n/BEFORE-gate-read-fanout/`. The script refuses to apply unless
 Verified live 2026-08-31 (execution 30603): 23227ms / 3600 items → **791ms / 61 items**,
 verdict unchanged.
 
+### The SAME fan-out in the Result Handler — fixed 2026-09-03
+
+**The 2026-08-31 audit fixed the gate and missed the workflow immediately downstream
+of it**, because it measured the *gate*. `PHSdCWhovdbFDHlX` wires
+`Read Identity Verifications → Read Settings`, and `Read Settings` had no
+`executeOnce` — so it issued **one Sheets request per Identity_Verifications row.**
+
+> **This one gets worse on its own, which the gate's version did not.** The gate's
+> fan-out width was the Settings row count, and Settings only grows when someone adds
+> a key. Here the width is the **`Identity_Verifications` row count**, and Identity
+> Reminders appends a row per reminder per lead — **~8 a day**. It crossed 60 in
+> ordinary operation with nobody touching anything.
+
+| Execution | Date | IV rows | Result |
+|---|---|---|---|
+| 29382 | 2026-08-29 | ~45 | success |
+| 30597 | 2026-08-31 | ~62 | success |
+| **32222** | **2026-09-02** | **97** | **429, died at node 3 of 10** |
+
+`retryOnFail` cannot recover — the retry replays the same N-request read, the same
+reason `SHEETS_RETRY_MARKER` could not recover in the gate. And unlike the gate, this
+workflow has **no `sheets_unavailable` bail, no retry decision and no alert**: it just
+errors.
+
+> **The blast radius is the whole point.** This workflow is the only thing that marks a
+> row `verified` and the only thing that replays the cal-link sweep. While it is broken
+> **every lead who completes Stripe Identity verifies into silence** — and because their
+> row stays `pending`, Identity Reminders keeps texting them to verify something they
+> have already done. It is the "verification is not coupled to deliverability" failure
+> arriving by a new route, and it is self-inflicted rather than a data gap.
+
+```bash
+node scripts/n8n-fix-result-handler-fanout.mjs [--apply] [--revert --apply]
+```
+Backup `n8n/BEFORE-result-handler-fanout/`. The script refuses to apply unless
+`Read Identity Verifications` is still the node's only **producer** (the fan-out source
+has not moved), `Find Verification Row` is still its only **consumer**, is Code v2 in
+`runOnceForAllItems`, and reads it purely by named reference. Applied and verified live
+2026-09-03, execution 33054: `Read Settings` 107 items → **65**, all 10 nodes ran.
+
+**One real lead was lost to it — Amanda Hardwick (2769)**, repaired the same day;
+`scripts/_oneoff-2026-09-03-amanda-repair.mjs`, journal
+`n8n/BEFORE-2026-09-03-amanda-repair/`. The repair **re-POSTs the original Stripe result
+payload to the Result Handler's own webhook** rather than hand-writing the sheet — the
+same reasoning as `SHEETS_RETRY_MARKER`, and idempotent for free because
+`Already Resolved?` short-circuits a row that has since been resolved. It re-checks nine
+preconditions live, including the Cheyla Zinck guard (*is the property still vacant?*).
+
+> **`sheets-fanout-audit.mjs` could not have caught this, and that is the real lesson.**
+> Its `WFS` map was a **hardcoded list of eight workflow ids, and the Result Handler was
+> not one of them** — so the audit was never looking. The 2026-08-31 claim that "this
+> was the only compounding fan-out in the estate" was true only of the eight it
+> enumerated; seven active workflows had never been measured at all.
+>
+> **Fixed 2026-09-03: the script now derives its list from the API** (every active
+> workflow, `--all` for the rest) so it cannot drift out of date again. **Do not
+> reintroduce a hardcoded list.** Re-run across all 16 active workflows: the only hit is
+> this same `Read Settings` on a pre-fix execution, and no fan-out exists anywhere else.
+> Only `ky3jGATzHb9eg4BC` (Test Helper) is unmeasured, for want of a recent run — the
+> script now says so out loud, because a silent empty section reads as "clean".
+
+> **The signal is the ITEM COUNT, not the run count — verified against live runData,
+> and the opposite of what is intuitive.** n8n records a fanned-out Sheets node as
+> **`runs=1` with a multiplied item count**, not as `runs=N`: exec 30597 logged
+> `Read Settings runs=1 out=3660` (60 Settings rows × 61 input items). An audit keyed on
+> `runs>1` would have missed every fan-out this estate has ever had, *and* would falsely
+> flag `Log Reminder Row`, which legitimately runs once per batch inside
+> `SplitInBatches`. The threshold is therefore item volume, and the report prints the
+> **execution id and date** of the worst run so a hit that predates a fix is not misread
+> as current state.
+
 ### The two Properties pollers — 5-minute interval (2026-09-01)
 
 `TGGhSkTSZGYPrZo9` and `W6PoSadMxnoHwxhG` poll the **same** Properties tab, and
@@ -1497,7 +1597,8 @@ Backup `n8n/BEFORE-properties-poll-interval/`.
 > **The same audit found nothing else.** Item counts were measured on every Sheets node
 > across the eight active workflows: everywhere else either carries `executeOnce` or has
 > a Code node collapsing the stream first. **This was the only compounding fan-out in
-> the estate.** Re-run with `node scripts/sheets-fanout-audit.mjs` after adding any
+> the eight workflows that audit then covered** — it did not cover the Result Handler,
+> which had one; see below. Re-run with `node scripts/sheets-fanout-audit.mjs` after adding any
 > Sheets node downstream of another — a fan-out shows up as an item count far larger
 > than the tab it reads.
 
@@ -2566,8 +2667,8 @@ write nothing, and touch no n8n state.
 | `stage-gate-race-verify.mjs` | **36** — race recovery, recency guard, both nodes |
 | `cal-booking-reminders-verify.mjs` | **108** — day arithmetic, booking join, guards, wiring |
 | `identity-reminders-verify.mjs` | **41** — day arithmetic, cap, guards |
-| `rejection-cancel-verify.mjs` | **56** — A-2 both layers; `--js <dir>` before it is applied |
-| `cal-booking-notify-verify.mjs` | **34** — B routing, both defects, the connections graph |
+| `rejection-cancel-verify.mjs` | **73** — A-2 both layers, now applied; `--js <dir>` predates that |
+| `cal-booking-notify-verify.mjs` | **48** — B routing, both defects, the connections graph |
 | `cal-link-email-verify.mjs` | **31** — the parallel email branch and its note logging |
 | `inquiry-alert-verify.mjs` | **36** — all three `Row Recorded?` wirings, fan-out |
 | `launch-audit.mjs` | all 12 workflows, 16 hard gates, 3 alert phones |

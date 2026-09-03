@@ -1,0 +1,96 @@
+{
+  "captured_at": "2026-09-03T23:23:55.853Z",
+  "payload": {
+    "event": "identity_verification.result",
+    "source": "dashboard",
+    "spreadsheet_id": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+    "tab": "n/a",
+    "requested_by": "stripe",
+    "timestamp": "2026-09-02T18:27:38.398Z",
+    "dashboard_url": "https://renting-freedom/dashboard.vercel.app",
+    "lead_id": "2769",
+    "session_id": "vs_1UBEjRBgJfPX83bqwqgCZFHG",
+    "status": "verified",
+    "error_code": "",
+    "error_reason": ""
+  },
+  "identity_verification_rows": [
+    {
+      "_row": 84,
+      "session_id": "vs_1UAzOzBgJfPX83bq8aisnzn2",
+      "lead_id": "2769",
+      "lead_name": "Amanda Hardwick",
+      "phone": "18433777476",
+      "original_webhook_body": "{\"eventId\":\"d32bb896-06d0-4e1a-9b7b-019934e21a18\",\"eventCreated\":\"2026-09-01T21:39:28+00:00\",\"event\":\"peopleUpdated\",\"resourceIds\":[2769],\"uri\":\"https://api.followupboss.com/v1/people?id=2769\"}",
+      "status": "pending",
+      "sent_at": "2026-09-01T21:39:34.638Z",
+      "resolved_at": "",
+      "error_code": "",
+      "error_reason": "",
+      "reminder_number": "",
+      "reminder_anchor_at": ""
+    },
+    {
+      "_row": 96,
+      "session_id": "vs_1UBEjRBgJfPX83bqwqgCZFHG",
+      "lead_id": "2769",
+      "lead_name": "Amanda Hardwick",
+      "phone": "8433777476",
+      "original_webhook_body": "{\"eventId\":\"d32bb896-06d0-4e1a-9b7b-019934e21a18\",\"eventCreated\":\"2026-09-01T21:39:28+00:00\",\"event\":\"peopleUpdated\",\"resourceIds\":[2769],\"uri\":\"https://api.followupboss.com/v1/people?id=2769\"}",
+      "status": "pending",
+      "sent_at": "2026-09-02T14:01:43.207Z",
+      "resolved_at": "",
+      "error_code": "",
+      "error_reason": "",
+      "reminder_number": "1",
+      "reminder_anchor_at": "2026-09-01T21:39:34.638Z"
+    },
+    {
+      "_row": 105,
+      "session_id": "vs_1UBbCVBgJfPX83bqt4QshJVx",
+      "lead_id": "2769",
+      "lead_name": "Amanda Hardwick",
+      "phone": "8433777476",
+      "original_webhook_body": "{\"eventId\":\"d32bb896-06d0-4e1a-9b7b-019934e21a18\",\"eventCreated\":\"2026-09-01T21:39:28+00:00\",\"event\":\"peopleUpdated\",\"resourceIds\":[2769],\"uri\":\"https://api.followupboss.com/v1/people?id=2769\"}",
+      "status": "pending",
+      "sent_at": "2026-09-03T14:01:12.565Z",
+      "resolved_at": "",
+      "error_code": "",
+      "error_reason": "",
+      "reminder_number": "2",
+      "reminder_anchor_at": "2026-09-01T21:39:34.638Z"
+    }
+  ],
+  "inquiries_rows": [
+    {
+      "_row": 94,
+      "person_id": "2769",
+      "property_key": "129-towering-pine-drive",
+      "cal_link": "cal.com/rentingfreedom/129-towering-pine-drive",
+      "inquired_at": "2026-09-01T20:17:52Z",
+      "link_sent": "FALSE",
+      "link_sent_at": "",
+      "source": "Zillow Rentals",
+      "event_id": "1933",
+      "property_address": "129 Towering Pine Dr",
+      "match_status": "matched",
+      "phone": "",
+      "email": "4ctghy0m3c7emitydv8xaye6h4@convo.zillow.com",
+      "alert_sent": "",
+      "booking_reminder_count": "",
+      "booking_reminder_last_at": "",
+      "booked_at": ""
+    }
+  ],
+  "fub_person": {
+    "id": 2769,
+    "firstName": "Amanda",
+    "lastName": "Hardwick",
+    "stage": "Tenant Still Looking For Rental",
+    "tags": [
+      "29456",
+      "Ladson"
+    ],
+    "phone": "8433777476"
+  }
+}
