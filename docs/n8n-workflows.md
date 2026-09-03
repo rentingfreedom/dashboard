@@ -2673,6 +2673,19 @@ write nothing, and touch no n8n state.
 | `inquiry-alert-verify.mjs` | **36** — all three `Row Recorded?` wirings, fan-out |
 | `launch-audit.mjs` | all 12 workflows, 16 hard gates, 3 alert phones |
 
+> **A verifier that fails at RANDOM stops being read just as surely as one that tests
+> nothing.** `trash-tag-gate-verify.mjs` had a flaky assertion from 2026-08-26 to
+> 2026-09-03: "firstName does not change the decision" calls the gate twice and
+> deep-compares, and `DATELESS_TRASH_TAG_MARKER` synthesises `Date.now()` into
+> `reapply_preserved_trash_date` — so two calls microseconds apart could straddle a
+> millisecond boundary and differ by exactly 1ms. Observed **0, 2, 1 and 1 failures
+> across four consecutive runs** with nothing wrong anywhere. Fixed by **freezing the
+> clock across the pair**, not by stripping the field: that value is what the reroute
+> PATCH writes to FUB, so "a real lead and a test lead get the same one" is worth
+> asserting, and stripping it would have silenced the flake and the coverage together.
+> Non-vacuity confirmed by injecting a 1ms skew — 6 deterministic failures, 377
+> assertions either way.
+
 > **A fixture pinned to a live CRM record is a test that expires.** Two verifiers were
 > silently testing nothing and were repaired 2026-08-31 — `stage-gate-verify.mjs` used
 > Test Test9's live stage, which the 593-person backfill later trash-tagged so the trash

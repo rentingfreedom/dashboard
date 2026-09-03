@@ -209,8 +209,29 @@ section("1b. Identity Gate · the test gate is LIFTED (post-launch invariant)");
 const REAL = { firstName: "Carol", name: "Carol Pritchett", lastName: "Pritchett" };
 for (const c of POLICY_CASES) {
   console.log(`\n  ${c.label} — Test lead vs real lead`);
-  const asTest = runGate(person(c));
-  const asReal = runGate(person(c, REAL));
+  // Both runs must see the SAME clock. DATELESS_TRASH_TAG_MARKER synthesises
+  // `Date.now()` into `reapply_preserved_trash_date` for a tag with no date, so
+  // two calls microseconds apart can straddle a millisecond boundary and differ
+  // by exactly 1ms. That made this assertion fail at random — observed 0, 2, 1
+  // and 1 failures across four consecutive runs on 2026-09-03 — with no defect
+  // anywhere. A verifier that fails at random is a verifier that stops being
+  // read, which is the failure mode this suite exists to prevent.
+  //
+  // Freezing rather than stripping the field: `reapply_preserved_trash_date` is
+  // the value the reroute PATCH writes to FUB, so "a real lead and a test lead
+  // get the same one" is worth asserting. Stripping it would silence the flake
+  // and the coverage together. The freeze is set to the real current time, so
+  // every other date computation behaves exactly as it would unfrozen.
+  const realNow = Date.now;
+  const frozen = realNow();
+  Date.now = () => frozen;
+  let asTest, asReal;
+  try {
+    asTest = runGate(person(c));
+    asReal = runGate(person(c, REAL));
+  } finally {
+    Date.now = realNow;
+  }
   // Identity fields legitimately differ — person_name/first_name are echoed
   // downstream to personalise the SMS, they are not decisions. Everything the
   // policy actually decides must be identical.
