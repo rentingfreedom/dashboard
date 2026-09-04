@@ -47,6 +47,14 @@ Do these before migrating — they are hours, not weeks:
   not per service account (verified live 2026-07-30). The Identity Gate already
   runs on a Project 2 credential. Moving the two 5-minute crons to a Project 3
   credential is a config change with no code risk and roughly triples headroom.
+
+  > **DECLINED 2026-09-03, with reasons — revisit when `launch-audit.mjs` warns.**
+  > Peak usage is 12 of 60 requests (20%). The 10am collision this guards against
+  > is **already mitigated** — Identity Reminders runs on Project 2 and Cal Booking
+  > Reminders on main, so the two workflows sharing that hour are already split.
+  > And the 5-minute crons are not the burst risk; **lead arrival** is, and that
+  > path stays on main either way. No Project 3 credential exists in n8n
+  > (`helper1`/`helper2` from the earlier ineffective attempt are gone).
 - **Request a quota increase** on the existing projects.
 - ~~**Cache `Read Settings`.**~~ **MEASURED 2026-09-03 — this is worth far less
   than written here, and the claim below was wrong.** `Read Settings` is **ONE

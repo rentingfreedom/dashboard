@@ -1695,6 +1695,17 @@ at all. The rebalance is not free of risk: swapping a Sheets credential also req
 setting `authentication: "serviceAccount"` in the node *parameters*, or n8n refuses to
 publish (gotcha 22), and a failed PUT still saves.
 
+> **DECIDED 2026-09-03 — do NOT re-litigate: neither lever is being pulled, and
+> that is the right call at 20% utilisation.** Settings caching is ~8% for stale
+> kill switches. Bucket-splitting was declined because **the collision it guards
+> against is already mitigated**: the two workflows that fire in the same 10am ET
+> hour are already on **different** buckets — Identity Reminders on Project 2,
+> Cal Booking Reminders on main. Moving the 5-minute crons would shift ~6 requests
+> per 5 minutes off a bucket running at 20%, while the actual burst risk is lead
+> *arrival*, which the crons are not. `launch-audit.mjs` warns at 30 requests, so
+> there is ~2.5× headroom of warning before any of this matters. **Revisit when it
+> warns, not before.**
+
 **Migrate to Supabase when** any of: the reminder peak crosses ~45 requests;
 `Identity_Verifications` growth makes whole-tab reads the bottleneck (107 rows at
 +8/day, and every read pulls the whole tab); a sustained isolated error rate above
