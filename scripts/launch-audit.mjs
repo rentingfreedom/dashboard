@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 /**
- * Read-only pre-launch audit. Writes nothing, sends nothing.
+ * Read-only production audit. Writes nothing, sends nothing.
  *
  *   node scripts/launch-audit.mjs
  *
- * Reports the state of every item on the pre-launch checklist in
- * docs/n8n-workflows.md that can be checked programmatically:
+ * THE SYSTEM LAUNCHED 2026-08-25. This was the pre-launch checklist reporter;
+ * it is now the post-launch state reporter. Programmatically checked:
  *
- *   - which workflows still carry a firstName === "Test" gate, and where
+ *   - residual test gates and where they are, against the post-launch BASELINE
+ *     of 13 (not against zero — see EXPECTED_RESIDUAL below)
  *   - active/inactive state of every workflow
  *   - the launch-sensitive Settings keys
+ *   - Sheets quota headroom: nodes per GCP project bucket, and the peak Sheets
+ *     requests any single execution has cost (added 2026-09-03)
  *
  * Items it CANNOT check (client decisions, external data) are listed at the end
  * as manual reminders.
@@ -144,7 +147,7 @@ function classify(node) {
 }
 
 console.log("═".repeat(72));
-console.log("PRE-LAUNCH AUDIT");
+console.log("PRODUCTION AUDIT — live since 2026-08-25");
 console.log("═".repeat(72));
 
 let testGateTotal = 0;
@@ -243,6 +246,97 @@ const isAndrews = unreassigned.length > 0;
 console.log(`  inquiry_flow_start_at         ${settings.inquiry_flow_start_at ?? "(unset)"}`);
 console.log(`  rejected_stage_label          ${settings.rejected_stage_label ?? "(unset)"}  — inert by decision; no such stage exists`);
 
+// ─── Sheets quota headroom ───────────────────────────────────────────────────
+// Added 2026-09-03. The gate columns above answer "did we launch correctly?";
+// this answers "will we still be standing at 5x the lead volume?".
+//
+// WHY THIS AND NOT AN ERROR RATE. Post-launch measurement (5,624 executions,
+// 2026-08-27 -> 09-03) puts the error rate at 0.18% with NO concurrency
+// correlation — 3-5 concurrent executions fail at the same rate as isolated
+// ones. The burst problem that dominated the pre-launch analysis is gone: it
+// was two `executeOnce` fan-out defects, not a Sheets limitation. So error rate
+// is now a LAGGING indicator and will stay flat right up until it doesn't.
+//
+// The leading indicator is the cost of a SINGLE execution against the 60
+// requests/minute per-project bucket. Most workflows have a fixed cost. The two
+// reminder workflows do not: `Log Reminder Row` / `Mark Nudge Sent` run once per
+// lead processed, so their cost scales LINEARLY with the number of leads due in
+// the 10am ET window — and both fire in that same hour. That is the one place a
+// single execution can saturate the bucket on its own, which is precisely how
+// the Identity Gate used to fail (60 requests, one execution, every time).
+const QUOTA_PER_MIN = 60;
+const WARN_AT = 30;   // half the bucket in one execution: two overlapping runs can now fail
+const ALARM_AT = 45;  // three quarters: effectively a self-inflicted outage waiting for company
+
+console.log("\n── Sheets quota headroom ──────────────────────────────────────────────");
+const api = async (p) =>
+  (await fetch("https://automation.rentingfreedom.com/api/v1" + p, { headers: { "X-N8N-API-KEY": KEY } })).json();
+
+// Derived from the API, never hardcoded — a stale hardcoded list is exactly how
+// the Result Handler fan-out survived the 2026-08-31 audit (see
+// sheets-fanout-audit.mjs).
+const activeWfs = ((await api("/workflows?limit=100")).data ?? []).filter((w) => w.active);
+
+let mainBucket = 0, project2 = 0;
+const peaks = [];
+for (const w of activeWfs) {
+  const full = await api("/workflows/" + w.id);
+  const sheetNodes = new Set(
+    (full.nodes ?? [])
+      .filter((n) => String(n.type).includes("googleSheets") && !String(n.type).includes("Trigger"))
+      .map((n) => n.name)
+  );
+  for (const n of full.nodes ?? []) {
+    if (!String(n.type).includes("googleSheets") || String(n.type).includes("Trigger")) continue;
+    const credName = Object.values(n.credentials ?? {}).map((c) => c.name).join(" ");
+    if (/project 2/i.test(credName)) project2++; else mainBucket++;
+  }
+  if (sheetNodes.size === 0) continue;
+
+  const execs = (await api(`/executions?workflowId=${w.id}&limit=20&includeData=true`)).data ?? [];
+  let peak = 0, peakExec = null, peakAt = null;
+  for (const e of execs) {
+    const rd = e.data?.resultData?.runData ?? {};
+    let req = 0;
+    for (const [name, runs] of Object.entries(rd)) if (sheetNodes.has(name)) req += runs.length;
+    if (req > peak) { peak = req; peakExec = e.id; peakAt = e.startedAt; }
+  }
+  if (peak > 0) peaks.push({ name: w.name.replace(/^RentingFreedom (Production )?- /, ""), peak, exec: peakExec, at: peakAt });
+}
+peaks.sort((a, b) => b.peak - a.peak);
+
+console.log(`  Bucket: ${QUOTA_PER_MIN} read req/min, per GCP PROJECT (not per service account).`);
+console.log(`  Sheets nodes by bucket:  main=${mainBucket}   Project 2=${project2}`);
+if (project2 * 4 < mainBucket) {
+  console.log(`      ↳ ${mainBucket} of ${mainBucket + project2} nodes share ONE bucket. Moving the two`);
+  console.log(`        5-minute crons to a Project 3 credential is the cheap lever, and`);
+  console.log(`        is a config change with no code risk.`);
+}
+
+console.log(`\n  Peak Sheets requests in a SINGLE execution (last 20 runs each):`);
+for (const p of peaks.slice(0, 6)) {
+  const pct = Math.round((100 * p.peak) / QUOTA_PER_MIN);
+  const mark = p.peak >= ALARM_AT ? "  ⚠⚠ ALARM" : p.peak >= WARN_AT ? "  ⚠ WARN" : "";
+  console.log(`      ${String(p.peak).padStart(3)} req  ${String(pct).padStart(3)}% of bucket  ${p.name}${mark}`);
+}
+
+const worst = peaks[0] ?? { peak: 0, name: "(none)", exec: "-", at: "-" };
+if (worst.peak >= ALARM_AT) {
+  console.log(`\n  ⚠⚠ "${worst.name}" reached ${worst.peak} requests in one execution (exec ${worst.exec}).`);
+  console.log(`     That is ${Math.round((100 * worst.peak) / QUOTA_PER_MIN)}% of the minute bucket in a single run.`);
+  console.log(`     ACT NOW: split the bucket (Project 3), cache Read Settings, or migrate`);
+  console.log(`     tier 1 per docs/supabase-migration-plan.md.`);
+} else if (worst.peak >= WARN_AT) {
+  console.log(`\n  ⚠ "${worst.name}" reached ${worst.peak} requests in one execution (exec ${worst.exec}).`);
+  console.log(`    Half the bucket in one run — two overlapping executions can now fail.`);
+  console.log(`    Pull the cheap levers before this grows: Project 3, cache Read Settings.`);
+} else {
+  console.log(`\n  ✓ worst single execution ${worst.peak} req (${Math.round((100 * worst.peak) / QUOTA_PER_MIN)}% of bucket) — "${worst.name}"`);
+  console.log(`    Headroom is comfortable. Re-check when lead volume grows: the reminder`);
+  console.log(`    workflows scale linearly with leads due in the 10am ET window, so this`);
+  console.log(`    number rises with lead count even if nothing is changed.`);
+}
+
 // ─── summary ─────────────────────────────────────────────────────────────────
 const expectedTotal = Object.values(EXPECTED_RESIDUAL).reduce((a, [n]) => a + n, 0);
 
@@ -274,7 +368,12 @@ console.log("      duplicate them and provision a second cal.com event type each
 console.log("      522 Temple Rd is OCCUPIED to 2028-08-31 and has never been");
 console.log("      inquired on. (Resolved 2026-08-20 / 2026-08-23.)");
 console.log("  · Test Test9 (2545): deliberately NOT preserved. It sits in stage");
-console.log("      'Trash'. There is no smoke-test path by choice — this also means");
-console.log("      stage-gate-verify.mjs FAILS 7 assertions because it uses 2545 as");
-console.log("      its live subject. That failure is expected; see the runbook.");
+console.log("      'Trash'. There is no smoke-test path by choice.");
+// This used to add "and so stage-gate-verify.mjs FAILS 7 assertions, expected".
+// That was true only between 2545 being trashed and the 2026-08-31 repair that
+// re-pinned that verifier to synthetic data. It passes cleanly now (re-verified
+// 2026-09-03, 0 failures). Telling an operator to expect 7 failures is worse
+// than saying nothing: a REAL failure gets waved through as the known one.
+console.log("      stage-gate-verify.mjs PASSES cleanly (re-verified 2026-09-03).");
+console.log("      If it fails, something is actually wrong — do not wave it through.");
 console.log("\nSee docs/launch-gate-lift-runbook.md (LAUNCH RECORD) for the launched state.");

@@ -51,45 +51,51 @@ workflows should read this file first.
 | `TGGhSkTSZGYPrZo9` | New Property → Provision | Sheets `rowAdded` poll (**every 5 min** since 2026-09-01) → cal.com event type + Google resource. |
 | `W6PoSadMxnoHwxhG` | Delete Property | Sheets `anyUpdate` poll (**every 5 min**) on the SAME tab → filter `active == "Delete"` → deletes the cal.com event type, the Google resource, and the sheet row. **ACTIVE.** |
 
-## Pre-launch checklist
+## LAUNCHED 2026-08-25 — the system is LIVE
 
-The system is in **test mode**: only "Test Test9" receives anything. Going live is
-not a deploy — it is this list of state changes. `node scripts/launch-audit.mjs`
-(read-only) shows live status of everything checkable.
+**Real leads receive real SMS, email, and door codes.** This section used to be a
+pre-launch checklist; it is now the launch record. Full sequence and what it caught:
+`docs/launch-gate-lift-runbook.md` (LAUNCH RECORD). Live state:
+`node scripts/launch-audit.mjs`.
 
-### Blocking
+> **Treat every change as production from here.** There is **no smoke-test path** —
+> Test Test9 (2545) sits in stage `Trash` by deliberate choice, so the "safe" webhook
+> replays documented further down now hit real gating.
+>
+> `stage-gate-verify.mjs` **passes cleanly** (re-verified 2026-09-03, 0 failures).
+> Older notes claiming it "FAILS 7 assertions, expected" are **stale** — that was
+> true only between Test Test9 being trashed and the 2026-08-31 repair that pinned
+> the verifier to synthetic data. **If it fails now, something is actually wrong.**
 
-1. **Lift every test gate — all 16, across 12 workflows.**
+### Done at launch
 
-   > **Do not hand-edit the gate nodes. Run the scripts, in this order.**
-   > Hand-editing 16 gates in 12 workflows is how you end up with the chain
-   > half-lifted — which looks like a bug rather than a config state.
+1. ~~**Lift every test gate — all 16, across 12 workflows.**~~ **DONE 2026-08-25**,
+   in the documented order, 0 failures. `n8n-lift-test-gates.mjs --apply
+   --confirm-live` updated 6 workflows; `n8n-add-access-test-gate.mjs --revert
+   --apply` made 7 changes.
 
-   ```bash
-   node scripts/launch-backlog-check.mjs                       # 1. what fires? read-only
-   node scripts/n8n-lift-test-gates.mjs                        # 2. review. changes nothing
-   node scripts/n8n-lift-test-gates.mjs --apply --confirm-live # 3. THE change. real SMS/email
-   node scripts/n8n-add-access-test-gate.mjs --revert --apply  # 4. the other 4 gates
-   node scripts/launch-audit.mjs                               # 5. expect hardGates=0
-   ```
-   Backups from step 3 land in `n8n/BEFORE-lift-test-gates/`. Undo:
-   `n8n-lift-test-gates.mjs --revert --apply` (step 3);
-   `n8n-add-access-test-gate.mjs --apply` (step 4). Neither unsends an SMS. As of
-   2026-08-07 the lift script is **dry-run verified only** — run step 3 with a human
-   watching and follow one real lead end to end.
+   > **`hardGates` can never reach 0 now, and expecting 0 misreads a correct
+   > launch as a broken one.** The lift scripts leave bypassed IF nodes on the
+   > canvas DISCONNECTED rather than faking a condition, and `launch-audit.mjs`
+   > classifies by node parameters rather than graph reachability — so an
+   > orphaned gate node counts forever. **The baseline is 13 residual gates, and
+   > the signal is whether the count MATCHES**, not whether it is zero. Above
+   > baseline means something was re-armed; below usually means a node was deleted.
 
-2. **Set `allowed_stages` to production** —
-   `node scripts/stage-gate-setup.mjs --production --apply`. Client confirmed
-   2026-07-28 that `Incoming Rental Leads` must not be live. **Move Test Test9
-   (person 2545) to `Tenant Still Looking For Rental` first** or this disables your own
-   test path.
+   Revert (neither unsends an SMS): `n8n-lift-test-gates.mjs --revert --apply`,
+   `n8n-add-access-test-gate.mjs --apply`. Backups `n8n/BEFORE-lift-test-gates/`.
 
-3. **Reassign the alert-phone placeholders** — **two of three done.**
-   `unmatched_inquiry_alert_phone` and `rental_application_alert_phone` are now
-   `+18434945244` (verified live 2026-09-03). `cal_send_failure_alert_phone` is
-   **still `+18038047847`** (Andrew's personal number). `launch-audit.mjs` checks all
-   three. `rental_application_alert_phone` drives **two** alerts (Zillow application +
-   new inquiry-lead); reassigning moved both.
+2. ~~**Set `allowed_stages` to production**~~ — **DONE**, read-back confirmed.
+   Now the two tenant stages only; `Incoming Rental Leads` is out, per the client's
+   2026-07-28 decision.
+
+3. **Alert phones — 2 of 3 reassigned, and the third is a DECISION, not a gap.**
+   `unmatched_inquiry_alert_phone` and `rental_application_alert_phone` are
+   `+18434945244` (verified live 2026-09-03). `cal_send_failure_alert_phone` stays
+   `+18038047847` **by decision 2026-08-25** — Andrew wants send failures himself.
+   `launch-audit.mjs` reports it as resolved, not outstanding.
+   `rental_application_alert_phone` drives **two** alerts (Zillow application + new
+   inquiry-lead); reassigning moved both.
 
 4. ~~**Add Properties rows for the unmatched live Zillow addresses**~~ —
    **RESOLVED, do not add any of them.** `296 Blue Haw Dr` and `5464 Crown Ave` already
@@ -110,7 +116,7 @@ not a deploy — it is this list of state changes. `node scripts/launch-audit.mj
    > Property dialog and type the street by hand.** Linking it by unit **id** afterwards
    > would be correct, but no path does so today. (`2019 Codorus Ln #1` is deliberately
    > excluded.)
-### Decisions still open
+### Still open after launch
 
 5. **Retire the two legacy workflows?** `Ih8zMmNeUwKvITGf` / `HwXpYAqwbG1zwGls`
    both write `customCalLink` from the mutable Person record. Nothing reads that
@@ -142,14 +148,21 @@ not a deploy — it is this list of state changes. `node scripts/launch-audit.mj
   `vercel --prod` / `vercel link` from this machine against this repo.** See
   `CLAUDE.md`.
 
-### Launch tooling (built 2026-08-07, NOT yet run)
+### Launch tooling (built 2026-08-07, RUN 2026-08-25)
 
 **`launch-backlog-check.mjs`** — "what fires the instant the gates come off?" Run it
 *before* lifting anything. The record-but-don't-send design is only provably safe for
 the Inquiries tab (the sweep selects `link_sent === "false"`); the tabs whose crons
 select on **time** were never checked — `Cal Bookings` post-event follow-ups have no
-upper bound by design. Result 2026-08-07, **clean but re-run before launch**: 20 Cal
-Bookings rows, 2 Showings, 39 Inquiries (0 deliverable).
+upper bound by design. Result 2026-08-07: 20 Cal Bookings rows, 2 Showings, 39
+Inquiries (0 deliverable).
+
+> **Re-running it at launch was load-bearing and it CAUGHT something.** A new real
+> consult had appeared since the handoff — Jonathan Hodges,
+> `gSU6KCkFyPeqdB5dPyghpW`, who had booked, attended, and received nothing because
+> the gate was shut. All of its steps were suppressed before the lift so the cron
+> could not fire between the two. **Nothing was sent.** The lesson generalises: a
+> backlog check is only valid for the moment it was run.
 
 > Gotcha 14 bit this script during its own development: Sheets stores `"false"` as
 > boolean `FALSE`, so a case-sensitive count reported 0 sweepable rows while the sweep
@@ -1183,11 +1196,17 @@ node scripts/n8n-add-access-test-gate.mjs --revert --apply # remove at launch
 Marker `ACCESS_GATE_MARKER`, backups `n8n/BEFORE-access-gate/`. The script refuses to run
 if the `is_test` column is missing; `--revert` leaves the column in place.
 
-## Test gates — the full table
+## Test gates — the full table (HISTORICAL: all 16 lifted 2026-08-25)
 
-**There are 16 hard gates across 12 workflows, and lifting only some leaves the
-system half-dead in a way that looks like a bug.** Verify with
-`node scripts/launch-audit.mjs`.
+**All 16 were lifted at launch.** This table is kept as the map of WHERE the gates
+were, which is what you need to revert one, to understand a residual node on a
+canvas, or to re-gate a workflow for testing. It is no longer a checklist.
+
+> The original warning still applies to any partial revert: **lifting — or
+> re-arming — only some of these leaves the system half-dead in a way that looks
+> like a bug rather than a config state.** Verify with
+> `node scripts/launch-audit.mjs`, and read the count against the **baseline of 13
+> residual gates**, not against zero (see the launch record at the top).
 
 | Workflow | Node | Kind |
 |---|---|---|
@@ -1602,12 +1621,59 @@ Backup `n8n/BEFORE-properties-poll-interval/`.
 > Sheets node downstream of another — a fan-out shows up as an item count far larger
 > than the tab it reads.
 
-**Earlier measurements, for context.** Across 3,580 executions: 121 errors, **101 Sheets
-quota**, scaling by concurrency (1.2% isolated / 4.4% at 1–2 / 31.3% at 3–5).
-**Decided: do not move to Supabase for this** (`docs/supabase-migration-plan.md` is the
-fallback lever). After the early stage filter, 17% of gate executions still bailed,
+**Earlier measurements, for context — superseded by the post-launch numbers below.**
+Across 3,580 executions: 121 errors, **101 Sheets quota**, scaling by concurrency
+(1.2% isolated / 4.4% at 1–2 / 31.3% at 3–5). **Decided: do not move to Supabase for
+this** (`docs/supabase-migration-plan.md` is the fallback lever). After the early stage filter, 17% of gate executions still bailed,
 costing one real lead (Cassandra Ferra, 2748); detail and the misdiagnosis that preceded
 it are in `docs/n8n-history.md`.
+
+### Post-launch load — measured 2026-09-03, and the actual migration trigger
+
+**The burst problem is GONE, and it was never a Sheets limitation.** Nine days of real
+production traffic (2026-08-27 → 09-03, 5,624 executions, ~4 leads/day):
+
+| Concurrent executions in preceding 60s | Total | Errors | Rate | Dev-era |
+|---|---|---|---|---|
+| 0 (isolated) | 2,404 | 4 | **0.17%** | 1.2% |
+| 1–2 | 2,669 | 5 | **0.19%** | 4.4% |
+| 3–5 | 545 | 1 | **0.18%** | **31.3%** |
+
+**The concurrency correlation has vanished** — 3–5 concurrent now fails at the same
+rate as isolated, where it used to fail 31% of the time. Only 4 of the 10 errors were
+quota, and **every one traced to an `executeOnce` fan-out defect**, not to volume. The
+cure was the fan-out fixes, not headroom.
+
+Measured Sheets **requests per execution**: Inquiry flow 5.0, Sweep 4.6, Cal Immediate
+4.2, Zillow 4.5, Result Handler 2.0, **Identity Gate 1.3** — that last one was **60**
+until 2026-08-31. A lead costs ~22 requests end to end, only ~6 of them at the
+burst-critical moment of arrival. Against a 60/min bucket that is ~8–9 simultaneous
+lead arrivals before there is a problem, versus roughly one before the fixes.
+
+> **So error rate is now a LAGGING indicator and will stay flat right up until it
+> isn't.** The leading indicator is the cost of a SINGLE execution. Most workflows
+> have a fixed cost; the **two reminder workflows do not** — `Log Reminder Row` and
+> `Mark Nudge Sent` run once per lead processed, so their cost scales **linearly with
+> leads due in the 10am ET window**, and both fire in that same hour. That is the one
+> place a single execution can saturate the bucket alone, exactly as the Identity Gate
+> used to.
+
+`launch-audit.mjs` now reports this (added 2026-09-03): nodes per project bucket, and
+peak Sheets requests in a single execution, warning at 30 (half the bucket) and
+alarming at 45. **Current worst: Identity Verification Reminders at 12 requests, 20%
+of the bucket.** At roughly 5× today's lead volume that single workflow saturates it.
+
+**Cheap levers, both untouched as of 2026-09-03** — do these before migrating:
+**72 of 77 Sheets nodes share ONE project bucket** (only 5 are on Project 2), so a
+Project 3 credential for the two 5-minute crons is a config change with no code risk;
+and `Read Settings` is uncached despite being read on nearly every execution of every
+workflow.
+
+**Migrate to Supabase when** any of: the reminder peak crosses ~45 requests;
+`Identity_Verifications` growth makes whole-tab reads the bottleneck (107 rows at
++8/day, and every read pulls the whole tab); a sustained isolated error rate above
+2–3% **after** the cheap levers; or a requirement Sheets structurally cannot serve.
+**None has fired.** `docs/supabase-migration-plan.md` is scoped and ready.
 
 **Finding stranded leads.** A bail is only harmful if the lead would otherwise have been
 served. Scan recent gate executions for
