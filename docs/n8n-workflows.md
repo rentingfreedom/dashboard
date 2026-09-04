@@ -1663,11 +1663,37 @@ peak Sheets requests in a single execution, warning at 30 (half the bucket) and
 alarming at 45. **Current worst: Identity Verification Reminders at 12 requests, 20%
 of the bucket.** At roughly 5× today's lead volume that single workflow saturates it.
 
-**Cheap levers, both untouched as of 2026-09-03** — do these before migrating:
-**72 of 77 Sheets nodes share ONE project bucket** (only 5 are on Project 2), so a
-Project 3 credential for the two 5-minute crons is a config change with no code risk;
-and `Read Settings` is uncached despite being read on nearly every execution of every
-workflow.
+**The cheap levers, re-measured 2026-09-03 — and one of the two is now nearly
+worthless.** Breakdown of the heaviest execution in the estate (Identity Reminders,
+exec 32785, 12 Sheets requests):
+
+| Requests | Node | Scales with |
+|---|---|---|
+| 1 | `Read Settings` | nothing |
+| 1 | `Read Identity Verifications` | nothing |
+| **10** | **`Log Reminder Row`** | **one append per lead reminded** |
+
+> **Caching `Read Settings` saves 1 request of 12, not "a large fraction of all
+> reads".** It is **one API call** returning 65 rows as 65 *items* — the "65 reads"
+> intuition comes from the fan-out era, when a downstream node missing `executeOnce`
+> multiplied it. That is fixed. Caching would now buy ~8% in exchange for staleness
+> on kill switches (`rejection_cancel_enabled`, `identity_reminder_enabled`). The
+> migration plan's recommendation is corrected in place.
+
+> **And `Log Reminder Row` must NOT be batched.** Writing the row per send is what
+> makes the loop crash-safe: batching the appends to the end of the run means an
+> execution that dies mid-loop has sent SMS with no rows to show for it, and the
+> next day's tick re-sends every one of them. The per-lead append is load-bearing.
+
+**So the only real cheap lever is splitting the quota bucket** — and **72 of 77
+Sheets nodes share one project** while Project 2 carries just 5 (Identity Gate 2,
+Identity Reminders 3). Two ways: a new GCP project (needs console access, and watch
+for org policy `iam.disableServiceAccountKeyCreation`, see
+`docs/gcp-service-account-key-creation.md`), or **rebalance the two 5-minute crons
+onto the existing, near-idle Project 2 credential** (`eB6JrDkriJ1BATPy`) — no GCP work
+at all. The rebalance is not free of risk: swapping a Sheets credential also requires
+setting `authentication: "serviceAccount"` in the node *parameters*, or n8n refuses to
+publish (gotcha 22), and a failed PUT still saves.
 
 **Migrate to Supabase when** any of: the reminder peak crosses ~45 requests;
 `Identity_Verifications` growth makes whole-tab reads the bottleneck (107 rows at

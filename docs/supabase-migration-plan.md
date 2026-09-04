@@ -48,9 +48,15 @@ Do these before migrating — they are hours, not weeks:
   runs on a Project 2 credential. Moving the two 5-minute crons to a Project 3
   credential is a config change with no code risk and roughly triples headroom.
 - **Request a quota increase** on the existing projects.
-- **Cache `Read Settings`.** Settings changes maybe monthly but is read on
-  nearly every execution of every workflow. A 5-minute cache in n8n static data
-  would remove a large fraction of all reads in the system.
+- ~~**Cache `Read Settings`.**~~ **MEASURED 2026-09-03 — this is worth far less
+  than written here, and the claim below was wrong.** `Read Settings` is **ONE
+  API request** that returns all 65 rows as 65 *items*; it is not 65 requests.
+  This paragraph was written 2026-08-20, when a downstream node missing
+  `executeOnce` turned those 65 items into 60 requests — **that fan-out is fixed**
+  (`n8n-fix-gate-read-fanout.mjs`), and with it most of this lever's value.
+  Caching now saves exactly **1 request per execution**: 1 of the 12 in the
+  heaviest execution in the estate, ~8%. Not worth the staleness it introduces on
+  kill switches like `rejection_cancel_enabled` and `identity_reminder_enabled`.
 
 **Migrate when:** isolated-execution error rate rises above ~2–3% sustained over
 a week of real traffic, *after* the above are in place. Not before.
