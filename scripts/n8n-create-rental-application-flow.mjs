@@ -6,6 +6,31 @@
  *   node scripts/n8n-create-rental-application-flow.mjs --apply   # creates it (inactive)
  *   node scripts/n8n-create-rental-application-flow.mjs --update <id> --apply   # re-push over an existing workflow
  *
+ * ╔════════════════════════════════════════════════════════════════════════╗
+ * ║ DO NOT RUN `--update X1lih7X05rpnTPmb --apply`. IT IS DESTRUCTIVE.      ║
+ * ╚════════════════════════════════════════════════════════════════════════╝
+ *
+ * This file is the workflow as it was CREATED (2026-07-28). The live workflow
+ * has diverged: at least five later changes were applied on top of it by their
+ * own idempotent builder scripts, and NONE of them are reflected here. Re-pushing
+ * this definition over the live id silently reverts all of them at once —
+ * every one is a fix for a bug that cost real leads.
+ *
+ *   APPLICATION_REVIEW_TASK_MARKER    n8n-add-application-review-task.mjs
+ *   APPLICATION_INQUIRY_ROW_MARKER    n8n-add-application-inquiry-row.mjs
+ *   APPLICATION_ALERT_CC_MARKER       n8n-add-application-alert-cc.mjs
+ *   the Zillow subject-case fix       n8n-fix-zillow-subject-case.mjs
+ *   the applicant-name parse fix      n8n-fix-zillow-applicant-name-parse.mjs
+ *   (plus TRASH_TAG_GATE_MARKER and the includeTrash search fix)
+ *
+ * Nothing runs this file automatically — it is a loaded footgun, not a timer.
+ * Bare `--apply` creates a SEPARATE new workflow and leaves the live one alone
+ * (which is its own mess: two Gmail Triggers on the same mailbox).
+ *
+ * To change the live workflow, write a new idempotent builder script in the
+ * house style instead. To rebuild from scratch, run every marker script above
+ * afterwards, in order, and then the verifiers.
+ *
  * Also writes the workflow JSON to n8n/fub-rental-application-flow.json.
  * Refuses to create a duplicate if a workflow of the same name already
  * exists — same guard as scripts/n8n-create-inquiry-flow.mjs, which this

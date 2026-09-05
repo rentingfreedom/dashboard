@@ -289,7 +289,12 @@ console.log("─".repeat(72));
   expect("Existing Person Found? [true] -> Existing Person Trashed?", target("Existing Person Found?", 0), "Existing Person Trashed?");
   expect("Existing Person Trashed? [true] -> Append Trash-Skipped Row", target("Existing Person Trashed?", 0), "Append Trash-Skipped Row");
   expect("Existing Person Trashed? [false] -> FUB - Add Note To Existing", target("Existing Person Trashed?", 1), "FUB - Add Note To Existing");
-  expect("Existing Person Found? [false] -> FUB - Create Person", target("Existing Person Found?", 1), "FUB - Create Person");
+  // APPLICATION_REVIEW_TASK_MARKER (2026-09-05) inserted Build Person Payload
+  // between these two so the applicant is created ALREADY assigned to Nicole.
+  // Both edges are asserted: dropping the second would let the chain be broken
+  // without this verifier noticing.
+  expect("Existing Person Found? [false] -> Build Person Payload", target("Existing Person Found?", 1), "Build Person Payload");
+  expect("Build Person Payload -> FUB - Create Person", target("Build Person Payload", 0), "FUB - Create Person");
 }
 
 console.log("\n" + "═".repeat(72));

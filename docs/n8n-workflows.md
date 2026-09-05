@@ -744,6 +744,108 @@ credential. **NOT yet live-verified** — a Gmail Trigger can't be fired via the
 
 > `application-alert-cc-verify.mjs` asserts the **exact** sibling set on both note
 > connectors. If you add a fourth, update it there too.
+### Applicants are assigned to Nicole, and she gets a review task — `APPLICATION_REVIEW_TASK_MARKER` (2026-09-05)
+
+Client request 2026-09-05. Two things, both **stage-gated on `allowed_stages`**.
+
+**1. `FUB - Create Person` never sent `assignedUserId`, so FUB fell back to the API
+key's owner — Brenda.** Verified across three real executions: 2748 Cassandra Ferra,
+2780 Darlene Leon-Pagan, 2784 Samantha Hardaway were **all** created
+`assignedUserId=1`. Two were reassigned to Nicole by hand afterwards; **Cassandra was
+missed and still sits on Brenda.** This was standing manual toil, not a one-off.
+
+> **Everything else was already fine and needs no automation.** Every person in the two
+> gated stages is already Nicole's (13/13 and 11/12, the exception being Cassandra) —
+> **FUB's own lead routing assigns inbound tenant leads correctly at 100%.** Self-guided
+> tour leads are created by FUB, never by us. **Do not build an assignment automation for
+> them**: it would be a second writer racing FUB's routing to set a value it already sets,
+> and a wrongly-routed lead is a **FUB lead-flow setting in the FUB UI**, not code. The 33
+> recent leads on Brenda are `PM Lead Onboarding` owner leads and are correctly hers.
+
+**2. Nothing in the estate created a FUB task.** Nicole had been making
+*"Get Number form zillow, review application if applicable"* by hand.
+
+```
+Existing Person Found? [false] -> Build Person Payload -> FUB - Create Person
+
+FUB - Add Note ─────────────┐
+                            ├─> Build Review Task ─┬─> Task Needed?   -> FUB - Create Review Task
+FUB - Add Note To Existing ─┘                      └─> Assign Needed? -> FUB - Assign Person
+```
+
+**Applications only, and it is STRUCTURAL rather than a policy.** `X1lih7X05rpnTPmb` is
+triggered **only** by the Gmail Trigger on the Zillow application email; tour leads arrive
+via `eventsCreated` → the inquiry flow and never touch this workflow. **Do not add task
+creation to the inquiry flow or the Identity Gate** — that is the only way this could be
+violated, and it would silently give every tour lead a task to review an application that
+does not exist.
+
+**Both note nodes are wired**, as with `APPLICATION_INQUIRY_ROW_MARKER`: the
+existing-match branch is a real application path, and wiring only the new-person branch
+skips exactly the rest. Hanging off the *note* nodes means the person provably exists,
+and the trashed-existing path never reaches one, so a trashed person is excluded with no
+extra check.
+
+**The gate costs NO new FUB call on either branch** — new person uses `fub_stage`,
+existing match uses `existing_stage`, which `Check Existing Match` already emitted.
+`allowed_stages` is **reused, not duplicated**; empty/missing still means allow
+everything. A gated-out application still gets its note, both sheet rows and the alert
+SMS — **this feature must never acquire the power to suppress the one thing that moves an
+applicant forward.** Omisha Burns (2057, `C - Cold 6+ Months`) is the real case: no task,
+no reassignment.
+
+> **`Build Person Payload` IS inserted in front of an existing node (gotcha 19).** Safe
+> only because `FUB - Create Person` resolved all four fields through
+> `$('Parse & Resolve Application').item`, a named reference. Its body is now
+> `JSON.stringify($json)`, so the payload is built in **testable JS** rather than an
+> unverifiable inline expression. The builder refuses to apply if that node ever reads its
+> immediate input, or if its body is not the exact string recorded in the script.
+
+> **Assignment on the existing-match branch is a PUT, and fires only when needed** — gated
+> stage **and** not already Nicole's, with the current assignee read from
+> `FUB - Search Existing Person`'s own response (no extra lookup). An unreadable assignee
+> means **no write on a guess**. This keeps the `peopleUpdated` a PUT fires — and the
+> Identity Gate execution behind it — off the normal path. The new-person branch never
+> needs a PUT: it sets the assignee at creation, which is also one call instead of two and
+> leaves no window in which the person is unassigned.
+
+**Same-day due date, computed in ET in code.** `dueDate` is a bare `YYYY-MM-DD` and **no
+workflow in this instance sets a timezone**, so an instance-default date drifts with DST
+and a late-evening application would land in Nicole's list a day late.
+
+**Idempotency is inherited for free**: `Parse & Resolve Application` already dedups on the
+Gmail `message_id`, and this whole branch is downstream of it.
+
+Both HTTP nodes carry `onError: continueRegularOutput` — they are siblings of
+`Append Rental Application Row` and `Build Phone-Needed Alert`.
+
+New Settings keys: `fub_nicole_user_id` (**2**), `application_task_enabled`,
+`application_task_name`. Task `type` is `Follow Up` (95 of the last 100 tasks are).
+`createdBy` reads **Brenda** — the API key's owner — accepted by the client 2026-09-05;
+changing it would need a key issued under Nicole's user.
+
+> **A skipped task is LOGGED, not written to the sheet** — a deliberate departure from
+> "recorded, not dropped". A task has no backlog to fire later, so the execution log is
+> the audit trail, and adding a column to `Rental Applications` would mean widening the
+> grid and editing the critical append node for no recoverable state.
+
+```bash
+node scripts/application-review-task-setup.mjs [--apply]          # 3 Settings keys
+node scripts/n8n-add-application-review-task.mjs [--apply] [--revert --apply] [--emit-js <dir>]
+node scripts/application-review-task-verify.mjs [--js <dir>]      # 86 assertions
+```
+Backup `n8n/BEFORE-application-review-task/`, which also holds
+`original-create-person-body.json` — **`--revert` depends on that file** and refuses
+without it. **`zillow-flow-verify.mjs` and `application-alert-cc-verify.mjs` both had to
+be updated in the same change** (the rerouted create edge, and the exact sibling set on
+both note connectors); all five relevant verifiers pass.
+
+**Not live-verified** — a Gmail Trigger cannot be fired via the API, so **the next real
+Zillow application is the live test**. Expect the person created already on Nicole, plus
+an open FUB task due that day. `POST /tasks` is a **new API surface for this estate**: it
+was proved by hand (201, then deleted) but has never run from n8n. **Watch the first
+execution.**
+
 ### Rental Applications tab
 
 `message_id` (idempotency key), `received_at`, `applicant_name`,
@@ -2767,6 +2869,7 @@ write nothing, and touch no n8n state.
 | `sheets-retry-verify.mjs` | **62** — the retry cap, the served-filter, the wiring |
 | `no-phone-skip-verify.mjs` | **53** — the sentinel allowlist, recipient keying |
 | `application-inquiry-row-verify.mjs` | **64** — cal_link resolution, both dedup rules, fail-closed |
+| `application-review-task-verify.mjs` | **86** — the stage gate both ways, both branches, ET due date, wiring |
 | `stage-gate-race-verify.mjs` | **36** — race recovery, recency guard, both nodes |
 | `cal-booking-reminders-verify.mjs` | **108** — day arithmetic, booking join, guards, wiring |
 | `identity-reminders-verify.mjs` | **41** — day arithmetic, cap, guards |

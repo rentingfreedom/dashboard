@@ -172,15 +172,18 @@ console.log("\n5. Wiring");
 const C = wf.connections;
 const outs = (src, br = 0) => ((C[src]?.main ?? [])[br] ?? []).map((c) => c.node);
 // `Build Application Inquiry (Pre)` is the third sibling added 2026-08-31 by
-// APPLICATION_INQUIRY_ROW_MARKER (n8n-add-application-inquiry-row.mjs). These
+// APPLICATION_INQUIRY_ROW_MARKER (n8n-add-application-inquiry-row.mjs), and
+// `Build Review Task` the fourth, added 2026-09-05 by
+// APPLICATION_REVIEW_TASK_MARKER (n8n-add-application-review-task.mjs). These
 // stay exact-set assertions on purpose: what matters here is that the alert
 // build node and the row append are BOTH still fed directly, in parallel.
+// A fifth sibling means updating this list deliberately, which is the point.
 ok("FUB - Add Note To Existing -> build + the row append (parallel preserved)",
    outs("FUB - Add Note To Existing").sort(),
-   ["Append Existing-Match Row", "Build Application Inquiry (Pre)", "Build Existing-Match Alert"]);
+   ["Append Existing-Match Row", "Build Application Inquiry (Pre)", "Build Existing-Match Alert", "Build Review Task"]);
 ok("FUB - Add Note -> build + the row append",
    outs("FUB - Add Note").sort(),
-   ["Append Rental Application Row", "Build Application Inquiry (Pre)", "Build Phone-Needed Alert"]);
+   ["Append Rental Application Row", "Build Application Inquiry (Pre)", "Build Phone-Needed Alert", "Build Review Task"]);
 ok("Parse Failed? -> build + the row append",
    outs("Parse Failed?").sort(), ["Append Parse-Failed Row", "Build Parse-Failed Alert"]);
 ok("Build Existing-Match Alert -> Send Existing-Match Alert", outs("Build Existing-Match Alert"), ["Send Existing-Match Alert"]);

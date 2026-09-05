@@ -1,0 +1,4 @@
+{
+  "node": "FUB - Create Person",
+  "jsonBody": "={{ JSON.stringify({ source: $('Parse & Resolve Application').item.json.fub_source, firstName: $('Parse & Resolve Application').item.json.first_name, lastName: $('Parse & Resolve Application').item.json.last_name, stage: $('Parse & Resolve Application').item.json.fub_stage }) }}"
+}
