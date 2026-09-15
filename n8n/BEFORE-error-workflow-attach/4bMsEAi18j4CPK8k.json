@@ -1,0 +1,853 @@
+{
+  "updatedAt": "2026-08-09T13:15:15.308Z",
+  "createdAt": "2026-07-26T20:01:42.559Z",
+  "id": "4bMsEAi18j4CPK8k",
+  "name": "RentingFreedom - DoorLoop Occupancy Sync",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "Every Hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "a1000000-0000-4000-8000-000000000002",
+      "name": "Manual Sync Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        520
+      ],
+      "webhookId": "b7f4c2d1-8e3a-4c5b-9d21-6f0a3e8c1b45",
+      "parameters": {
+        "path": "doorloop-occupancy-sync",
+        "httpMethod": "POST",
+        "responseMode": "lastNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "a1000000-0000-4000-8000-000000000003",
+      "name": "Fetch Units",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        400
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "url": "https://app.doorloop.com/api/units",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "page_size",
+              "value": "1000"
+            },
+            {
+              "name": "page_number",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "MWIyvOyigeoPRVbz",
+          "name": "DoorLoop API"
+        }
+      }
+    },
+    {
+      "id": "a1000000-0000-4000-8000-000000000004",
+      "name": "Fetch Active Leases",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        400
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "url": "https://app.doorloop.com/api/leases",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "filter_status",
+              "value": "ACTIVE"
+            },
+            {
+              "name": "page_size",
+              "value": "1000"
+            },
+            {
+              "name": "page_number",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "MWIyvOyigeoPRVbz",
+          "name": "DoorLoop API"
+        }
+      }
+    },
+    {
+      "id": "a1000000-0000-4000-8000-000000000005",
+      "name": "Read Properties",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        720,
+        400
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Properties",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "a1000000-0000-4000-8000-000000000006",
+      "name": "Compute Occupancy",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        400
+      ],
+      "parameters": {
+        "jsCode": "// DoorLoop occupancy → Properties sheet.\n//\n// Rule: a unit is occupied if its id appears in the units[] array of any lease\n// with calculatedStatus == \"ACTIVE\". Each sheet row maps to exactly one DoorLoop\n// UNIT id (stored in doorloop_property_id by scripts/doorloop-match.mjs), so a\n// row's status is just that unit's occupancy — no roll-up needed.\n\nconst unitsResp = $('Fetch Units').first().json;\nconst leasesResp = $('Fetch Active Leases').first().json;\nconst rows = $('Read Properties').all().map((i) => i.json);\n\nconst units = unitsResp.data ?? [];\nconst leases = leasesResp.data ?? [];\n\n// Guard: page_size is 1000 and the portfolio is ~70 units, so a truncated page\n// means the portfolio outgrew a single page. Fail loudly rather than silently\n// marking every unpaged unit vacant.\nif ((unitsResp.total ?? units.length) > units.length) {\n  throw new Error(`Units response truncated: total=${unitsResp.total} but only ${units.length} returned. Add pagination.`);\n}\nif ((leasesResp.total ?? leases.length) > leases.length) {\n  throw new Error(`Leases response truncated: total=${leasesResp.total} but only ${leases.length} returned. Add pagination.`);\n}\nif (units.length === 0) {\n  throw new Error('DoorLoop returned zero units — refusing to mark the whole portfolio vacant.');\n}\n\n// Sheets returns numbers as numbers; ids must be compared as strings.\nconst occupiedUnitIds = new Set();\nfor (const lease of leases) {\n  if (String(lease.calculatedStatus ?? '').toUpperCase() !== 'ACTIVE') continue;\n  for (const unitId of lease.units ?? []) occupiedUnitIds.add(String(unitId));\n}\n\nconst knownUnitIds = new Set(units.map((u) => String(u.id)));\n\nconst now = new Date().toISOString();\nconst out = [];\nconst stale = [];\nlet overridden = 0;\nlet unmapped = 0;\n\nfor (const row of rows) {\n  const propertyKey = String(row.property_key ?? '').trim();\n  const dlUnitId = String(row.doorloop_property_id ?? '').trim();\n\n  if (!propertyKey) continue;\n\n  // No DoorLoop counterpart — status stays whatever a human set. Never touched.\n  if (!dlUnitId) {\n    unmapped += 1;\n    continue;\n  }\n\n  // Mapping points at a unit DoorLoop no longer returns (deleted/archived).\n  // Skip rather than guess: writing 'vacant' here would be a silent data loss.\n  if (!knownUnitIds.has(dlUnitId)) {\n    stale.push(`${propertyKey} → ${dlUnitId}`);\n    continue;\n  }\n\n  const doorloopStatus = occupiedUnitIds.has(dlUnitId) ? 'occupied' : 'vacant';\n  const override = String(row.status_override ?? '').trim().toLowerCase();\n  if (override) overridden += 1;\n\n  out.push({\n    json: {\n      property_key: propertyKey,\n      // Always written: what DoorLoop actually reports, so the dashboard can show\n      // the real value alongside an override.\n      doorloop_status: doorloopStatus,\n      doorloop_synced_at: now,\n      // An active admin override wins. We rewrite it to its own value rather than\n      // omitting the field, so the Sheets node can't blank the cell.\n      status: override || doorloopStatus,\n    },\n  });\n}\n\nconsole.log(`[doorloop-sync] units=${units.length} activeLeases=${leases.length} occupiedUnits=${occupiedUnitIds.size}`);\nconsole.log(`[doorloop-sync] writing=${out.length} overridden=${overridden} unmapped=${unmapped} stale=${stale.length}`);\nif (stale.length) {\n  console.log(`[doorloop-sync] STALE MAPPINGS (doorloop_property_id not found in DoorLoop): ${stale.join(', ')}`);\n}\n\nif (out.length === 0) {\n  throw new Error('No rows to write — every row is unmapped or stale. Check doorloop_property_id in the Properties sheet.');\n}\n\nreturn out;\n"
+      }
+    },
+    {
+      "id": "a1000000-0000-4000-8000-000000000007",
+      "name": "Write Status to Properties",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1200,
+        400
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Properties",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "property_key"
+          ],
+          "value": {
+            "property_key": "={{ $json.property_key }}",
+            "status": "={{ $json.status }}",
+            "doorloop_status": "={{ $json.doorloop_status }}",
+            "doorloop_synced_at": "={{ $json.doorloop_synced_at }}"
+          },
+          "schema": [
+            {
+              "id": "property_key",
+              "displayName": "property_key",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "doorloop_status",
+              "displayName": "doorloop_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "doorloop_synced_at",
+              "displayName": "doorloop_synced_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://app.doorloop.com/api/properties",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "page_size",
+              "value": "1000"
+            },
+            {
+              "name": "page_number",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        580
+      ],
+      "id": "recon-fetch-properties",
+      "name": "Fetch Properties",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "MWIyvOyigeoPRVbz",
+          "name": "DoorLoop API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// DOORLOOP_RECON_MARKER\n// Read-only reconciliation report. Runs AFTER the occupancy write and writes\n// nothing itself. Answers: which DoorLoop units have no dashboard property,\n// which dashboard rows are not linked to DoorLoop, and which rows point at a\n// unit DoorLoop no longer returns.\n//\n// This file is the SOURCE of the `Build Reconciliation Report` Code node in\n// workflow 4bMsEAi18j4CPK8k. scripts/n8n-add-doorloop-recon.mjs pushes it;\n// scripts/doorloop-recon-verify.mjs runs it against live data. Edit here, then\n// re-run the builder with --apply.\n//\n// MATCHER PARITY: normAddr / coreAddr / SUFFIXES / EXCLUDED_PROPERTY_NAMES /\n// findUntrustworthyUnits are ported VERBATIM from\n// src/lib/doorloop/address-matcher.mjs. If that file's matching rules change,\n// change them here too, or this report will disagree with the matcher about what\n// counts as linked.\n//\n// There are TWO implementations of these rules, not three:\n//\n//     scripts/doorloop-match.mjs (CLI) ─┐\n//                                       ├─→ src/lib/doorloop/address-matcher.mjs\n//     the dashboard's Link button ──────┘        (one shared implementation)\n//\n//     this file ──→ manually-synced twin, because an n8n Code node cannot\n//                   import from the repo at all.\n//\n// So this is the only copy that has to be kept in step by hand.\n\n// Only the dashboard's \"Sync now\" button consumes this. On the hourly schedule\n// run there is nobody to hand it to, so building it would be invisible work —\n// and, worse, an hourly list of \"properties to create\" that no human ever reads\n// is exactly the kind of output that goes stale without anyone noticing.\n// Detect the trigger by asking whether the webhook node actually executed:\n// $('Manual Sync Trigger') throws on the schedule path, where it never ran.\nlet cameFromButton = false;\ntry {\n  cameFromButton = $('Manual Sync Trigger').all().length > 0;\n} catch {\n  cameFromButton = false;\n}\n\nconst writtenCount = $('Compute Occupancy').all().length;\n\nif (!cameFromButton) {\n  console.log('[doorloop-recon] scheduled run — reconciliation skipped (button-only)');\n  return [{ json: { skipped: 'scheduled_run', status_rows_written: writtenCount } }];\n}\n\nconst unitsResp = $('Fetch Units').first().json;\nconst propsResp = $('Fetch Properties').first().json;\nconst rows = $('Read Properties').all().map((i) => i.json);\nconst written = writtenCount;\n\nconst units = unitsResp.data ?? [];\nconst properties = propsResp.data ?? [];\n\n// Same truncation discipline as Compute Occupancy: a partial page would make\n// real properties look deleted. Report the problem instead of guessing.\nconst truncated =\n  (unitsResp.total ?? units.length) > units.length ||\n  (propsResp.total ?? properties.length) > properties.length;\n\n// ── client exclusion rules (confirmed with client, see phase2-research-notes.md)\n// Matched against the DoorLoop property NAME, whitespace-collapsed + lowercased.\n// Deliberately NOT suffix-normalized: \"130 sandtrap rd\" (stale, excluded) must\n// stay distinct from \"130 sandtrap road\" (real, synced).\nconst EXCLUDED_PROPERTY_NAMES = new Map([\n  ['manufacturing freedom llc', \"not a rental — the client's own home + an unrelated dev project\"],\n  ['2019 codorus ln', 'stale duplicate of the excluded Manufacturing Freedom LLC record'],\n  ['130 sandtrap rd', \"stale — superseded by '130 Sandtrap Road'\"],\n  ['2f3 llc', 'holding entity, no real address behind it'],\n  ['blue elephant holdings llc', 'holding entity, no real address behind it'],\n  ['pink elephant holdings llc', 'holding entity, no real address behind it'],\n  ['renting freedom llc', 'holding entity, no real address behind it'],\n  ['sweet tea realty co', 'holding entity, no real address behind it'],\n]);\n\nconst SUFFIXES = new Map([\n  ['road', 'rd'], ['street', 'st'], ['lane', 'ln'], ['drive', 'dr'],\n  ['court', 'ct'], ['avenue', 'ave'], ['boulevard', 'blvd'], ['circle', 'cir'],\n  ['place', 'pl'], ['terrace', 'ter'], ['parkway', 'pkwy'], ['trail', 'trl'],\n  ['way', 'way'], ['run', 'run'], ['cove', 'cv'], ['curve', 'curve'],\n  ['landing', 'lndg'], ['point', 'pt'], ['preserve', 'preserve'],\n]);\nconst SUFFIX_TOKENS = new Set([...SUFFIXES.values(), ...SUFFIXES.keys()]);\n\nfunction normName(s) {\n  return String(s ?? '').trim().replace(/\\s+/g, ' ').toLowerCase();\n}\n\nfunction normAddr(s) {\n  const base = String(s ?? '')\n    .toLowerCase()\n    .replace(/[.,#]/g, ' ')\n    .replace(/[^a-z0-9\\s]/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n  if (!base) return '';\n  return base.split(' ').map((w) => SUFFIXES.get(w) ?? w).join(' ');\n}\n\nfunction coreAddr(s) {\n  const parts = normAddr(s).split(' ').filter(Boolean);\n  if (parts.length > 2 && parts[parts.length - 1].length === 1) parts.pop();\n  while (parts.length > 2 && SUFFIX_TOKENS.has(parts[parts.length - 1])) parts.pop();\n  return parts.join(' ');\n}\n\n// Units whose address.street1 does not actually describe THAT unit. Two units of\n// one property claiming the same address cannot be told apart, so matching on\n// address would attach the wrong unit to a row and silently drive that row's\n// vacant/occupied status from it.\nfunction findUntrustworthyUnits(us) {\n  const byProp = new Map();\n  for (const u of us) {\n    if (!byProp.has(u.property)) byProp.set(u.property, []);\n    byProp.get(u.property).push(u);\n  }\n  const blocked = new Map();\n  for (const [, siblings] of byProp) {\n    if (siblings.length <= 1) continue;\n    const byAddress = new Map();\n    for (const u of siblings) {\n      const key = normAddr((u.address?.street1 ?? '').trim());\n      if (!key) continue;\n      if (!byAddress.has(key)) byAddress.set(key, []);\n      byAddress.get(key).push(u);\n    }\n    for (const [addr, group] of byAddress) {\n      if (group.length <= 1) continue;\n      const explicit = group.filter((u) => u.addressSameAsProperty === false);\n      const names = group.map((u) => '\"' + u.name + '\"').join(', ');\n      if (explicit.length === 1) {\n        for (const u of group) {\n          if (u === explicit[0]) continue;\n          blocked.set(\n            u.id,\n            'Address \"' + (u.address?.street1 ?? '') + '\" is inherited from the parent property and is ' +\n              'already claimed by \"' + explicit[0].name + '\". This unit needs its own address in DoorLoop.'\n          );\n        }\n      } else {\n        for (const u of group) {\n          blocked.set(\n            u.id,\n            group.length + ' units of this property all report the same address \"' +\n              (u.address?.street1 ?? addr) + '\" (' + names + ') and none has it set explicitly. ' +\n              'Each needs its own address in DoorLoop.'\n          );\n        }\n      }\n    }\n  }\n  return blocked;\n}\n\nconst propById = new Map(properties.map((p) => [String(p.id), p]));\nconst untrustworthy = findUntrustworthyUnits(units);\nconst unitById = new Map(units.map((u) => [String(u.id), u]));\n\n// Sheet rows indexed by normalized address, plus the set of unit ids already linked.\nconst byNorm = new Map();\nfor (const r of rows) {\n  const n = normAddr(r.street_address);\n  if (!n) continue;\n  if (!byNorm.has(n)) byNorm.set(n, []);\n  byNorm.get(n).push(r);\n}\nconst linkedIds = new Set(\n  rows.map((r) => String(r.doorloop_property_id ?? '').trim()).filter(Boolean)\n);\nconst isUnlinked = (r) => !String(r.doorloop_property_id ?? '').trim();\n\nconst create = []; // real DoorLoop unit, no dashboard row at all\nconst link = [];   // dashboard row exists but is not linked to its unit\nconst known = [];  // blocked on DoorLoop data / excluded by design / orphan rows\n\nfor (const unit of units) {\n  const id = String(unit.id);\n  if (linkedIds.has(id)) continue; // already linked — nothing to report\n\n  const prop = propById.get(String(unit.property));\n  const propName = prop?.name ?? '(unknown property)';\n  const label = propName + ' / ' + (unit.name ?? '(unnamed unit)');\n\n  if (!prop) {\n    known.push({ kind: 'skipped', label, reason: 'unit.property \"' + unit.property + '\" is not in the /properties response' });\n    continue;\n  }\n  const exclusion = EXCLUDED_PROPERTY_NAMES.get(normName(prop.name));\n  if (exclusion) {\n    known.push({ kind: 'excluded', label, reason: 'Excluded by design — ' + exclusion });\n    continue;\n  }\n  if (Number(prop.numActiveUnits ?? 0) === 0) {\n    known.push({ kind: 'skipped', label, reason: 'Parent property reports numActiveUnits == 0' });\n    continue;\n  }\n  if (unit.active === false) {\n    known.push({ kind: 'skipped', label, reason: 'Unit is marked inactive in DoorLoop' });\n    continue;\n  }\n\n  const ua = unit.address ?? {};\n  const street = (ua.street1 ?? '').trim() || (prop.address?.street1 ?? '').trim();\n  if (!street) {\n    known.push({ kind: 'skipped', label, reason: 'No street address on either the unit or its parent property' });\n    continue;\n  }\n\n  const untrustReason = untrustworthy.get(unit.id);\n  if (untrustReason) {\n    known.push({ kind: 'blocked', label, reason: untrustReason });\n    continue;\n  }\n\n  // An exact address match to an existing row means this is a LINKING gap, not a\n  // missing property. Reporting it as \"create\" would tell someone to add a\n  // duplicate of a property they already have.\n  const exact = byNorm.get(normAddr(street)) ?? [];\n  const unlinkedExact = exact.filter(isUnlinked);\n  if (unlinkedExact.length === 1) {\n    link.push({\n      row: unlinkedExact[0].row_number ?? null,\n      property_key: unlinkedExact[0].property_key ?? '',\n      street_address: unlinkedExact[0].street_address ?? '',\n      doorloop_address: street,\n      unit_id: id,\n      label,\n      confidence: 'exact',\n    });\n    continue;\n  }\n  if (exact.length > 0) {\n    known.push({\n      kind: 'ambiguous',\n      label,\n      reason: 'Address \"' + street + '\" matches ' + exact.length + ' dashboard rows — cannot tell which one this unit is.',\n    });\n    continue;\n  }\n\n  // Suffix-only difference (\"102 Braeford\" vs \"102 Braeford Ct\") is still a\n  // linking gap, but only when the core address is unique on BOTH sides —\n  // dropping a suffix can genuinely conflate two different streets.\n  const core = coreAddr(street);\n  const coreRows = rows.filter((r) => coreAddr(r.street_address) === core && isUnlinked(r));\n  const coreUnits = units.filter((u) => {\n    if (linkedIds.has(String(u.id))) return false;\n    const p = propById.get(String(u.property));\n    const s = (u.address?.street1 ?? '').trim() || (p?.address?.street1 ?? '').trim();\n    return coreAddr(s) === core;\n  });\n  if (coreRows.length === 1 && coreUnits.length === 1) {\n    link.push({\n      row: coreRows[0].row_number ?? null,\n      property_key: coreRows[0].property_key ?? '',\n      street_address: coreRows[0].street_address ?? '',\n      doorloop_address: street,\n      unit_id: id,\n      label,\n      confidence: 'suffix',\n    });\n    continue;\n  }\n\n  create.push({ label, address: street, unit_id: id, property_name: propName });\n}\n\n// Dashboard rows pointing at a unit DoorLoop no longer returns. This is the ONLY\n// removal signal. A row with an EMPTY doorloop_property_id has simply never been\n// linked — that is not evidence anything was deleted, and listing it as a\n// removal candidate would invite deleting a live property.\nconst remove = [];\nconst linkedRows = new Set(link.map((l) => l.row));\nfor (const r of rows) {\n  const id = String(r.doorloop_property_id ?? '').trim();\n  if (id) {\n    if (!unitById.has(id)) {\n      remove.push({\n        row: r.row_number ?? null,\n        property_key: r.property_key ?? '',\n        street_address: r.street_address ?? '',\n        unit_id: id,\n      });\n    }\n    continue;\n  }\n  if (!linkedRows.has(r.row_number ?? null) && String(r.property_key ?? '').trim()) {\n    known.push({\n      kind: 'orphan',\n      label: (r.property_key || r.street_address) + ' (row ' + (r.row_number ?? '?') + ')',\n      reason: 'Dashboard row with no DoorLoop unit — its status stays manual. Not a removal candidate.',\n    });\n  }\n}\n\nconst report = {\n  ok: !truncated,\n  generated_at: new Date().toISOString(),\n  status_rows_written: written,\n  counts: { create: create.length, link: link.length, remove: remove.length, known: known.length },\n  create,\n  link,\n  remove,\n  known,\n};\n\nif (truncated) {\n  report.error =\n    'DoorLoop returned a truncated page (units ' + units.length + '/' + (unitsResp.total ?? '?') +\n    ', properties ' + properties.length + '/' + (propsResp.total ?? '?') +\n    '). The reconciliation below would be wrong, so it is suppressed. Add pagination.';\n  report.create = [];\n  report.link = [];\n  report.remove = [];\n  report.known = [];\n  report.counts = { create: 0, link: 0, remove: 0, known: 0 };\n}\n\nconsole.log(\n  '[doorloop-recon] create=' + report.counts.create + ' link=' + report.counts.link +\n  ' remove=' + report.counts.remove + ' known=' + report.counts.known + ' ok=' + report.ok\n);\n\nreturn [{ json: report }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1420,
+        400
+      ],
+      "id": "recon-build-report",
+      "name": "Build Reconciliation Report",
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Every Hour": {
+      "main": [
+        [
+          {
+            "node": "Fetch Units",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Sync Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Units",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Units": {
+      "main": [
+        [
+          {
+            "node": "Fetch Active Leases",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Active Leases": {
+      "main": [
+        [
+          {
+            "node": "Fetch Properties",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Properties": {
+      "main": [
+        [
+          {
+            "node": "Compute Occupancy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Occupancy": {
+      "main": [
+        [
+          {
+            "node": "Write Status to Properties",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Properties": {
+      "main": [
+        [
+          {
+            "node": "Read Properties",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Status to Properties": {
+      "main": [
+        [
+          {
+            "node": "Build Reconciliation Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {
+    "node:Every Hour": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "cce8cad0-a42b-4422-9cb3-b98ee5318d99",
+  "activeVersionId": "cce8cad0-a42b-4422-9cb3-b98ee5318d99",
+  "versionCounter": 5,
+  "triggerCount": 2,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-07-26T20:01:42.559Z",
+      "createdAt": "2026-07-26T20:01:42.559Z",
+      "role": "workflow:owner",
+      "workflowId": "4bMsEAi18j4CPK8k",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-08-09T13:15:15.309Z",
+    "createdAt": "2026-08-09T13:15:15.309Z",
+    "versionId": "cce8cad0-a42b-4422-9cb3-b98ee5318d99",
+    "workflowId": "4bMsEAi18j4CPK8k",
+    "nodes": [
+      {
+        "id": "a1000000-0000-4000-8000-000000000001",
+        "name": "Every Hour",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          0,
+          300
+        ],
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "hours",
+                "hoursInterval": 1
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "a1000000-0000-4000-8000-000000000002",
+        "name": "Manual Sync Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          520
+        ],
+        "webhookId": "b7f4c2d1-8e3a-4c5b-9d21-6f0a3e8c1b45",
+        "parameters": {
+          "path": "doorloop-occupancy-sync",
+          "httpMethod": "POST",
+          "responseMode": "lastNode",
+          "options": {}
+        }
+      },
+      {
+        "id": "a1000000-0000-4000-8000-000000000003",
+        "name": "Fetch Units",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          240,
+          400
+        ],
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 5000,
+        "parameters": {
+          "url": "https://app.doorloop.com/api/units",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendQuery": true,
+          "queryParameters": {
+            "parameters": [
+              {
+                "name": "page_size",
+                "value": "1000"
+              },
+              {
+                "name": "page_number",
+                "value": "1"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "MWIyvOyigeoPRVbz",
+            "name": "DoorLoop API"
+          }
+        }
+      },
+      {
+        "id": "a1000000-0000-4000-8000-000000000004",
+        "name": "Fetch Active Leases",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          480,
+          400
+        ],
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 5000,
+        "parameters": {
+          "url": "https://app.doorloop.com/api/leases",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendQuery": true,
+          "queryParameters": {
+            "parameters": [
+              {
+                "name": "filter_status",
+                "value": "ACTIVE"
+              },
+              {
+                "name": "page_size",
+                "value": "1000"
+              },
+              {
+                "name": "page_number",
+                "value": "1"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "MWIyvOyigeoPRVbz",
+            "name": "DoorLoop API"
+          }
+        }
+      },
+      {
+        "id": "a1000000-0000-4000-8000-000000000005",
+        "name": "Read Properties",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          720,
+          400
+        ],
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000,
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Properties",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        }
+      },
+      {
+        "id": "a1000000-0000-4000-8000-000000000006",
+        "name": "Compute Occupancy",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          960,
+          400
+        ],
+        "parameters": {
+          "jsCode": "// DoorLoop occupancy → Properties sheet.\n//\n// Rule: a unit is occupied if its id appears in the units[] array of any lease\n// with calculatedStatus == \"ACTIVE\". Each sheet row maps to exactly one DoorLoop\n// UNIT id (stored in doorloop_property_id by scripts/doorloop-match.mjs), so a\n// row's status is just that unit's occupancy — no roll-up needed.\n\nconst unitsResp = $('Fetch Units').first().json;\nconst leasesResp = $('Fetch Active Leases').first().json;\nconst rows = $('Read Properties').all().map((i) => i.json);\n\nconst units = unitsResp.data ?? [];\nconst leases = leasesResp.data ?? [];\n\n// Guard: page_size is 1000 and the portfolio is ~70 units, so a truncated page\n// means the portfolio outgrew a single page. Fail loudly rather than silently\n// marking every unpaged unit vacant.\nif ((unitsResp.total ?? units.length) > units.length) {\n  throw new Error(`Units response truncated: total=${unitsResp.total} but only ${units.length} returned. Add pagination.`);\n}\nif ((leasesResp.total ?? leases.length) > leases.length) {\n  throw new Error(`Leases response truncated: total=${leasesResp.total} but only ${leases.length} returned. Add pagination.`);\n}\nif (units.length === 0) {\n  throw new Error('DoorLoop returned zero units — refusing to mark the whole portfolio vacant.');\n}\n\n// Sheets returns numbers as numbers; ids must be compared as strings.\nconst occupiedUnitIds = new Set();\nfor (const lease of leases) {\n  if (String(lease.calculatedStatus ?? '').toUpperCase() !== 'ACTIVE') continue;\n  for (const unitId of lease.units ?? []) occupiedUnitIds.add(String(unitId));\n}\n\nconst knownUnitIds = new Set(units.map((u) => String(u.id)));\n\nconst now = new Date().toISOString();\nconst out = [];\nconst stale = [];\nlet overridden = 0;\nlet unmapped = 0;\n\nfor (const row of rows) {\n  const propertyKey = String(row.property_key ?? '').trim();\n  const dlUnitId = String(row.doorloop_property_id ?? '').trim();\n\n  if (!propertyKey) continue;\n\n  // No DoorLoop counterpart — status stays whatever a human set. Never touched.\n  if (!dlUnitId) {\n    unmapped += 1;\n    continue;\n  }\n\n  // Mapping points at a unit DoorLoop no longer returns (deleted/archived).\n  // Skip rather than guess: writing 'vacant' here would be a silent data loss.\n  if (!knownUnitIds.has(dlUnitId)) {\n    stale.push(`${propertyKey} → ${dlUnitId}`);\n    continue;\n  }\n\n  const doorloopStatus = occupiedUnitIds.has(dlUnitId) ? 'occupied' : 'vacant';\n  const override = String(row.status_override ?? '').trim().toLowerCase();\n  if (override) overridden += 1;\n\n  out.push({\n    json: {\n      property_key: propertyKey,\n      // Always written: what DoorLoop actually reports, so the dashboard can show\n      // the real value alongside an override.\n      doorloop_status: doorloopStatus,\n      doorloop_synced_at: now,\n      // An active admin override wins. We rewrite it to its own value rather than\n      // omitting the field, so the Sheets node can't blank the cell.\n      status: override || doorloopStatus,\n    },\n  });\n}\n\nconsole.log(`[doorloop-sync] units=${units.length} activeLeases=${leases.length} occupiedUnits=${occupiedUnitIds.size}`);\nconsole.log(`[doorloop-sync] writing=${out.length} overridden=${overridden} unmapped=${unmapped} stale=${stale.length}`);\nif (stale.length) {\n  console.log(`[doorloop-sync] STALE MAPPINGS (doorloop_property_id not found in DoorLoop): ${stale.join(', ')}`);\n}\n\nif (out.length === 0) {\n  throw new Error('No rows to write — every row is unmapped or stale. Check doorloop_property_id in the Properties sheet.');\n}\n\nreturn out;\n"
+        }
+      },
+      {
+        "id": "a1000000-0000-4000-8000-000000000007",
+        "name": "Write Status to Properties",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          1200,
+          400
+        ],
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000,
+        "parameters": {
+          "operation": "update",
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Properties",
+            "mode": "name"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "matchingColumns": [
+              "property_key"
+            ],
+            "value": {
+              "property_key": "={{ $json.property_key }}",
+              "status": "={{ $json.status }}",
+              "doorloop_status": "={{ $json.doorloop_status }}",
+              "doorloop_synced_at": "={{ $json.doorloop_synced_at }}"
+            },
+            "schema": [
+              {
+                "id": "property_key",
+                "displayName": "property_key",
+                "required": false,
+                "defaultMatch": true,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "status",
+                "displayName": "status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "doorloop_status",
+                "displayName": "doorloop_status",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "doorloop_synced_at",
+                "displayName": "doorloop_synced_at",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "canBeUsedToMatch": true
+              }
+            ]
+          },
+          "options": {}
+        },
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "url": "https://app.doorloop.com/api/properties",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendQuery": true,
+          "queryParameters": {
+            "parameters": [
+              {
+                "name": "page_size",
+                "value": "1000"
+              },
+              {
+                "name": "page_number",
+                "value": "1"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          480,
+          580
+        ],
+        "id": "recon-fetch-properties",
+        "name": "Fetch Properties",
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000,
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "MWIyvOyigeoPRVbz",
+            "name": "DoorLoop API"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "// DOORLOOP_RECON_MARKER\n// Read-only reconciliation report. Runs AFTER the occupancy write and writes\n// nothing itself. Answers: which DoorLoop units have no dashboard property,\n// which dashboard rows are not linked to DoorLoop, and which rows point at a\n// unit DoorLoop no longer returns.\n//\n// This file is the SOURCE of the `Build Reconciliation Report` Code node in\n// workflow 4bMsEAi18j4CPK8k. scripts/n8n-add-doorloop-recon.mjs pushes it;\n// scripts/doorloop-recon-verify.mjs runs it against live data. Edit here, then\n// re-run the builder with --apply.\n//\n// MATCHER PARITY: normAddr / coreAddr / SUFFIXES / EXCLUDED_PROPERTY_NAMES /\n// findUntrustworthyUnits are ported VERBATIM from\n// src/lib/doorloop/address-matcher.mjs. If that file's matching rules change,\n// change them here too, or this report will disagree with the matcher about what\n// counts as linked.\n//\n// There are TWO implementations of these rules, not three:\n//\n//     scripts/doorloop-match.mjs (CLI) ─┐\n//                                       ├─→ src/lib/doorloop/address-matcher.mjs\n//     the dashboard's Link button ──────┘        (one shared implementation)\n//\n//     this file ──→ manually-synced twin, because an n8n Code node cannot\n//                   import from the repo at all.\n//\n// So this is the only copy that has to be kept in step by hand.\n\n// Only the dashboard's \"Sync now\" button consumes this. On the hourly schedule\n// run there is nobody to hand it to, so building it would be invisible work —\n// and, worse, an hourly list of \"properties to create\" that no human ever reads\n// is exactly the kind of output that goes stale without anyone noticing.\n// Detect the trigger by asking whether the webhook node actually executed:\n// $('Manual Sync Trigger') throws on the schedule path, where it never ran.\nlet cameFromButton = false;\ntry {\n  cameFromButton = $('Manual Sync Trigger').all().length > 0;\n} catch {\n  cameFromButton = false;\n}\n\nconst writtenCount = $('Compute Occupancy').all().length;\n\nif (!cameFromButton) {\n  console.log('[doorloop-recon] scheduled run — reconciliation skipped (button-only)');\n  return [{ json: { skipped: 'scheduled_run', status_rows_written: writtenCount } }];\n}\n\nconst unitsResp = $('Fetch Units').first().json;\nconst propsResp = $('Fetch Properties').first().json;\nconst rows = $('Read Properties').all().map((i) => i.json);\nconst written = writtenCount;\n\nconst units = unitsResp.data ?? [];\nconst properties = propsResp.data ?? [];\n\n// Same truncation discipline as Compute Occupancy: a partial page would make\n// real properties look deleted. Report the problem instead of guessing.\nconst truncated =\n  (unitsResp.total ?? units.length) > units.length ||\n  (propsResp.total ?? properties.length) > properties.length;\n\n// ── client exclusion rules (confirmed with client, see phase2-research-notes.md)\n// Matched against the DoorLoop property NAME, whitespace-collapsed + lowercased.\n// Deliberately NOT suffix-normalized: \"130 sandtrap rd\" (stale, excluded) must\n// stay distinct from \"130 sandtrap road\" (real, synced).\nconst EXCLUDED_PROPERTY_NAMES = new Map([\n  ['manufacturing freedom llc', \"not a rental — the client's own home + an unrelated dev project\"],\n  ['2019 codorus ln', 'stale duplicate of the excluded Manufacturing Freedom LLC record'],\n  ['130 sandtrap rd', \"stale — superseded by '130 Sandtrap Road'\"],\n  ['2f3 llc', 'holding entity, no real address behind it'],\n  ['blue elephant holdings llc', 'holding entity, no real address behind it'],\n  ['pink elephant holdings llc', 'holding entity, no real address behind it'],\n  ['renting freedom llc', 'holding entity, no real address behind it'],\n  ['sweet tea realty co', 'holding entity, no real address behind it'],\n]);\n\nconst SUFFIXES = new Map([\n  ['road', 'rd'], ['street', 'st'], ['lane', 'ln'], ['drive', 'dr'],\n  ['court', 'ct'], ['avenue', 'ave'], ['boulevard', 'blvd'], ['circle', 'cir'],\n  ['place', 'pl'], ['terrace', 'ter'], ['parkway', 'pkwy'], ['trail', 'trl'],\n  ['way', 'way'], ['run', 'run'], ['cove', 'cv'], ['curve', 'curve'],\n  ['landing', 'lndg'], ['point', 'pt'], ['preserve', 'preserve'],\n]);\nconst SUFFIX_TOKENS = new Set([...SUFFIXES.values(), ...SUFFIXES.keys()]);\n\nfunction normName(s) {\n  return String(s ?? '').trim().replace(/\\s+/g, ' ').toLowerCase();\n}\n\nfunction normAddr(s) {\n  const base = String(s ?? '')\n    .toLowerCase()\n    .replace(/[.,#]/g, ' ')\n    .replace(/[^a-z0-9\\s]/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n  if (!base) return '';\n  return base.split(' ').map((w) => SUFFIXES.get(w) ?? w).join(' ');\n}\n\nfunction coreAddr(s) {\n  const parts = normAddr(s).split(' ').filter(Boolean);\n  if (parts.length > 2 && parts[parts.length - 1].length === 1) parts.pop();\n  while (parts.length > 2 && SUFFIX_TOKENS.has(parts[parts.length - 1])) parts.pop();\n  return parts.join(' ');\n}\n\n// Units whose address.street1 does not actually describe THAT unit. Two units of\n// one property claiming the same address cannot be told apart, so matching on\n// address would attach the wrong unit to a row and silently drive that row's\n// vacant/occupied status from it.\nfunction findUntrustworthyUnits(us) {\n  const byProp = new Map();\n  for (const u of us) {\n    if (!byProp.has(u.property)) byProp.set(u.property, []);\n    byProp.get(u.property).push(u);\n  }\n  const blocked = new Map();\n  for (const [, siblings] of byProp) {\n    if (siblings.length <= 1) continue;\n    const byAddress = new Map();\n    for (const u of siblings) {\n      const key = normAddr((u.address?.street1 ?? '').trim());\n      if (!key) continue;\n      if (!byAddress.has(key)) byAddress.set(key, []);\n      byAddress.get(key).push(u);\n    }\n    for (const [addr, group] of byAddress) {\n      if (group.length <= 1) continue;\n      const explicit = group.filter((u) => u.addressSameAsProperty === false);\n      const names = group.map((u) => '\"' + u.name + '\"').join(', ');\n      if (explicit.length === 1) {\n        for (const u of group) {\n          if (u === explicit[0]) continue;\n          blocked.set(\n            u.id,\n            'Address \"' + (u.address?.street1 ?? '') + '\" is inherited from the parent property and is ' +\n              'already claimed by \"' + explicit[0].name + '\". This unit needs its own address in DoorLoop.'\n          );\n        }\n      } else {\n        for (const u of group) {\n          blocked.set(\n            u.id,\n            group.length + ' units of this property all report the same address \"' +\n              (u.address?.street1 ?? addr) + '\" (' + names + ') and none has it set explicitly. ' +\n              'Each needs its own address in DoorLoop.'\n          );\n        }\n      }\n    }\n  }\n  return blocked;\n}\n\nconst propById = new Map(properties.map((p) => [String(p.id), p]));\nconst untrustworthy = findUntrustworthyUnits(units);\nconst unitById = new Map(units.map((u) => [String(u.id), u]));\n\n// Sheet rows indexed by normalized address, plus the set of unit ids already linked.\nconst byNorm = new Map();\nfor (const r of rows) {\n  const n = normAddr(r.street_address);\n  if (!n) continue;\n  if (!byNorm.has(n)) byNorm.set(n, []);\n  byNorm.get(n).push(r);\n}\nconst linkedIds = new Set(\n  rows.map((r) => String(r.doorloop_property_id ?? '').trim()).filter(Boolean)\n);\nconst isUnlinked = (r) => !String(r.doorloop_property_id ?? '').trim();\n\nconst create = []; // real DoorLoop unit, no dashboard row at all\nconst link = [];   // dashboard row exists but is not linked to its unit\nconst known = [];  // blocked on DoorLoop data / excluded by design / orphan rows\n\nfor (const unit of units) {\n  const id = String(unit.id);\n  if (linkedIds.has(id)) continue; // already linked — nothing to report\n\n  const prop = propById.get(String(unit.property));\n  const propName = prop?.name ?? '(unknown property)';\n  const label = propName + ' / ' + (unit.name ?? '(unnamed unit)');\n\n  if (!prop) {\n    known.push({ kind: 'skipped', label, reason: 'unit.property \"' + unit.property + '\" is not in the /properties response' });\n    continue;\n  }\n  const exclusion = EXCLUDED_PROPERTY_NAMES.get(normName(prop.name));\n  if (exclusion) {\n    known.push({ kind: 'excluded', label, reason: 'Excluded by design — ' + exclusion });\n    continue;\n  }\n  if (Number(prop.numActiveUnits ?? 0) === 0) {\n    known.push({ kind: 'skipped', label, reason: 'Parent property reports numActiveUnits == 0' });\n    continue;\n  }\n  if (unit.active === false) {\n    known.push({ kind: 'skipped', label, reason: 'Unit is marked inactive in DoorLoop' });\n    continue;\n  }\n\n  const ua = unit.address ?? {};\n  const street = (ua.street1 ?? '').trim() || (prop.address?.street1 ?? '').trim();\n  if (!street) {\n    known.push({ kind: 'skipped', label, reason: 'No street address on either the unit or its parent property' });\n    continue;\n  }\n\n  const untrustReason = untrustworthy.get(unit.id);\n  if (untrustReason) {\n    known.push({ kind: 'blocked', label, reason: untrustReason });\n    continue;\n  }\n\n  // An exact address match to an existing row means this is a LINKING gap, not a\n  // missing property. Reporting it as \"create\" would tell someone to add a\n  // duplicate of a property they already have.\n  const exact = byNorm.get(normAddr(street)) ?? [];\n  const unlinkedExact = exact.filter(isUnlinked);\n  if (unlinkedExact.length === 1) {\n    link.push({\n      row: unlinkedExact[0].row_number ?? null,\n      property_key: unlinkedExact[0].property_key ?? '',\n      street_address: unlinkedExact[0].street_address ?? '',\n      doorloop_address: street,\n      unit_id: id,\n      label,\n      confidence: 'exact',\n    });\n    continue;\n  }\n  if (exact.length > 0) {\n    known.push({\n      kind: 'ambiguous',\n      label,\n      reason: 'Address \"' + street + '\" matches ' + exact.length + ' dashboard rows — cannot tell which one this unit is.',\n    });\n    continue;\n  }\n\n  // Suffix-only difference (\"102 Braeford\" vs \"102 Braeford Ct\") is still a\n  // linking gap, but only when the core address is unique on BOTH sides —\n  // dropping a suffix can genuinely conflate two different streets.\n  const core = coreAddr(street);\n  const coreRows = rows.filter((r) => coreAddr(r.street_address) === core && isUnlinked(r));\n  const coreUnits = units.filter((u) => {\n    if (linkedIds.has(String(u.id))) return false;\n    const p = propById.get(String(u.property));\n    const s = (u.address?.street1 ?? '').trim() || (p?.address?.street1 ?? '').trim();\n    return coreAddr(s) === core;\n  });\n  if (coreRows.length === 1 && coreUnits.length === 1) {\n    link.push({\n      row: coreRows[0].row_number ?? null,\n      property_key: coreRows[0].property_key ?? '',\n      street_address: coreRows[0].street_address ?? '',\n      doorloop_address: street,\n      unit_id: id,\n      label,\n      confidence: 'suffix',\n    });\n    continue;\n  }\n\n  create.push({ label, address: street, unit_id: id, property_name: propName });\n}\n\n// Dashboard rows pointing at a unit DoorLoop no longer returns. This is the ONLY\n// removal signal. A row with an EMPTY doorloop_property_id has simply never been\n// linked — that is not evidence anything was deleted, and listing it as a\n// removal candidate would invite deleting a live property.\nconst remove = [];\nconst linkedRows = new Set(link.map((l) => l.row));\nfor (const r of rows) {\n  const id = String(r.doorloop_property_id ?? '').trim();\n  if (id) {\n    if (!unitById.has(id)) {\n      remove.push({\n        row: r.row_number ?? null,\n        property_key: r.property_key ?? '',\n        street_address: r.street_address ?? '',\n        unit_id: id,\n      });\n    }\n    continue;\n  }\n  if (!linkedRows.has(r.row_number ?? null) && String(r.property_key ?? '').trim()) {\n    known.push({\n      kind: 'orphan',\n      label: (r.property_key || r.street_address) + ' (row ' + (r.row_number ?? '?') + ')',\n      reason: 'Dashboard row with no DoorLoop unit — its status stays manual. Not a removal candidate.',\n    });\n  }\n}\n\nconst report = {\n  ok: !truncated,\n  generated_at: new Date().toISOString(),\n  status_rows_written: written,\n  counts: { create: create.length, link: link.length, remove: remove.length, known: known.length },\n  create,\n  link,\n  remove,\n  known,\n};\n\nif (truncated) {\n  report.error =\n    'DoorLoop returned a truncated page (units ' + units.length + '/' + (unitsResp.total ?? '?') +\n    ', properties ' + properties.length + '/' + (propsResp.total ?? '?') +\n    '). The reconciliation below would be wrong, so it is suppressed. Add pagination.';\n  report.create = [];\n  report.link = [];\n  report.remove = [];\n  report.known = [];\n  report.counts = { create: 0, link: 0, remove: 0, known: 0 };\n}\n\nconsole.log(\n  '[doorloop-recon] create=' + report.counts.create + ' link=' + report.counts.link +\n  ' remove=' + report.counts.remove + ' known=' + report.counts.known + ' ok=' + report.ok\n);\n\nreturn [{ json: report }];\n"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1420,
+          400
+        ],
+        "id": "recon-build-report",
+        "name": "Build Reconciliation Report",
+        "onError": "continueRegularOutput"
+      }
+    ],
+    "connections": {
+      "Every Hour": {
+        "main": [
+          [
+            {
+              "node": "Fetch Units",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Manual Sync Trigger": {
+        "main": [
+          [
+            {
+              "node": "Fetch Units",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Fetch Units": {
+        "main": [
+          [
+            {
+              "node": "Fetch Active Leases",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Fetch Active Leases": {
+        "main": [
+          [
+            {
+              "node": "Fetch Properties",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Properties": {
+        "main": [
+          [
+            {
+              "node": "Compute Occupancy",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Compute Occupancy": {
+        "main": [
+          [
+            {
+              "node": "Write Status to Properties",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Fetch Properties": {
+        "main": [
+          [
+            {
+              "node": "Read Properties",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Write Status to Properties": {
+        "main": [
+          [
+            {
+              "node": "Build Reconciliation Report",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Justin Artis",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-08-09T13:15:15.338Z",
+        "id": 341,
+        "workflowId": "4bMsEAi18j4CPK8k",
+        "versionId": "cce8cad0-a42b-4422-9cb3-b98ee5318d99",
+        "event": "deactivated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      },
+      {
+        "createdAt": "2026-08-09T13:15:15.355Z",
+        "id": 342,
+        "workflowId": "4bMsEAi18j4CPK8k",
+        "versionId": "cce8cad0-a42b-4422-9cb3-b98ee5318d99",
+        "event": "activated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    ]
+  }
+}

@@ -1,0 +1,623 @@
+{
+  "updatedAt": "2026-07-24T13:39:16.074Z",
+  "createdAt": "2026-07-24T13:37:36.844Z",
+  "id": "ky3jGATzHb9eg4BC",
+  "name": "RentingFreedom - Test Helper: Reset + Trigger",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "tt-manual",
+      "name": "When clicking 'Execute workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -224,
+        208
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "tt-find-person",
+      "name": "FUB - Find Test Test9",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        208
+      ],
+      "parameters": {
+        "url": "https://api.followupboss.com/v1/people?firstName=Test&lastName=Test9&fields=allFields",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "id": "tt-extract-person",
+      "name": "Extract Person",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        208
+      ],
+      "parameters": {
+        "jsCode": "const people = $(\"FUB - Find Test Test9\").first().json.people || [];\nif (!people.length) {\n  return [{ json: { found: false } }];\n}\nconst person = people[0];\nreturn [{ json: {\n  found: true,\n  person_id: String(person.id),\n  first_name: person.firstName || \"\",\n  last_name: person.lastName || \"\",\n  uri: \"https://api.followupboss.com/v1/people?id=\" + person.id,\n} }];"
+      }
+    },
+    {
+      "id": "tt-person-found",
+      "name": "Person Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        448,
+        208
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.found }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "tt-read-log",
+      "name": "Read Identity Verifications",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        672,
+        112
+      ],
+      "alwaysOutputData": true,
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Identity_Verifications",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "tt-find-matching-rows",
+      "name": "Find Matching Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        112
+      ],
+      "parameters": {
+        "jsCode": "const personId = $(\"Extract Person\").first().json.person_id;\nconst rows = $items(\"Read Identity Verifications\").map(i => i.json || {});\n\nconst matches = rows.filter(r => String(r.lead_id) === String(personId) && r.row_number);\n\nreturn matches.map(r => ({ json: { row_number: r.row_number } }));"
+      }
+    },
+    {
+      "id": "tt-clear-row",
+      "name": "Clear Old Row Lead ID",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        112
+      ],
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ 'https://sheets.googleapis.com/v4/spreadsheets/1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw/values/Identity_Verifications!B' + $json.row_number + '?valueInputOption=USER_ENTERED' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ values: [[ 'reset-' + Date.now() ]] }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "tt-trigger-gate",
+      "name": "Trigger Gate Workflow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        320
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://automation.rentingfreedom.com/webhook/phone-added-send-text",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ eventId: 'manual-test-' + Date.now(), event: 'peopleUpdated', resourceIds: [Number($('Extract Person').first().json.person_id)], uri: $('Extract Person').first().json.uri }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "tt-webhook-trigger",
+      "name": "Webhook Trigger (for validation)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        400
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "test-helper-trigger",
+        "options": {}
+      },
+      "webhookId": "test-helper-trigger"
+    }
+  ],
+  "connections": {
+    "When clicking 'Execute workflow'": {
+      "main": [
+        [
+          {
+            "node": "FUB - Find Test Test9",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Find Test Test9": {
+      "main": [
+        [
+          {
+            "node": "Extract Person",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Person": {
+      "main": [
+        [
+          {
+            "node": "Person Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Person Found?": {
+      "main": [
+        [
+          {
+            "node": "Read Identity Verifications",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Trigger Gate Workflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Identity Verifications": {
+      "main": [
+        [
+          {
+            "node": "Find Matching Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Matching Rows": {
+      "main": [
+        [
+          {
+            "node": "Clear Old Row Lead ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Trigger (for validation)": {
+      "main": [
+        [
+          {
+            "node": "FUB - Find Test Test9",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "a491095e-b237-439a-8c95-68ea9f796bf7",
+  "activeVersionId": "a491095e-b237-439a-8c95-68ea9f796bf7",
+  "versionCounter": 3,
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-07-24T13:37:36.844Z",
+      "createdAt": "2026-07-24T13:37:36.844Z",
+      "role": "workflow:owner",
+      "workflowId": "ky3jGATzHb9eg4BC",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-07-24T13:39:16.075Z",
+    "createdAt": "2026-07-24T13:39:16.075Z",
+    "versionId": "a491095e-b237-439a-8c95-68ea9f796bf7",
+    "workflowId": "ky3jGATzHb9eg4BC",
+    "nodes": [
+      {
+        "id": "tt-manual",
+        "name": "When clicking 'Execute workflow'",
+        "type": "n8n-nodes-base.manualTrigger",
+        "typeVersion": 1,
+        "position": [
+          -224,
+          208
+        ],
+        "parameters": {}
+      },
+      {
+        "id": "tt-find-person",
+        "name": "FUB - Find Test Test9",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          0,
+          208
+        ],
+        "parameters": {
+          "url": "https://api.followupboss.com/v1/people?firstName=Test&lastName=Test9&fields=allFields",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-System",
+                "value": "RentingFreedom"
+              },
+              {
+                "name": "X-System-Key",
+                "value": "55e05a4d42e692a05db7be23f2178e04"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "Iap4KzaMs92QWwSR",
+            "name": "FUB Owner"
+          }
+        }
+      },
+      {
+        "id": "tt-extract-person",
+        "name": "Extract Person",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          224,
+          208
+        ],
+        "parameters": {
+          "jsCode": "const people = $(\"FUB - Find Test Test9\").first().json.people || [];\nif (!people.length) {\n  return [{ json: { found: false } }];\n}\nconst person = people[0];\nreturn [{ json: {\n  found: true,\n  person_id: String(person.id),\n  first_name: person.firstName || \"\",\n  last_name: person.lastName || \"\",\n  uri: \"https://api.followupboss.com/v1/people?id=\" + person.id,\n} }];"
+        }
+      },
+      {
+        "id": "tt-person-found",
+        "name": "Person Found?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          448,
+          208
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.found }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "tt-read-log",
+        "name": "Read Identity Verifications",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          672,
+          112
+        ],
+        "alwaysOutputData": true,
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Identity_Verifications",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        }
+      },
+      {
+        "id": "tt-find-matching-rows",
+        "name": "Find Matching Rows",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          896,
+          112
+        ],
+        "parameters": {
+          "jsCode": "const personId = $(\"Extract Person\").first().json.person_id;\nconst rows = $items(\"Read Identity Verifications\").map(i => i.json || {});\n\nconst matches = rows.filter(r => String(r.lead_id) === String(personId) && r.row_number);\n\nreturn matches.map(r => ({ json: { row_number: r.row_number } }));"
+        }
+      },
+      {
+        "id": "tt-clear-row",
+        "name": "Clear Old Row Lead ID",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1120,
+          112
+        ],
+        "parameters": {
+          "method": "PUT",
+          "url": "={{ 'https://sheets.googleapis.com/v4/spreadsheets/1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw/values/Identity_Verifications!B' + $json.row_number + '?valueInputOption=USER_ENTERED' }}",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "googleSheetsOAuth2Api",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ values: [[ 'reset-' + Date.now() ]] }) }}",
+          "options": {}
+        },
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        }
+      },
+      {
+        "id": "tt-trigger-gate",
+        "name": "Trigger Gate Workflow",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          672,
+          320
+        ],
+        "parameters": {
+          "method": "POST",
+          "url": "https://automation.rentingfreedom.com/webhook/phone-added-send-text",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ eventId: 'manual-test-' + Date.now(), event: 'peopleUpdated', resourceIds: [Number($('Extract Person').first().json.person_id)], uri: $('Extract Person').first().json.uri }) }}",
+          "options": {}
+        }
+      },
+      {
+        "id": "tt-webhook-trigger",
+        "name": "Webhook Trigger (for validation)",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          -224,
+          400
+        ],
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "test-helper-trigger",
+          "options": {}
+        },
+        "webhookId": "test-helper-trigger"
+      }
+    ],
+    "connections": {
+      "When clicking 'Execute workflow'": {
+        "main": [
+          [
+            {
+              "node": "FUB - Find Test Test9",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "FUB - Find Test Test9": {
+        "main": [
+          [
+            {
+              "node": "Extract Person",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Extract Person": {
+        "main": [
+          [
+            {
+              "node": "Person Found?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Person Found?": {
+        "main": [
+          [
+            {
+              "node": "Read Identity Verifications",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Trigger Gate Workflow",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Identity Verifications": {
+        "main": [
+          [
+            {
+              "node": "Find Matching Rows",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Find Matching Rows": {
+        "main": [
+          [
+            {
+              "node": "Clear Old Row Lead ID",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Webhook Trigger (for validation)": {
+        "main": [
+          [
+            {
+              "node": "FUB - Find Test Test9",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Justin Artis",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-07-24T13:39:16.345Z",
+        "id": 138,
+        "workflowId": "ky3jGATzHb9eg4BC",
+        "versionId": "a491095e-b237-439a-8c95-68ea9f796bf7",
+        "event": "activated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    ]
+  }
+}

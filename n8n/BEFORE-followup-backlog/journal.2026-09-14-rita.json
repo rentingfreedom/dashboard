@@ -1,0 +1,62 @@
+{
+  "written_at": "2026-09-15T00:06:22.458Z",
+  "fill_value": "failed",
+  "entries": [
+    {
+      "booking_uid": "691CicZAon4je8Kjs1CAF2",
+      "column": "followup_3day_email_sent",
+      "range": "Cal Bookings!AZ41",
+      "before": "FALSE",
+      "start_time": "2026-09-12T15:00:00.000Z"
+    },
+    {
+      "booking_uid": "691CicZAon4je8Kjs1CAF2",
+      "column": "followup_3day_sms_sent",
+      "range": "Cal Bookings!BB41",
+      "before": "FALSE",
+      "start_time": "2026-09-12T15:00:00.000Z"
+    },
+    {
+      "booking_uid": "691CicZAon4je8Kjs1CAF2",
+      "column": "followup_7day_email_sent",
+      "range": "Cal Bookings!BD41",
+      "before": "FALSE",
+      "start_time": "2026-09-12T15:00:00.000Z"
+    },
+    {
+      "booking_uid": "691CicZAon4je8Kjs1CAF2",
+      "column": "followup_7day_sms_sent",
+      "range": "Cal Bookings!BF41",
+      "before": "FALSE",
+      "start_time": "2026-09-12T15:00:00.000Z"
+    },
+    {
+      "booking_uid": "ivJv5im2HFTcW9WuosEqcj",
+      "column": "followup_3day_email_sent",
+      "range": "Cal Bookings!AZ42",
+      "before": "FALSE",
+      "start_time": "2026-09-12T15:15:00.000Z"
+    },
+    {
+      "booking_uid": "ivJv5im2HFTcW9WuosEqcj",
+      "column": "followup_3day_sms_sent",
+      "range": "Cal Bookings!BB42",
+      "before": "FALSE",
+      "start_time": "2026-09-12T15:15:00.000Z"
+    },
+    {
+      "booking_uid": "ivJv5im2HFTcW9WuosEqcj",
+      "column": "followup_7day_email_sent",
+      "range": "Cal Bookings!BD42",
+      "before": "FALSE",
+      "start_time": "2026-09-12T15:15:00.000Z"
+    },
+    {
+      "booking_uid": "ivJv5im2HFTcW9WuosEqcj",
+      "column": "followup_7day_sms_sent",
+      "range": "Cal Bookings!BF42",
+      "before": "FALSE",
+      "start_time": "2026-09-12T15:15:00.000Z"
+    }
+  ]
+}

@@ -1,0 +1,211 @@
+{
+  "updatedAt": "2026-09-15T00:20:34.971Z",
+  "createdAt": "2026-09-15T00:20:34.971Z",
+  "id": "zvwMJSOZBwqVM8Lo",
+  "name": "RentingFreedom Production - Automation Failure Alerts",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "err-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "err-build",
+      "name": "Build Failure Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ERROR_ALERT_MARKER\n// Fans out ONE ITEM PER RECIPIENT. Never comma-separate a Twilio `To` —\n// Twilio rejects it with error 21211. This is the alert_cc_phones pattern.\n\nconst RECIPIENTS = ['+18434945244', '+18038047847'];  // Nicole, Andrew\nconst FROM_NUMBER = '+18548886242';                   // Settings from_number, hardcoded on purpose\n\nconst WINDOW_MS  = 60 * 60 * 1000;  // rolling hour\nconst MAX_ALERTS = 8;               // distinct failures alerted per window\nconst REPEAT_MS  = 60 * 60 * 1000;  // same signature at most once per window\n\nconst payload   = $input.first()?.json ?? {};\nconst execution = payload.execution ?? {};\nconst workflow  = payload.workflow ?? {};\n\nconst wfId   = String(workflow.id ?? '');\nconst wfName = String(workflow.name ?? 'unknown workflow');\nconst node   = String(execution.lastNodeExecuted ?? 'unknown node');\nconst rawMsg = String(execution.error?.message ?? 'no error message');\nconst url    = String(execution.url ?? '');\n\n// Never alert on our own failure — n8n would invoke this workflow again for\n// that failure, and the loop would be unbounded. The execution log is the\n// record instead.\nif (wfId && wfId === $workflow.id) {\n  console.log('[error-alert] suppressed: the failing workflow IS the alerter');\n  return [];\n}\n\nconst now = Date.now();\nconst sd  = $getWorkflowStaticData('global');\n\nsd.sentAt = (Array.isArray(sd.sentAt) ? sd.sentAt : []).filter((t) => Number.isFinite(t) && now - t < WINDOW_MS);\nsd.seen   = (sd.seen && typeof sd.seen === 'object') ? sd.seen : {};\nfor (const [k, t] of Object.entries(sd.seen)) {\n  if (!Number.isFinite(t) || now - t >= REPEAT_MS) delete sd.seen[k];\n}\nsd.suppressed = Number.isFinite(sd.suppressed) ? sd.suppressed : 0;\n\nconst signature = wfId + '::' + node + '::' + rawMsg.slice(0, 120);\n\nlet suppressReason = null;\nif (sd.seen[signature]) suppressReason = 'duplicate signature within the window';\nelse if (sd.sentAt.length >= MAX_ALERTS) suppressReason = 'global cap ' + MAX_ALERTS + '/hour reached';\n\nif (suppressReason) {\n  sd.suppressed += 1;\n  console.log('[error-alert] SUPPRESSED (' + suppressReason + ') — ' + wfName + ' / ' + node +\n              ': ' + rawMsg.slice(0, 120) + ' | suppressed this window: ' + sd.suppressed);\n  return [];\n}\n\n// Everything suppressed since the last delivered alert rides along on this one,\n// so a storm reads as \"+N others\" rather than disappearing.\nconst alsoSuppressed = sd.suppressed;\nsd.suppressed = 0;\nsd.seen[signature] = now;\nsd.sentAt.push(now);\n\nconst msg = rawMsg.length > 180 ? rawMsg.slice(0, 177) + '...' : rawMsg;\nlet text = 'RF AUTOMATION FAILURE\\n' + wfName + '\\nnode: ' + node + '\\n' + msg;\nif (alsoSuppressed > 0) {\n  text += '\\n(+' + alsoSuppressed + ' other failure' + (alsoSuppressed === 1 ? '' : 's') + ' suppressed in the last hour)';\n}\nif (url) text += '\\n' + url;\n\nconst seen = new Set();\nconst out  = [];\nfor (const raw of RECIPIENTS) {\n  const digits = String(raw).replace(/\\D/g, '').slice(-10);   // dedupe on last 10\n  if (digits.length !== 10 || seen.has(digits)) continue;\n  seen.add(digits);\n  out.push({ json: {\n    phone: raw,\n    from_number: FROM_NUMBER,\n    message: text,\n    workflow_id: wfId,\n    workflow_name: wfName,\n    node,\n    failed_execution_url: url,\n  }});\n}\n\nif (out.length === 0) {\n  console.log('[error-alert] no valid recipients configured — nothing sent');\n  return [];\n}\nconsole.log('[error-alert] alerting ' + out.length + ' recipient(s): ' + wfName + ' / ' + node);\nreturn out;"
+      }
+    },
+    {
+      "id": "err-send",
+      "name": "Send Failure Alert",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        480,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "from": "={{ $json.from_number }}",
+        "to": "={{ $json.phone }}",
+        "message": "={{ $json.message }}",
+        "options": {}
+      },
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Build Failure Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Failure Alert": {
+      "main": [
+        [
+          {
+            "node": "Send Failure Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "1164ff8f-34e1-4219-b941-df930ad2d68d",
+  "activeVersionId": "1164ff8f-34e1-4219-b941-df930ad2d68d",
+  "versionCounter": 1,
+  "triggerCount": 0,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-09-15T00:20:34.971Z",
+      "createdAt": "2026-09-15T00:20:34.971Z",
+      "role": "workflow:owner",
+      "workflowId": "zvwMJSOZBwqVM8Lo",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-09-15T00:20:34.971Z",
+    "createdAt": "2026-09-15T00:20:34.971Z",
+    "versionId": "1164ff8f-34e1-4219-b941-df930ad2d68d",
+    "workflowId": "zvwMJSOZBwqVM8Lo",
+    "nodes": [
+      {
+        "id": "err-trigger",
+        "name": "Error Trigger",
+        "type": "n8n-nodes-base.errorTrigger",
+        "typeVersion": 1,
+        "position": [
+          0,
+          0
+        ],
+        "parameters": {}
+      },
+      {
+        "id": "err-build",
+        "name": "Build Failure Alert",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          240,
+          0
+        ],
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "jsCode": "// ERROR_ALERT_MARKER\n// Fans out ONE ITEM PER RECIPIENT. Never comma-separate a Twilio `To` —\n// Twilio rejects it with error 21211. This is the alert_cc_phones pattern.\n\nconst RECIPIENTS = ['+18434945244', '+18038047847'];  // Nicole, Andrew\nconst FROM_NUMBER = '+18548886242';                   // Settings from_number, hardcoded on purpose\n\nconst WINDOW_MS  = 60 * 60 * 1000;  // rolling hour\nconst MAX_ALERTS = 8;               // distinct failures alerted per window\nconst REPEAT_MS  = 60 * 60 * 1000;  // same signature at most once per window\n\nconst payload   = $input.first()?.json ?? {};\nconst execution = payload.execution ?? {};\nconst workflow  = payload.workflow ?? {};\n\nconst wfId   = String(workflow.id ?? '');\nconst wfName = String(workflow.name ?? 'unknown workflow');\nconst node   = String(execution.lastNodeExecuted ?? 'unknown node');\nconst rawMsg = String(execution.error?.message ?? 'no error message');\nconst url    = String(execution.url ?? '');\n\n// Never alert on our own failure — n8n would invoke this workflow again for\n// that failure, and the loop would be unbounded. The execution log is the\n// record instead.\nif (wfId && wfId === $workflow.id) {\n  console.log('[error-alert] suppressed: the failing workflow IS the alerter');\n  return [];\n}\n\nconst now = Date.now();\nconst sd  = $getWorkflowStaticData('global');\n\nsd.sentAt = (Array.isArray(sd.sentAt) ? sd.sentAt : []).filter((t) => Number.isFinite(t) && now - t < WINDOW_MS);\nsd.seen   = (sd.seen && typeof sd.seen === 'object') ? sd.seen : {};\nfor (const [k, t] of Object.entries(sd.seen)) {\n  if (!Number.isFinite(t) || now - t >= REPEAT_MS) delete sd.seen[k];\n}\nsd.suppressed = Number.isFinite(sd.suppressed) ? sd.suppressed : 0;\n\nconst signature = wfId + '::' + node + '::' + rawMsg.slice(0, 120);\n\nlet suppressReason = null;\nif (sd.seen[signature]) suppressReason = 'duplicate signature within the window';\nelse if (sd.sentAt.length >= MAX_ALERTS) suppressReason = 'global cap ' + MAX_ALERTS + '/hour reached';\n\nif (suppressReason) {\n  sd.suppressed += 1;\n  console.log('[error-alert] SUPPRESSED (' + suppressReason + ') — ' + wfName + ' / ' + node +\n              ': ' + rawMsg.slice(0, 120) + ' | suppressed this window: ' + sd.suppressed);\n  return [];\n}\n\n// Everything suppressed since the last delivered alert rides along on this one,\n// so a storm reads as \"+N others\" rather than disappearing.\nconst alsoSuppressed = sd.suppressed;\nsd.suppressed = 0;\nsd.seen[signature] = now;\nsd.sentAt.push(now);\n\nconst msg = rawMsg.length > 180 ? rawMsg.slice(0, 177) + '...' : rawMsg;\nlet text = 'RF AUTOMATION FAILURE\\n' + wfName + '\\nnode: ' + node + '\\n' + msg;\nif (alsoSuppressed > 0) {\n  text += '\\n(+' + alsoSuppressed + ' other failure' + (alsoSuppressed === 1 ? '' : 's') + ' suppressed in the last hour)';\n}\nif (url) text += '\\n' + url;\n\nconst seen = new Set();\nconst out  = [];\nfor (const raw of RECIPIENTS) {\n  const digits = String(raw).replace(/\\D/g, '').slice(-10);   // dedupe on last 10\n  if (digits.length !== 10 || seen.has(digits)) continue;\n  seen.add(digits);\n  out.push({ json: {\n    phone: raw,\n    from_number: FROM_NUMBER,\n    message: text,\n    workflow_id: wfId,\n    workflow_name: wfName,\n    node,\n    failed_execution_url: url,\n  }});\n}\n\nif (out.length === 0) {\n  console.log('[error-alert] no valid recipients configured — nothing sent');\n  return [];\n}\nconsole.log('[error-alert] alerting ' + out.length + ' recipient(s): ' + wfName + ' / ' + node);\nreturn out;"
+        }
+      },
+      {
+        "id": "err-send",
+        "name": "Send Failure Alert",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          480,
+          0
+        ],
+        "onError": "continueRegularOutput",
+        "parameters": {
+          "from": "={{ $json.from_number }}",
+          "to": "={{ $json.phone }}",
+          "message": "={{ $json.message }}",
+          "options": {}
+        },
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        }
+      }
+    ],
+    "connections": {
+      "Error Trigger": {
+        "main": [
+          [
+            {
+              "node": "Build Failure Alert",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Failure Alert": {
+        "main": [
+          [
+            {
+              "node": "Send Failure Alert",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Justin Artis",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-09-15T00:20:35.064Z",
+        "id": 501,
+        "workflowId": "zvwMJSOZBwqVM8Lo",
+        "versionId": "1164ff8f-34e1-4219-b941-df930ad2d68d",
+        "event": "activated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    ]
+  }
+}

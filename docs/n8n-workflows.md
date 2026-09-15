@@ -49,6 +49,8 @@ workflows should read this file first.
 | `R3rhuCYEGoBFArBa` | Identity Verification Reminders | Hourly tick, sends in the 10am ET hour. One reminder SMS/day for 4 days to leads who haven't verified. **ACTIVE since 2026-08-25.** |
 | `5UvuzQwLjCB4D25A` | Cal Booking Reminders | Hourly tick, sends in the 10am ET hour. One SMS **and** email per day for 4 days to a lead sent a per-property cal link who hasn't booked. **ACTIVE since 2026-09-01** (created inactive 2026-08-31; activated in a later session). |
 | `TGGhSkTSZGYPrZo9` | New Property → Provision | Sheets `rowAdded` poll (**every 5 min** since 2026-09-01) → cal.com event type + Google resource. |
+| `zvwMJSOZBwqVM8Lo` | Automation Failure Alerts | **Error Trigger.** Named as `settings.errorWorkflow` by all 16 active workflows. SMS to Nicole + Andrew on any failed execution, throttled. **ACTIVE — and it must be.** `n8n/error-alert-workflow.json`. |
+| `PKdaOsoHatbuRTfZ` | Missed Access Code Sweep | Hourly. Reconciles Cal Bookings -> Showings and texts staff when a showing has, or will have, no door code. **INACTIVE — activation is a deliberate step.** `n8n/missed-code-sweep.json`. |
 | `W6PoSadMxnoHwxhG` | Delete Property | Sheets `anyUpdate` poll (**every 5 min**) on the SAME tab → filter `active == "Delete"` → deletes the cal.com event type, the Google resource, and the sheet row. **ACTIVE.** |
 
 ## LAUNCHED 2026-08-25 — the system is LIVE
@@ -2050,6 +2052,167 @@ with one shared date both tags look equally current. The only moment the stalene
 knowable is *while the window is still expired* — hence the cleanup above. Client
 sign-off 2026-08-07. There is no fourth tag.
 
+## Automation Failure Alerts — `zvwMJSOZBwqVM8Lo` (2026-09-14)
+
+An n8n **error workflow**: every active workflow names it in
+`settings.errorWorkflow`, so any failed execution sends one SMS to Nicole
+(`+18434945244`) and Andrew (`+18038047847`).
+
+**Why it exists.** Rita Lewis booked a showing on `129-towering-pine-drive`,
+which has no `populife_lock_id`. `Find Property` threw, the Booking Handler
+died before writing a `Showings` row, nothing retried, no code was dispatched —
+and she then received the automated "thanks for attending, leave a review"
+chain. 1-star review. The crash was visible in n8n at **14:35:42, hours before
+she left home**. Nothing was watching. Unlike item 1a this is not specific to
+lockboxes: it covers every crash nobody has anticipated.
+
+```
+Error Trigger -> Build Failure Alert -> Send Failure Alert (twilio)
+```
+
+### Three API facts proved live — none of them the obvious assumption
+
+> **1. The error workflow MUST BE ACTIVE.** Pointed at an INACTIVE error
+> workflow, a failing workflow produced **zero** executions on it, with no
+> warning anywhere. An alarm that is silently not wired up is the worst
+> possible failure mode, so the builder activates it and the verifier asserts
+> it (A1). This is why it breaks the house convention of creating things
+> inactive.
+
+> **2. `settings` MERGES on PUT — omitting a key does NOT remove it.** PUTting
+> `{executionOrder}` over `{executionOrder, errorWorkflow}` leaves
+> `errorWorkflow` in place. There is **no way to delete a settings key through
+> this API**; `--revert` therefore overwrites it with `""`. `null` is rejected
+> (400 "must be string"). **This corrects a belief embedded in several scripts
+> in this repo:** filtering `settings` on PUT avoids the 400, but it does not
+> restore settings.
+
+> **3. `binaryMode` is REJECTED by the PUT schema** (400 "settings must NOT have
+> additional properties") while **`availableInMCP` is accepted**. Three live
+> workflows carry `binaryMode`. Because of the merge in (2), *not sending it*
+> preserves it — sending it fails the PUT. There is also no PATCH and no partial
+> PUT (`name`, `nodes`, `connections` are all required), so changing one settings
+> key means resending every node of a live workflow. Hence the attach script
+> hashes nodes/connections before and after and aborts on any drift.
+
+Payload shape (one item): `{ execution: { id, url, error: { message, stack,
+lineNumber }, lastNodeExecuted, mode }, workflow: { id, name } }`.
+`execution.url` is a ready-made deep link; `execution.id` is the **failed**
+execution's id, not the alerter's.
+
+### The throttle is not optional
+
+A 593-person FUB backfill once produced **~330 failing executions in 3 minutes**.
+Unthrottled that is 660 SMS. So: the same `(workflow, node, message)` signature
+alerts at most once an hour; at most **8** distinct failures alert per rolling
+hour; everything suppressed is **counted**, and the count rides the next
+delivered alert as `(+N other failures suppressed…)` so a storm reads as
+volume rather than vanishing.
+
+State lives in **`$getWorkflowStaticData('global')`**, which was verified to
+persist across executions here (a counter went 1 → 2). Under a storm concurrent
+error executions can race it and undercount — that loses *suppression*, never an
+alert, which is the correct direction for an alarm.
+
+> **Reads NO Google Sheet, deliberately.** Recipients and sender are hardcoded.
+> The most common way this estate breaks is Sheets quota exhaustion, so a
+> Settings read here would make the alarm fail in exactly the case it exists
+> for. Changing a recipient means editing the builder and re-running it.
+
+> **Self-exclusion, in two places.** If the failing workflow IS the alerter, the
+> build node returns `[]`; the attach script separately refuses to point it at
+> itself. n8n would otherwise invoke it for its own failure, unbounded. Both
+> halves exist because only one of the two is visible when reading a canvas.
+
+```bash
+node scripts/n8n-create-error-workflow.mjs [--apply] [--delete <id>] [--emit-js <dir>]
+node scripts/n8n-attach-error-workflow.mjs [--apply] [--revert --apply] [--only <id>] [--include-inactive]
+node scripts/error-workflow-verify.mjs [--local] [--js <dir>]   # 38 assertions
+```
+Backups `n8n/BEFORE-error-workflow-attach/` (full pre-change JSON per workflow).
+
+**Verified live 2026-09-14** end to end on a throwaway copy whose recipient list
+was narrowed to Andrew only — Twilio accepted the send (`status=queued`), and a
+second identical failure produced **0 items with the Twilio node never running**,
+proving the throttle and staticData persistence in production rather than only in
+the harness. All 16 attachments confirmed by `error-workflow-verify.mjs` section C.
+
+### Layer B — Missed Access Code Sweep `PKdaOsoHatbuRTfZ` (2026-09-15, INACTIVE)
+
+Layer A catches crashes. It cannot catch "dispatch ran but Populife failed",
+"the row was blocked", or "the cron never fired" — none of those is a failed
+execution. This is that net.
+
+> **Scoped WIDER than the scope doc, because the scope doc would have caught
+> nothing.** The spec says *"any `Showings` row whose `showing_time` has passed
+> with `status != code_sent`"*. Measured 2026-09-15 across every past real
+> (non-test, non-cancelled) `showing` booking: **4 delivered a code, 4 had NO
+> Showings row at all, and 0 had a row without a code.** Every real failure is
+> the missing-row case, and it is structurally invisible to a Showings-only
+> sweep — `Find Property` throws *before* `Append to Showings` runs, so there is
+> no row to find. Written to the letter of the spec it would have reported a
+> clean bill of health through the Erick Lagares, Rita Lewis **and** Kameaka
+> Garvin incidents alike.
+
+**`Cal Bookings` is the authority**, and the asymmetry is the whole detection:
+the booking row is written by the Cal.com Immediate Sends webhook, a *different*
+execution from the Booking Handler, so the crash that loses the `Showings` row
+does not lose the booking. Join on `booking_uid`. The spec's own case survives
+as one of four finding kinds.
+
+**It looks FORWARD as well as back, which is where the value is.** A missing row
+is detectable from the moment of booking — Rita's was already missing at 14:35
+for a 15:00 showing, Kameaka's at 14:21 for 16:45. Alerting only after the fact
+means telling Nicole a customer has already been locked out.
+
+| Window | Alerts on |
+|---|---|
+| UPCOMING (`missed_code_lookahead_hours`, 48) | a **missing row** or a `blocked_*` status **only** |
+| MISSED (`missed_code_lookback_hours`, 168) | anything that is not `code_sent` |
+
+> **An UPCOMING booking sitting at `scheduled` is NORMAL and must never alert** —
+> the code is minted about an hour ahead. Alerting there would text staff about
+> every healthy booking in the system, twice. The verifier pins this (B6).
+> `blocked_rejected` is also never a finding: that is A-2 withholding a code from
+> a rejected lead on purpose.
+
+Both windows are bounded, so the sweep can never walk the whole tab and
+activating it cannot dredge up months of history in one message.
+
+**Noise control:** ONE summary SMS per recipient per tick, up to 5 findings with
+a `+N more` tail — not one SMS per finding. Each `(booking_uid, kind)` alerts at
+most once ever, tracked in `$getWorkflowStaticData('global')` and pruned after 30
+days. Lost staticData means re-alerting, which is noise not harm.
+
+> **Standalone, not a sibling branch on the 5-minute Cron Poll.** The house
+> instinct is to hang off an existing cron to save Sheets requests (A-2 layer 1
+> does). Wrong three times here: a 5-minute tick costs ~288 extra reads/day
+> against this hourly workflow's ~72; it would mean editing the workflow that
+> sends every reminder; and **a branch on a LIVE workflow cannot ship inactive**,
+> which is the exact constraint that forced A-2 to invent a Settings kill switch.
+
+New Settings keys: `missed_code_sweep_enabled` (the **only** off switch),
+`missed_code_alert_phones` (comma list, fanned out one SMS each — an **empty**
+value falls back to Nicole+Andrew rather than muting, unlike `alert_cc_phones`),
+`missed_code_lookahead_hours`, `missed_code_lookback_hours`.
+
+```bash
+node scripts/missed-code-sweep-setup.mjs [--apply]          # 4 Settings keys
+node scripts/n8n-create-missed-code-sweep.mjs [--apply]     # creates it INACTIVE
+node scripts/missed-code-sweep-preview.mjs [--live] [--verbose]   # READ-ONLY
+node scripts/missed-code-sweep-verify.mjs [--local] [--js <dir>]  # 49 assertions
+```
+
+**Preview at 2026-09-15: 3 findings** — both Rita bookings and Kameaka Garvin.
+Erick Lagares (2026-08-30) is correctly outside the 168h lookback.
+**Run the preview immediately before activating**, not this paragraph: the first
+tick alerts on everything already inside the window, in one message.
+
+> The verifier exists because the preview necessarily under-tests — live data
+> exercises exactly one of the four finding kinds, all in one window. All 39
+> behavioural assertions were confirmed non-vacuous by 10 mutations, each turning
+> its named assertion red.
+
 ## Sheets retry strategy
 
 **68 nodes across 13 workflows** standardised to `retryOnFail: true`, `maxTries: 5`,
@@ -2877,6 +3040,8 @@ write nothing, and touch no n8n state.
 | `cal-booking-notify-verify.mjs` | **48** — B routing, both defects, the connections graph |
 | `cal-link-email-verify.mjs` | **31** — the parallel email branch and its note logging |
 | `inquiry-alert-verify.mjs` | **36** — all three `Row Recorded?` wirings, fan-out |
+| `missed-code-sweep-verify.mjs` | **49** — the four finding kinds, both windows, dedupe, recipients, graph |
+| `error-workflow-verify.mjs` | **38** — the alarm's structure, throttle, self-exclusion, and that all 16 are attached |
 | `launch-audit.mjs` | all 12 workflows, 16 hard gates, 3 alert phones |
 
 > **A verifier that fails at RANDOM stops being read just as surely as one that tests

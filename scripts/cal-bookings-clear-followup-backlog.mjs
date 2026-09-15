@@ -75,7 +75,33 @@ const { GoogleAuth } = require("google-auth-library");
 const APPLY = process.argv.includes("--apply");
 const REVERT = process.argv.includes("--revert");
 const TAB = "Cal Bookings";
-const FILL_VALUE = "TRUE";
+
+// --only <uid>[,<uid>...] restricts the run to those booking_uids. Without it
+// every past, non-test booking with unsent follow-ups is cleared — the
+// launch-day behaviour, and far too wide for a targeted cleanup.
+const argValue = (flag) => {
+  const i = process.argv.indexOf(flag);
+  return i === -1 ? null : (process.argv[i + 1] ?? "");
+};
+
+const onlyArg = argValue("--only");
+const ONLY_UIDS = onlyArg === null
+  ? null
+  : new Set(onlyArg.split(",").map((s) => s.trim()).filter(Boolean));
+if (ONLY_UIDS && ONLY_UIDS.size === 0) {
+  console.error("✗ --only was given with no booking_uids");
+  process.exit(1);
+}
+
+// "TRUE" reads as "we sent this"; "failed" reads as "resolved, not delivered".
+// Both are accepted by Find Due Notifications and both stop the send; nothing
+// else is, so a typo here would be inert and the steps would re-queue forever.
+const fillArg = argValue("--fill");
+if (fillArg !== null && !["TRUE", "failed"].includes(fillArg)) {
+  console.error(`✗ --fill must be "TRUE" or "failed" — Find Due Notifications treats nothing else as resolved`);
+  process.exit(1);
+}
+const FILL_VALUE = fillArg ?? "TRUE";
 
 const privateKey = (process.env.GOOGLE_PRIVATE_KEY ?? "").replace(/\\n/g, "\n");
 if (!privateKey.includes("BEGIN")) {
@@ -161,13 +187,19 @@ console.log(`\nFollow-up columns (${followupCols.length}): ${followupCols.map((c
 
 const now = Date.now();
 const entries = [];
+const seenUids = new Set();
 let pastReal = 0;
+
+if (ONLY_UIDS) console.log(`\nScoped to ${ONLY_UIDS.size} booking_uid(s): ${[...ONLY_UIDS].join(", ")}`);
+console.log(`Fill value: ${JSON.stringify(FILL_VALUE)}`);
 
 for (let r = 1; r < rows.length; r++) {
   const row = rows[r];
   const get = (name) => row[idx(name)] ?? "";
   const uid = String(get("booking_uid")).trim();
   if (!uid) continue;
+  if (ONLY_UIDS && !ONLY_UIDS.has(uid)) continue;
+  seenUids.add(uid);
   if (isTrue(get("is_test"))) continue;
 
   const startMs = new Date(String(get("start_time"))).getTime();
@@ -184,6 +216,17 @@ for (let r = 1; r < rows.length; r++) {
       before,
       start_time: String(get("start_time")),
     });
+  }
+}
+
+// A mistyped uid would match nothing and the script would report a clean
+// "nothing to do" — indistinguishable from success, while the sends it was
+// meant to stop still fire. Refuse instead.
+if (ONLY_UIDS) {
+  const missing = [...ONLY_UIDS].filter((u) => !seenUids.has(u));
+  if (missing.length) {
+    console.error(`\n✗ --only named booking_uid(s) not present in ${TAB}: ${missing.join(", ")}`);
+    process.exit(1);
   }
 }
 
