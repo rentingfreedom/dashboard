@@ -6,6 +6,11 @@ const STATUS_CONFIG: Record<string, { label: string; styles: string }> = {
   code_sent: { label: "Code Sent", styles: "bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-900/40 dark:text-amber-400 dark:border-amber-800" },
   completed: { label: "Completed", styles: "bg-green-100 text-green-700 border-green-200 dark:bg-green-900/40 dark:text-green-400 dark:border-green-800" },
   cancelled: { label: "Cancelled", styles: "bg-red-100 text-red-700 border-red-200 dark:bg-red-900/40 dark:text-red-400 dark:border-red-800" },
+  // Parked by the Booking Handler: the booking is real, but the property has no
+  // lockbox so no door code will ever be dispatched. Needs a human.
+  blocked_no_lockbox: { label: "No Lockbox", styles: "bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-900/40 dark:text-orange-400 dark:border-orange-800" },
+  // Withheld on purpose: the lead was rejected, so the code is not sent.
+  blocked_rejected: { label: "Blocked (Rejected)", styles: "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700" },
 };
 
 export function ShowingStatusBadge({ status }: { status: string }) {

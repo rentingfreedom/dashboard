@@ -1,0 +1,495 @@
+{
+  "updatedAt": "2026-09-15T16:51:31.755Z",
+  "createdAt": "2026-09-15T16:51:31.755Z",
+  "id": "PKdaOsoHatbuRTfZ",
+  "name": "RentingFreedom Production - Missed Access Code Sweep",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "mcs-trigger",
+      "name": "Every Hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "mcs-read-settings",
+      "name": "Read Settings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Settings",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "id": "mcs-read-cal-bookings",
+      "name": "Read Cal Bookings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Cal Bookings",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "executeOnce": true
+    },
+    {
+      "id": "mcs-read-showings",
+      "name": "Read Showings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Showings",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "executeOnce": true
+    },
+    {
+      "id": "mcs-find",
+      "name": "Find Missed Codes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// MISSED_CODE_SWEEP_MARKER\n// Cal Bookings is the AUTHORITY. It is written by the Cal.com Immediate Sends\n// webhook, which is a different execution from the Booking Handler — so when the\n// Booking Handler dies at `Find Property` the booking row still exists and the\n// Showings row does not. That asymmetry is the whole detection.\n\nconst MAX_LISTED   = 5;                    // findings named in the SMS\nconst DEDUPE_TTL_MS = 30 * 24 * 60 * 60 * 1000;\nconst FALLBACK_PHONES = ['+18434945244', '+18038047847'];  // Nicole, Andrew\n\nconst low = (v) => String(v ?? '').trim().toLowerCase();\n\nconst settingsRows = $('Read Settings').all().map((i) => i.json);\nconst settings = {};\nfor (const r of settingsRows) {\n  const k = String(r.key ?? '').trim();\n  if (k) settings[k] = String(r.value ?? '').trim();\n}\n\nif (low(settings.missed_code_sweep_enabled ?? 'true') === 'false') {\n  console.log('[missed-code] disabled via missed_code_sweep_enabled');\n  return [];\n}\n\nconst num = (key, dflt) => {\n  const n = Number(settings[key]);\n  return Number.isFinite(n) && n > 0 ? n : dflt;   // non-numeric falls back, never to 0\n};\nconst lookaheadMs = num('missed_code_lookahead_hours', 48) * 3600 * 1000;\nconst lookbackMs  = num('missed_code_lookback_hours', 168) * 3600 * 1000;\n\nconst bookings = $('Read Cal Bookings').all().map((i) => i.json);\nconst showings = $('Read Showings').all().map((i) => i.json);\n\nconst showByUid = new Map();\nfor (const s of showings) {\n  const uid = String(s.booking_uid ?? '').trim();\n  if (uid) showByUid.set(uid, s);\n}\n\n// Statuses that mean \"this showing is resolved and needs no alert\".\n// blocked_rejected is A-2 deliberately withholding a code from a rejected lead.\nconst RESOLVED = new Set(['code_sent', 'cancelled']);\nconst DELIBERATE = new Set(['blocked_rejected']);\n\nconst now = Date.now();\nconst findings = [];\n\nfor (const b of bookings) {\n  const uid = String(b.booking_uid ?? '').trim();\n  if (!uid) continue;\n  if (low(b.event_category) !== 'showing') continue;   // only showings get door codes\n  if (low(b.is_test) === 'true') continue;\n  if (low(b.status) === 'cancelled') continue;\n\n  const startMs = new Date(String(b.start_time ?? '')).getTime();\n  if (!Number.isFinite(startMs)) continue;             // unparseable: not evidence of a fault\n\n  const ahead = startMs - now;\n  const isUpcoming = ahead > 0 && ahead <= lookaheadMs;\n  const isMissed   = ahead <= 0 && -ahead <= lookbackMs;\n  if (!isUpcoming && !isMissed) continue;              // outside both windows\n\n  const s = showByUid.get(uid);\n  const status = low(s?.status);\n\n  let kind = null;\n  if (!s) {\n    kind = 'no_showings_row';\n  } else if (DELIBERATE.has(status)) {\n    kind = null;                                       // withheld on purpose\n  } else if (status.startsWith('blocked')) {\n    kind = 'blocked:' + status;                        // parked, needs a human (item 1a)\n  } else if (isMissed && !RESOLVED.has(status)) {\n    // The spec's original case: the row exists, the showing has passed, and no\n    // code went out. Dispatch ran and Populife failed, or the cron never fired.\n    kind = 'no_code_sent';\n  }\n  // An UPCOMING booking sitting at 'scheduled' is NORMAL — the code is minted\n  // about an hour ahead. Alerting on it would alert on every booking twice.\n\n  if (!kind) continue;\n\n  findings.push({\n    uid,\n    kind,\n    window: isUpcoming ? 'UPCOMING' : 'MISSED',\n    start_time: String(b.start_time ?? ''),\n    startMs,\n    property: String(b.property_address ?? '').trim() || '(unknown property)',\n    who: String(b.invitee_name ?? '').trim() || '(unknown)',\n    phone: String(b.invitee_phone ?? '').trim(),\n    showings_status: s ? String(s.status ?? '') : '(no row)',\n  });\n}\n\n// ── dedupe: each (booking, kind) is worth saying exactly once ──────────────\nconst sd = $getWorkflowStaticData('global');\nsd.alerted = (sd.alerted && typeof sd.alerted === 'object') ? sd.alerted : {};\nfor (const [k, t] of Object.entries(sd.alerted)) {\n  if (!Number.isFinite(t) || now - t > DEDUPE_TTL_MS) delete sd.alerted[k];\n}\n\nconst fresh = [];\nfor (const f of findings) {\n  const key = f.uid + '|' + f.kind;\n  if (sd.alerted[key]) continue;\n  fresh.push(f);\n}\n\nconsole.log('[missed-code] candidates=' + findings.length + ' new=' + fresh.length);\nfor (const f of findings) {\n  console.log('  [' + f.window + '] ' + f.kind + ' ' + f.uid + ' ' + f.start_time +\n              ' ' + f.property + ' / ' + f.who + ' (showings: ' + f.showings_status + ')' +\n              (fresh.includes(f) ? '' : '  — already alerted'));\n}\nif (fresh.length === 0) return [];\n\n// Upcoming first, then soonest first — the actionable ones lead.\nfresh.sort((a, b) =>\n  (a.window === b.window ? 0 : a.window === 'UPCOMING' ? -1 : 1) || a.startMs - b.startMs);\n\nfor (const f of fresh) sd.alerted[f.uid + '|' + f.kind] = now;\n\nconst fmt = (f) => {\n  const d = new Date(f.startMs);\n  const stamp = String(d.getUTCMonth() + 1).padStart(2, '0') + '-' +\n                String(d.getUTCDate()).padStart(2, '0') + ' ' +\n                String(d.getUTCHours()).padStart(2, '0') + ':' +\n                String(d.getUTCMinutes()).padStart(2, '0') + 'Z';\n  const why = f.kind === 'no_showings_row'\n    ? 'NO Showings row - no code will ever be sent'\n    : f.kind === 'no_code_sent'\n      ? 'showing passed with no code (status ' + f.showings_status + ')'\n      : f.kind;\n  return '[' + f.window + '] ' + stamp + ' ' + f.property + ' - ' + f.who + ': ' + why;\n};\n\nconst listed = fresh.slice(0, MAX_LISTED).map(fmt);\nif (fresh.length > MAX_LISTED) listed.push('+' + (fresh.length - MAX_LISTED) + ' more');\n\nconst text = 'RF MISSED ACCESS CODE - ' + fresh.length + ' issue(s)\\n' + listed.join('\\n');\n\n// Recipients: a comma-separated Settings list, fanned out ONE ITEM EACH.\n// Never comma-separate a Twilio `To` (error 21211).\n// An EMPTY value falls back to the hardcoded pair rather than muting — unlike\n// alert_cc_phones, this key is not an off switch. missed_code_sweep_enabled is.\nconst raw = String(settings.missed_code_alert_phones ?? '').trim();\nconst wanted = (raw ? raw.split(',') : FALLBACK_PHONES).map((p) => p.trim()).filter(Boolean);\nconst fromNumber = String(settings.from_number ?? '').trim() || '+18548886242';\n\nconst seen = new Set();\nconst out = [];\nfor (const p of (wanted.length ? wanted : FALLBACK_PHONES)) {\n  const digits = p.replace(/\\D/g, '').slice(-10);\n  if (digits.length !== 10 || seen.has(digits)) continue;\n  seen.add(digits);\n  out.push({ json: {\n    phone: p.startsWith('+') ? p : '+1' + digits,\n    from_number: fromNumber,\n    message: text,\n    finding_count: fresh.length,\n    findings: fresh,\n  }});\n}\n\nif (out.length === 0) {\n  console.log('[missed-code] no valid recipients — nothing sent. findings: ' + fresh.length);\n  return [];\n}\nconsole.log('[missed-code] alerting ' + out.length + ' recipient(s) about ' + fresh.length + ' finding(s)');\nreturn out;"
+      }
+    },
+    {
+      "id": "mcs-send",
+      "name": "Send Missed Code Alert",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "from": "={{ $json.from_number }}",
+        "to": "={{ $json.phone }}",
+        "message": "={{ $json.message }}",
+        "options": {}
+      },
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Hour": {
+      "main": [
+        [
+          {
+            "node": "Read Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Settings": {
+      "main": [
+        [
+          {
+            "node": "Read Cal Bookings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Cal Bookings": {
+      "main": [
+        [
+          {
+            "node": "Read Showings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Showings": {
+      "main": [
+        [
+          {
+            "node": "Find Missed Codes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Missed Codes": {
+      "main": [
+        [
+          {
+            "node": "Send Missed Code Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {
+    "node:Every Hour": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "a24fc374-a50d-4111-b106-def1832879e8",
+  "activeVersionId": "a24fc374-a50d-4111-b106-def1832879e8",
+  "versionCounter": 1,
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-09-15T16:51:31.755Z",
+      "createdAt": "2026-09-15T16:51:31.755Z",
+      "role": "workflow:owner",
+      "workflowId": "PKdaOsoHatbuRTfZ",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-09-15T16:51:31.755Z",
+    "createdAt": "2026-09-15T16:51:31.755Z",
+    "versionId": "a24fc374-a50d-4111-b106-def1832879e8",
+    "workflowId": "PKdaOsoHatbuRTfZ",
+    "nodes": [
+      {
+        "id": "mcs-trigger",
+        "name": "Every Hour",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          0,
+          0
+        ],
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "hours",
+                "hoursInterval": 1
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "mcs-read-settings",
+        "name": "Read Settings",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          220,
+          0
+        ],
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Settings",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000
+      },
+      {
+        "id": "mcs-read-cal-bookings",
+        "name": "Read Cal Bookings",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          440,
+          0
+        ],
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Cal Bookings",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000,
+        "executeOnce": true
+      },
+      {
+        "id": "mcs-read-showings",
+        "name": "Read Showings",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          660,
+          0
+        ],
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Showings",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000,
+        "executeOnce": true
+      },
+      {
+        "id": "mcs-find",
+        "name": "Find Missed Codes",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          880,
+          0
+        ],
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "jsCode": "// MISSED_CODE_SWEEP_MARKER\n// Cal Bookings is the AUTHORITY. It is written by the Cal.com Immediate Sends\n// webhook, which is a different execution from the Booking Handler — so when the\n// Booking Handler dies at `Find Property` the booking row still exists and the\n// Showings row does not. That asymmetry is the whole detection.\n\nconst MAX_LISTED   = 5;                    // findings named in the SMS\nconst DEDUPE_TTL_MS = 30 * 24 * 60 * 60 * 1000;\nconst FALLBACK_PHONES = ['+18434945244', '+18038047847'];  // Nicole, Andrew\n\nconst low = (v) => String(v ?? '').trim().toLowerCase();\n\nconst settingsRows = $('Read Settings').all().map((i) => i.json);\nconst settings = {};\nfor (const r of settingsRows) {\n  const k = String(r.key ?? '').trim();\n  if (k) settings[k] = String(r.value ?? '').trim();\n}\n\nif (low(settings.missed_code_sweep_enabled ?? 'true') === 'false') {\n  console.log('[missed-code] disabled via missed_code_sweep_enabled');\n  return [];\n}\n\nconst num = (key, dflt) => {\n  const n = Number(settings[key]);\n  return Number.isFinite(n) && n > 0 ? n : dflt;   // non-numeric falls back, never to 0\n};\nconst lookaheadMs = num('missed_code_lookahead_hours', 48) * 3600 * 1000;\nconst lookbackMs  = num('missed_code_lookback_hours', 168) * 3600 * 1000;\n\nconst bookings = $('Read Cal Bookings').all().map((i) => i.json);\nconst showings = $('Read Showings').all().map((i) => i.json);\n\nconst showByUid = new Map();\nfor (const s of showings) {\n  const uid = String(s.booking_uid ?? '').trim();\n  if (uid) showByUid.set(uid, s);\n}\n\n// Statuses that mean \"this showing is resolved and needs no alert\".\n// blocked_rejected is A-2 deliberately withholding a code from a rejected lead.\nconst RESOLVED = new Set(['code_sent', 'cancelled']);\nconst DELIBERATE = new Set(['blocked_rejected']);\n\nconst now = Date.now();\nconst findings = [];\n\nfor (const b of bookings) {\n  const uid = String(b.booking_uid ?? '').trim();\n  if (!uid) continue;\n  if (low(b.event_category) !== 'showing') continue;   // only showings get door codes\n  if (low(b.is_test) === 'true') continue;\n  if (low(b.status) === 'cancelled') continue;\n\n  const startMs = new Date(String(b.start_time ?? '')).getTime();\n  if (!Number.isFinite(startMs)) continue;             // unparseable: not evidence of a fault\n\n  const ahead = startMs - now;\n  const isUpcoming = ahead > 0 && ahead <= lookaheadMs;\n  const isMissed   = ahead <= 0 && -ahead <= lookbackMs;\n  if (!isUpcoming && !isMissed) continue;              // outside both windows\n\n  const s = showByUid.get(uid);\n  const status = low(s?.status);\n\n  let kind = null;\n  if (!s) {\n    kind = 'no_showings_row';\n  } else if (DELIBERATE.has(status)) {\n    kind = null;                                       // withheld on purpose\n  } else if (status.startsWith('blocked')) {\n    kind = 'blocked:' + status;                        // parked, needs a human (item 1a)\n  } else if (isMissed && !RESOLVED.has(status)) {\n    // The spec's original case: the row exists, the showing has passed, and no\n    // code went out. Dispatch ran and Populife failed, or the cron never fired.\n    kind = 'no_code_sent';\n  }\n  // An UPCOMING booking sitting at 'scheduled' is NORMAL — the code is minted\n  // about an hour ahead. Alerting on it would alert on every booking twice.\n\n  if (!kind) continue;\n\n  findings.push({\n    uid,\n    kind,\n    window: isUpcoming ? 'UPCOMING' : 'MISSED',\n    start_time: String(b.start_time ?? ''),\n    startMs,\n    property: String(b.property_address ?? '').trim() || '(unknown property)',\n    who: String(b.invitee_name ?? '').trim() || '(unknown)',\n    phone: String(b.invitee_phone ?? '').trim(),\n    showings_status: s ? String(s.status ?? '') : '(no row)',\n  });\n}\n\n// ── dedupe: each (booking, kind) is worth saying exactly once ──────────────\nconst sd = $getWorkflowStaticData('global');\nsd.alerted = (sd.alerted && typeof sd.alerted === 'object') ? sd.alerted : {};\nfor (const [k, t] of Object.entries(sd.alerted)) {\n  if (!Number.isFinite(t) || now - t > DEDUPE_TTL_MS) delete sd.alerted[k];\n}\n\nconst fresh = [];\nfor (const f of findings) {\n  const key = f.uid + '|' + f.kind;\n  if (sd.alerted[key]) continue;\n  fresh.push(f);\n}\n\nconsole.log('[missed-code] candidates=' + findings.length + ' new=' + fresh.length);\nfor (const f of findings) {\n  console.log('  [' + f.window + '] ' + f.kind + ' ' + f.uid + ' ' + f.start_time +\n              ' ' + f.property + ' / ' + f.who + ' (showings: ' + f.showings_status + ')' +\n              (fresh.includes(f) ? '' : '  — already alerted'));\n}\nif (fresh.length === 0) return [];\n\n// Upcoming first, then soonest first — the actionable ones lead.\nfresh.sort((a, b) =>\n  (a.window === b.window ? 0 : a.window === 'UPCOMING' ? -1 : 1) || a.startMs - b.startMs);\n\nfor (const f of fresh) sd.alerted[f.uid + '|' + f.kind] = now;\n\nconst fmt = (f) => {\n  const d = new Date(f.startMs);\n  const stamp = String(d.getUTCMonth() + 1).padStart(2, '0') + '-' +\n                String(d.getUTCDate()).padStart(2, '0') + ' ' +\n                String(d.getUTCHours()).padStart(2, '0') + ':' +\n                String(d.getUTCMinutes()).padStart(2, '0') + 'Z';\n  const why = f.kind === 'no_showings_row'\n    ? 'NO Showings row - no code will ever be sent'\n    : f.kind === 'no_code_sent'\n      ? 'showing passed with no code (status ' + f.showings_status + ')'\n      : f.kind;\n  return '[' + f.window + '] ' + stamp + ' ' + f.property + ' - ' + f.who + ': ' + why;\n};\n\nconst listed = fresh.slice(0, MAX_LISTED).map(fmt);\nif (fresh.length > MAX_LISTED) listed.push('+' + (fresh.length - MAX_LISTED) + ' more');\n\nconst text = 'RF MISSED ACCESS CODE - ' + fresh.length + ' issue(s)\\n' + listed.join('\\n');\n\n// Recipients: a comma-separated Settings list, fanned out ONE ITEM EACH.\n// Never comma-separate a Twilio `To` (error 21211).\n// An EMPTY value falls back to the hardcoded pair rather than muting — unlike\n// alert_cc_phones, this key is not an off switch. missed_code_sweep_enabled is.\nconst raw = String(settings.missed_code_alert_phones ?? '').trim();\nconst wanted = (raw ? raw.split(',') : FALLBACK_PHONES).map((p) => p.trim()).filter(Boolean);\nconst fromNumber = String(settings.from_number ?? '').trim() || '+18548886242';\n\nconst seen = new Set();\nconst out = [];\nfor (const p of (wanted.length ? wanted : FALLBACK_PHONES)) {\n  const digits = p.replace(/\\D/g, '').slice(-10);\n  if (digits.length !== 10 || seen.has(digits)) continue;\n  seen.add(digits);\n  out.push({ json: {\n    phone: p.startsWith('+') ? p : '+1' + digits,\n    from_number: fromNumber,\n    message: text,\n    finding_count: fresh.length,\n    findings: fresh,\n  }});\n}\n\nif (out.length === 0) {\n  console.log('[missed-code] no valid recipients — nothing sent. findings: ' + fresh.length);\n  return [];\n}\nconsole.log('[missed-code] alerting ' + out.length + ' recipient(s) about ' + fresh.length + ' finding(s)');\nreturn out;"
+        }
+      },
+      {
+        "id": "mcs-send",
+        "name": "Send Missed Code Alert",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          1100,
+          0
+        ],
+        "onError": "continueRegularOutput",
+        "parameters": {
+          "from": "={{ $json.from_number }}",
+          "to": "={{ $json.phone }}",
+          "message": "={{ $json.message }}",
+          "options": {}
+        },
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        }
+      }
+    ],
+    "connections": {
+      "Every Hour": {
+        "main": [
+          [
+            {
+              "node": "Read Settings",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Settings": {
+        "main": [
+          [
+            {
+              "node": "Read Cal Bookings",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Cal Bookings": {
+        "main": [
+          [
+            {
+              "node": "Read Showings",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Showings": {
+        "main": [
+          [
+            {
+              "node": "Find Missed Codes",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Find Missed Codes": {
+        "main": [
+          [
+            {
+              "node": "Send Missed Code Alert",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Justin Artis",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-09-16T00:26:17.754Z",
+        "id": 540,
+        "workflowId": "PKdaOsoHatbuRTfZ",
+        "versionId": "a24fc374-a50d-4111-b106-def1832879e8",
+        "event": "activated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    ]
+  }
+}

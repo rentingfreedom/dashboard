@@ -49,8 +49,8 @@ workflows should read this file first.
 | `R3rhuCYEGoBFArBa` | Identity Verification Reminders | Hourly tick, sends in the 10am ET hour. One reminder SMS/day for 4 days to leads who haven't verified. **ACTIVE since 2026-08-25.** |
 | `5UvuzQwLjCB4D25A` | Cal Booking Reminders | Hourly tick, sends in the 10am ET hour. One SMS **and** email per day for 4 days to a lead sent a per-property cal link who hasn't booked. **ACTIVE since 2026-09-01** (created inactive 2026-08-31; activated in a later session). |
 | `TGGhSkTSZGYPrZo9` | New Property → Provision | Sheets `rowAdded` poll (**every 5 min** since 2026-09-01) → cal.com event type + Google resource. |
-| `zvwMJSOZBwqVM8Lo` | Automation Failure Alerts | **Error Trigger.** Named as `settings.errorWorkflow` by all 16 active workflows. SMS to Nicole + Andrew on any failed execution, throttled. **ACTIVE — and it must be.** `n8n/error-alert-workflow.json`. |
-| `PKdaOsoHatbuRTfZ` | Missed Access Code Sweep | Hourly. Reconciles Cal Bookings -> Showings and texts staff when a showing has, or will have, no door code. **INACTIVE — activation is a deliberate step.** `n8n/missed-code-sweep.json`. |
+| `zvwMJSOZBwqVM8Lo` | Automation Failure Alerts | **Error Trigger.** Named as `settings.errorWorkflow` by all 17 active workflows. SMS to Nicole + Andrew on any failed execution, throttled. **ACTIVE — and it must be.** `n8n/error-alert-workflow.json`. |
+| `PKdaOsoHatbuRTfZ` | Missed Access Code Sweep | Hourly. Reconciles Cal Bookings -> Showings and texts staff when a showing has, or will have, no door code. **ACTIVE since 2026-09-15.** `n8n/missed-code-sweep.json`. |
 | `W6PoSadMxnoHwxhG` | Delete Property | Sheets `anyUpdate` poll (**every 5 min**) on the SAME tab → filter `active == "Delete"` → deletes the cal.com event type, the Google resource, and the sheet row. **ACTIVE.** |
 
 ## LAUNCHED 2026-08-25 — the system is LIVE
@@ -1245,11 +1245,24 @@ shape would pass every behavioural assertion while silently reintroducing it.
 caught by `Already Recorded?` and skipped, so testing the send path needs a
 genuinely new `booking_uid`.
 
-### Vacant properties with no `populife_lock_id` — a showing there HARD-FAILS
+### A property with no `populife_lock_id` — a showing there HARD-FAILS
 
-`Build Showing Row` throws `No Populife lock ID on property <key> — assign a lockbox
-first` and the Booking Handler execution **dies at `Find Property`**. No `Showings` row
-is written, so nothing downstream ever retries and no access code is dispatched.
+**`Find Property`** — *not* `Build Showing Row` — throws
+`No Populife lock ID on property <key> — assign a lockbox first`, and the Booking
+Handler execution dies there. No `Showings` row is written, so nothing downstream ever
+retries and no access code is dispatched.
+
+> **Corrected 2026-09-15.** This section named `Build Showing Row` as the thrower for
+> weeks while also saying the execution died at `Find Property`. The throw has only
+> ever lived in `Find Property` (verified against the deployed workflow and executions
+> 39137 / 39160). **Patching `Build Showing Row` would have been a silent no-op** —
+> which is exactly the kind of fix that looks applied and changes nothing.
+>
+> It also matters *where* it throws: `Find Property` runs **before**
+> `FUB - Search by Phone`, so a failed execution has no FUB person and no `is_test`
+> verdict in hand. (Moot for the test gate itself — `Build Showing Row` has not
+> stamped `is_test` since the gates were lifted at launch — but it constrains what a
+> parked row can contain.)
 
 > **The customer sees none of it.** Cal.com Immediate Sends records the `Cal Bookings`
 > row on its own separate webhook, so the confirmation email and every reminder still
@@ -1257,14 +1270,91 @@ is written, so nothing downstream ever retries and no access code is dispatched.
 > a door that will not open. **This is the loudest failure in the system to a human and
 > the quietest one in the sheet.**
 
-Fired live 2026-08-30 (execution 30008): Erick Silva, `104-hawthorne-landing-dr`.
+Fired live three times: Erick Silva 2026-08-30 (`104-hawthorne-landing-dr`, execution
+30008), **Rita Lewis 2026-09-12** (`129-towering-pine-drive` — she then received the
+whole post-visit follow-up chain including a review request, and left a 1-star review)
+and **Kameaka Garvin 2026-09-14** (`313-oakbend-street`).
 
-**Audit 2026-09-03 — 5 of the 9 active vacant properties have an empty
-`populife_lock_id`:** `104-sweet-cherry-ln`, `214-devonshire-drive`,
-`129-towering-pine-drive`, `104-hawthorne-landing-dr`, `270-ivory-shadow-rd` — which
-are precisely the addresses currently being inquired on. **This is an operations task
-(assign the lockboxes), not a code change**, but it is worth re-checking whenever a
-property flips to vacant, because provisioning does not assign one.
+> **The exposure is "bookable without a lock", NOT "vacant without a lock" — and the
+> old framing here measured the wrong thing.** Re-derived 2026-09-15: of 75 active
+> properties, **all 75 are bookable** (provisioning gives every property a cal.com
+> event type, and those are public URLs that ignore occupancy) and **67 have no
+> `populife_lock_id`**. Only **one** *vacant* property lacks one
+> (`214-devonshire-drive`).
+>
+> The earlier "5 of the 9 active vacant properties" list was stale in both its numbers
+> and its premise. Kameaka booked `313-oakbend-street`, which is marked **occupied**
+> and has an ACTIVE DoorLoop lease running to 2027-04-30 — a vacancy-scoped audit
+> could never have flagged it. Assigning lockboxes remains an operations task, but it
+> is not a complete answer, because the crash is reachable from any bookable property.
+
+### Park instead of crashing — `LOCKBOX_PARK_MARKER` (item 1a, BUILT NOT APPLIED)
+
+Stops the crash above. `Find Property` no longer throws on a missing lockbox; it emits
+`lockboxMissing: true` and `Build Showing Row` writes
+**`status = 'blocked_no_lockbox'`** instead of `'scheduled'`. The booking is
+**recorded, not dropped** — the house convention — so it is visible in the sheet, on
+the dashboard Showings page, and to the Missed Access Code Sweep.
+
+A property genuinely **absent** from Properties still throws. That is a different
+failure with a different fix (add the row), and layer A alerts on it.
+
+**Verified safe, and asserted rather than assumed:** `Find Ready Showings`
+(`ztUEx7Htu620SLbj`) opens with `if (r.status !== 'scheduled') return false;`, so a
+parked row is inert — no Populife call, no code, no SMS. That claim lives in a
+*different* workflow, so `lockbox-park-verify.mjs` section D pulls that node's live
+code and runs it over a parked row and a scheduled one.
+
+```
+Append to Showings -> Lockbox Missing? [false] -> FUB - Note Showing Scheduled  (unchanged)
+                                       [true]  -> Read Settings (Lockbox Alert)
+                                               -> Build Lockbox Alert
+                                               -> Send Lockbox Alert
+                                               -> FUB - Note No Lockbox          (terminal)
+```
+
+> **The branch goes BEFORE `Immediate? (Created)`, and the scope doc's wording would
+> have put it after.** "Emit the row and alert" taken literally — branching downstream
+> of `Append to Showings` — leaves a sub-hour booking flowing into
+> `Populife - Generate Code (Created)` **with an empty lock id**. Both live incidents
+> were booked 2.4h and ~25min ahead, so that is the normal case here, not an edge one.
+> The builder refuses to apply if `FUB - Note Showing Scheduled` ever stops feeding
+> `Immediate? (Created)`, because that is what pins the code-gen path behind the gate.
+
+The true branch is **terminal** and deliberately skips the existing "Showing scheduled"
+FUB note, which would be false. It writes its own note saying no code will be sent.
+
+**Alert routing reuses `missed_code_alert_phones`** — the same key layer B uses,
+because it is the same question and the same audience. An **empty** value falls back to
+Nicole + Andrew rather than muting, matching that key's established semantics: this is
+the only immediate signal that a customer is booked for a door that will not open, so
+it must not acquire an off switch it never had. Recipients are **fanned out one item
+per number** (never a comma-separated Twilio `To` — 21211) and deduped on the last 10
+digits, which is why `FUB - Note No Lockbox` carries `executeOnce` (gotcha 4).
+
+> **This alert overlaps layer B on purpose.** Layer B will also find the parked row in
+> its UPCOMING window. This one fires within seconds of the booking; layer B's is
+> hourly. For a showing booked 25 minutes out, that hour is the whole window.
+
+Gotcha 19: inserting the IF is safe only because `FUB - Note Showing Scheduled`
+resolves everything through `$('Build Showing Row')`, a named reference, and an IF
+passes items through unchanged. **The builder refuses to apply if that node ever starts
+reading its immediate input.**
+
+```bash
+node scripts/n8n-add-lockbox-park.mjs [--apply] [--revert --apply] [--emit-js <dir>]
+node scripts/lockbox-park-verify.mjs [--js <dir>]          # 45 assertions
+node scripts/lockbox-park-mutations.mjs                    # 11 mutations, proves the above
+```
+Backup `n8n/BEFORE-lockbox-park/`. `--revert` restores the throw; **rows already
+stamped `blocked_no_lockbox` are not rewritten** and stay inert forever.
+
+> **`lockbox-park-mutations.mjs` is committed rather than recorded as prose**, because
+> "confirmed non-vacuous by N mutations" does not re-run and two verifiers in this
+> estate were later found to be testing nothing. It caught a real defect on its first
+> run: three mutations made the verifier **crash** rather than report, silently
+> skipping every assertion after the crash point. Hence the `at()` accessor there.
+> Re-run it after any edit to the builder or the verifier.
 
 ### Booking / access code test gate
 
@@ -2154,9 +2244,18 @@ Backups `n8n/BEFORE-error-workflow-attach/` (full pre-change JSON per workflow).
 was narrowed to Andrew only — Twilio accepted the send (`status=queued`), and a
 second identical failure produced **0 items with the Twilio node never running**,
 proving the throttle and staticData persistence in production rather than only in
-the harness. All 16 attachments confirmed by `error-workflow-verify.mjs` section C.
+the harness. All attachments confirmed by `error-workflow-verify.mjs` section C — **17**
+since the sweep was activated 2026-09-15.
 
-### Layer B — Missed Access Code Sweep `PKdaOsoHatbuRTfZ` (2026-09-15, INACTIVE)
+> **Activating a workflow does NOT attach the alarm to it, and nothing warns you.**
+> `PKdaOsoHatbuRTfZ` was created inactive, so the original attach run skipped it
+> (it excludes inactive workflows by design). Activating it on 2026-09-15 therefore
+> produced a live workflow with **no** `errorWorkflow` — the sweep that exists to
+> catch silent failures could itself have failed silently. Caught by C1 going red,
+> which is what that assertion is for. **Re-run `n8n-attach-error-workflow.mjs
+> --only <id> --apply` immediately after activating anything.**
+
+### Layer B — Missed Access Code Sweep `PKdaOsoHatbuRTfZ` (2026-09-15, ACTIVE)
 
 Layer A catches crashes. It cannot catch "dispatch ran but Populife failed",
 "the row was blocked", or "the cron never fired" — none of those is a failed
@@ -2222,10 +2321,14 @@ node scripts/missed-code-sweep-preview.mjs [--live] [--verbose]   # READ-ONLY
 node scripts/missed-code-sweep-verify.mjs [--local] [--js <dir>]  # 49 assertions
 ```
 
-**Preview at 2026-09-15: 3 findings** — both Rita bookings and Kameaka Garvin.
-Erick Lagares (2026-08-30) is correctly outside the 168h lookback.
-**Run the preview immediately before activating**, not this paragraph: the first
-tick alerts on everything already inside the window, in one message.
+**ACTIVATED 2026-09-15** after re-running the preview immediately beforehand and
+confirming the same **3 findings** — both Rita bookings and Kameaka Garvin. Erick
+Lagares (2026-08-30) is correctly outside the 168h lookback. The first tick sends all
+three in one message to Nicole + Andrew.
+
+> **Run the preview immediately before activating**, never from a recorded number:
+> the first tick alerts on everything already inside the window at once, and that set
+> changes daily. Attach the error workflow in the same breath — see the note above.
 
 > The verifier exists because the preview necessarily under-tests — live data
 > exercises exactly one of the four finding kinds, all in one window. All 39
@@ -2489,6 +2592,89 @@ Backup `n8n/BEFORE-no-phone-skip/`. **`--revert` does not rewrite rows already s
 **Verified live 2026-08-30, execution 29918**, on a constructed fixture whose *only*
 unresolved step was a phoneless invitee SMS follow-up: `Mark Step Skipped=1`, while
 `Channel?`, `Send SMS` and `Send Failure Alert` **never ran**. Test row deleted after.
+### No code delivered → no follow-ups — `SHOWING_CODE_GATE_MARKER` (item 1c, BUILT NOT APPLIED)
+
+**Rita Lewis could not get into 129 Towering Pine Drive on 2026-09-12** — the Booking
+Handler had crashed on the missing lockbox, so no code was sent — and then received the
+entire post-visit follow-up chain, *"are you still interested?"* and a review request
+included. She left a 1-star review. Kameaka Garvin was two days behind her on the same
+path and got three messages before the backlog was stopped by hand.
+
+Client decision 2026-09-13: **suppress the follow-ups entirely**, not just the review
+link. A lead who got no code receives nothing.
+
+**The seven gated rules — all `anchor: 'end'`, and only where the booking's category is
+`showing`:** `followup` (+0h, carries the review link), `followup_1day_email/sms`,
+`followup_2day_email/sms`, `followup_3day_email/sms`.
+
+> **`followup` and `followup_3day_*` are SHARED with walkthrough and consult**, so the
+> gate is keyed on the booking's **category as well as the rule**. Gating the whole rule
+> would silently mute consult and walkthrough follow-ups, which have nothing to do with
+> door codes. The verifier pins both (A13–A16), and a mutation that drops the category
+> clause turns them red.
+
+**Pre-event reminders are deliberately untouched.** They fire *before* the code is
+minted at T-60min, so gating them on a delivered code would suppress every showing
+reminder in the system (A17/A18).
+
+**The join is exact** — `Cal Bookings` and `Showings` share `booking_uid`, so there is
+no address matching and no identity heuristic. Delivered means `status` of
+`code_sent`/`completed`, or a non-empty `code_sent_at`. Four states all mean *no code
+reached them*: **no Showings row at all** (Rita and Kameaka — the crash case),
+`scheduled`, `blocked_no_lockbox` (parked by 1a) and `blocked_rejected` (withheld on
+purpose by A-2).
+
+```
+Read Settings (Cron) -> Read Showings -> Read Cal Bookings -> ...
+
+Build Message -> No Code Delivered? [true]  -> Mark Step Skipped (No Code) -> Loop Back
+                                    [false] -> Missing Recipient?   (unchanged)
+```
+
+> **`Read Showings` is CHAINED, not parallel, and sits BEFORE `Read Cal Bookings`.**
+> Parallel gives n8n no edge forcing execution order and `Find Due Notifications` reads
+> it by name — the exact bug this workflow already hit when `Read Settings (Cron)` ran
+> parallel to `Read Cal Bookings` and lost. Putting it *before* `Read Cal Bookings`
+> rather than after also means `Find Due Notifications` keeps receiving Cal Bookings
+> rows as its `$input`, so nothing changes about how it reads them. It carries
+> `executeOnce` because its input is the 72-row Settings stream — without it that is
+> **72 Sheets requests per tick** (gotcha 4). As wired: **one** request per tick, on a
+> 9-row tab.
+
+**The sentinel is not optional.** `Find Due Notifications` resolves a step only on an
+explicit allowlist — `'true' || 'failed' || 'skipped_no_phone'`. A new value is
+**inert**, and these follow-ups are end-anchored and unbounded, so a suppressed step
+would re-queue **every 5 minutes forever**. `skipped_no_code` is added to that allowlist
+in the same change. (The identical mistake was caught during `NO_PHONE_SKIP_MARKER`.)
+
+A **separate** mark node is used rather than reusing `Mark Step Skipped`, so the two
+sentinels stay distinguishable in the sheet: `skipped_no_phone` means "we had nothing to
+send to", `skipped_no_code` means "they never got in".
+
+> **Unreadable Showings: defer, never decide.** If the read fails or returns empty, the
+> step is deferred — not sent, and **no sentinel written** — so the next tick
+> re-evaluates. Deferring and suppressing look **identical to the customer** (no
+> follow-up either way); the only difference is that deferring self-heals when Sheets
+> recovers and suppressing is permanent. So doubt resolves to defer, which is free
+> precisely because these rules are unbounded. A Showings outage also must not take the
+> *other* categories down with it (B10).
+
+```bash
+node scripts/n8n-add-showing-code-gate.mjs [--apply] [--revert --apply] [--emit-js <dir>]
+node scripts/showing-code-gate-verify.mjs [--js <dir>]     # 36 assertions
+node scripts/showing-code-gate-mutations.mjs               # 10 mutations, proves the above
+```
+Backup `n8n/BEFORE-showing-code-gate/`. **`--revert` does not rewrite rows already
+stamped `skipped_no_code`** — they become unresolved again and those follow-ups WILL
+fire, which is the review-request behaviour this gate exists to stop.
+
+> **A live preview of this necessarily reports zero, and did.** Run against live data
+> on 2026-09-15 it found **0 due** — but so did the *unpatched* deployed code, because
+> Rita's and Kameaka's backlogs had already been stopped by hand
+> (`cal-bookings-clear-followup-backlog.mjs`). That proves nothing about the gate, which
+> is why the verifier and the mutation suite carry the weight here. Same shape as the
+> A-2 and Cal Booking Reminders previews.
+
 ### Immediate Sends booking idempotency (2026-08-06, was launch-blocking)
 
 Replaying a captured `BOOKING_CREATED` payload — at-least-once redelivery any webhook
@@ -3061,6 +3247,8 @@ write nothing, and touch no n8n state.
 | `inquiry-alert-verify.mjs` | **36** — all three `Row Recorded?` wirings, fan-out |
 | `missed-code-sweep-verify.mjs` | **49** — the four finding kinds, both windows, dedupe, recipients, graph |
 | `error-workflow-verify.mjs` | **46** — the alarm's structure, throttle, self-exclusion, and that all 16 are attached |
+| `lockbox-park-verify.mjs` | **45** — item 1a: parking, the alert fan-out, the graph, and that a parked row is inert in the dispatch cron |
+| `showing-code-gate-verify.mjs` | **36** — item 1c: the 7 gated rules, the category clause, the sentinel allowlist, defer-don't-decide |
 | `launch-audit.mjs` | all 12 workflows, 16 hard gates, 3 alert phones |
 
 > **A verifier that fails at RANDOM stops being read just as surely as one that tests
