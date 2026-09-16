@@ -166,6 +166,52 @@ async function main() {
        new Set((out ?? []).map((i) => i.json.message)).size === 1);
   }
 
+  // B20 — the TRIGGER failure payload shape.
+  // This whole block exists because the deployed code shipped reading only the
+  // execution shape, and the first real trigger failure (Delete Property's
+  // poller, DNS, 2026-09-16) produced an SMS saying "unknown node / no error
+  // message" — a real alert with the diagnosis stripped out of it.
+  {
+    const triggerPayload = {
+      trigger: {
+        error: { message: "The DNS server returned an error, perhaps the server is offline",
+                 name: "NodeApiError", timestamp: 1789516884386, context: {} },
+        mode: "trigger",
+      },
+      workflow: { id: "W6PoSadMxnoHwxhG", name: "RentingFreedom - Delete Property" },
+    };
+    const out = makeRunner(jsCode, {})(triggerPayload);
+    const m = out.out?.[0]?.json?.message ?? "";
+    ok("B20 a TRIGGER failure still alerts", (out.out ?? []).length === 2, `${out.out?.length} item(s)`);
+    ok("B21 …and carries the real error text, not 'no error message'",
+       m.includes("DNS server returned an error"), m);
+    ok("B22 …and does not claim 'unknown node'", !m.includes("unknown node"), m);
+    ok("B23 …and names the failing workflow", m.includes("Delete Property"), m);
+    ok("B24 …and links somewhere useful despite having no execution id",
+       m.includes("/workflow/W6PoSadMxnoHwxhG"), m);
+  }
+
+  // B25 — trigger failures dedupe harder than execution failures
+  {
+    const mk = () => ({
+      trigger: { error: { message: "transient DNS", name: "NodeApiError" }, mode: "trigger" },
+      workflow: { id: "W6PoSadMxnoHwxhG", name: "Delete Property" },
+    });
+    const sd = {};
+    const run = makeRunner(jsCode, sd);
+    ok("B25 first trigger failure alerts", run(mk()).out.length === 2);
+    // 2 hours later: an execution failure would be free to alert again, a
+    // trigger failure must not — the pollers blip and self-heal.
+    for (const k of Object.keys(sd.seen ?? {})) sd.seen[k] = Date.now() - 2 * 60 * 60 * 1000;
+    sd.sentAt = [];
+    ok("B26 the same trigger failure 2h later is STILL suppressed (6h window)",
+       run(mk()).out.length === 0);
+    for (const k of Object.keys(sd.seen ?? {})) sd.seen[k] = Date.now() - 7 * 60 * 60 * 1000;
+    sd.sentAt = [];
+    ok("B27 …but 7h later it alerts again, so a dead poller is not silent forever",
+       run(mk()).out.length === 2);
+  }
+
   // B9 — self-exclusion
   {
     const run = makeRunner(jsCode, {});

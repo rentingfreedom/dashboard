@@ -4,6 +4,7 @@
  *
  *   node scripts/n8n-create-error-workflow.mjs                 # dry run
  *   node scripts/n8n-create-error-workflow.mjs --apply
+ *   node scripts/n8n-create-error-workflow.mjs --update-code [--apply]
  *   node scripts/n8n-create-error-workflow.mjs --emit-js <dir>
  *   node scripts/n8n-create-error-workflow.mjs --delete <id>
  *
@@ -95,6 +96,7 @@ if (existsSync(envPath)) {
 const APPLY = process.argv.includes("--apply");
 const DELETE_IDX = process.argv.indexOf("--delete");
 const EMIT_IDX = process.argv.indexOf("--emit-js");
+const UPDATE_CODE = process.argv.includes("--update-code");
 const KEY = process.env.N8N_API_KEY;
 const BASE = "https://automation.rentingfreedom.com/api/v1";
 
@@ -131,17 +133,33 @@ const FROM_NUMBER = '+18548886242';                   // Settings from_number, h
 
 const WINDOW_MS  = 60 * 60 * 1000;  // rolling hour
 const MAX_ALERTS = 8;               // distinct failures alerted per window
-const REPEAT_MS  = 60 * 60 * 1000;  // same signature at most once per window
+const REPEAT_MS  = 60 * 60 * 1000;      // same signature at most once per window
+const TRIGGER_REPEAT_MS = 6 * 60 * 60 * 1000;  // trigger failures: see below
 
 const payload   = $input.first()?.json ?? {};
-const execution = payload.execution ?? {};
 const workflow  = payload.workflow ?? {};
+
+// The Error Trigger has TWO payload shapes and they share no keys.
+//   execution failure: { execution: { id, url, error, lastNodeExecuted }, workflow }
+//   TRIGGER failure:   { trigger: { error, mode }, workflow }   <- no execution at all
+// Reading only the execution shape produced a real alert carrying
+// "node: unknown node / no error message" on 2026-09-16, which is worse than
+// useless: it wakes someone with no way to tell a DNS blip from a dead poller.
+const isTriggerFailure = !payload.execution && !!payload.trigger;
+const execution = payload.execution ?? {};
+const trigger   = payload.trigger ?? {};
 
 const wfId   = String(workflow.id ?? '');
 const wfName = String(workflow.name ?? 'unknown workflow');
-const node   = String(execution.lastNodeExecuted ?? 'unknown node');
-const rawMsg = String(execution.error?.message ?? 'no error message');
-const url    = String(execution.url ?? '');
+const node   = isTriggerFailure
+  ? 'TRIGGER (' + String(trigger.mode ?? 'poll') + ')'
+  : String(execution.lastNodeExecuted ?? 'unknown node');
+const errObj = isTriggerFailure ? (trigger.error ?? {}) : (execution.error ?? {});
+const rawMsg = String(errObj.message ?? errObj.name ?? 'no error message');
+// A trigger failure carries no execution id, so there is no execution deep
+// link. The workflow URL is derivable and is the page you actually want.
+const url    = String(execution.url ?? '') ||
+               (wfId ? 'https://automation.rentingfreedom.com/workflow/' + wfId : '');
 
 // Never alert on our own failure — n8n would invoke this workflow again for
 // that failure, and the loop would be unbounded. The execution log is the
@@ -157,15 +175,24 @@ const sd  = $getWorkflowStaticData('global');
 sd.sentAt = (Array.isArray(sd.sentAt) ? sd.sentAt : []).filter((t) => Number.isFinite(t) && now - t < WINDOW_MS);
 sd.seen   = (sd.seen && typeof sd.seen === 'object') ? sd.seen : {};
 for (const [k, t] of Object.entries(sd.seen)) {
-  if (!Number.isFinite(t) || now - t >= REPEAT_MS) delete sd.seen[k];
+  if (!Number.isFinite(t) || now - t >= Math.max(REPEAT_MS, TRIGGER_REPEAT_MS)) delete sd.seen[k];
 }
 sd.suppressed = Number.isFinite(sd.suppressed) ? sd.suppressed : 0;
 
 const signature = wfId + '::' + node + '::' + rawMsg.slice(0, 120);
 
+// Trigger failures get a LONGER repeat window than execution failures. The two
+// Properties pollers fail on transient DNS/quota blips and self-heal (the
+// trigger never consumed anything, so its position does not advance) — 7 such
+// failures in a fortnight are on record. At a 1-hour window that is a steady
+// drip of 00:01 texts about nothing, which is how an alarm gets ignored. At 6
+// hours a genuinely dead poller still reports ~4x a day.
+const repeatWindow = isTriggerFailure ? TRIGGER_REPEAT_MS : REPEAT_MS;
+
 let suppressReason = null;
-if (sd.seen[signature]) suppressReason = 'duplicate signature within the window';
-else if (sd.sentAt.length >= MAX_ALERTS) suppressReason = 'global cap ' + MAX_ALERTS + '/hour reached';
+if (sd.seen[signature] && now - sd.seen[signature] < repeatWindow) {
+  suppressReason = 'duplicate signature within the window';
+} else if (sd.sentAt.length >= MAX_ALERTS) suppressReason = 'global cap ' + MAX_ALERTS + '/hour reached';
 
 if (suppressReason) {
   sd.suppressed += 1;
@@ -182,7 +209,8 @@ sd.seen[signature] = now;
 sd.sentAt.push(now);
 
 const msg = rawMsg.length > 180 ? rawMsg.slice(0, 177) + '...' : rawMsg;
-let text = 'RF AUTOMATION FAILURE\\n' + wfName + '\\nnode: ' + node + '\\n' + msg;
+let text = 'RF AUTOMATION FAILURE\\n' + wfName + '\\n' +
+           (isTriggerFailure ? 'trigger could not run' : 'node: ' + node) + '\\n' + msg;
 if (alsoSuppressed > 0) {
   text += '\\n(+' + alsoSuppressed + ' other failure' + (alsoSuppressed === 1 ? '' : 's') + ' suppressed in the last hour)';
 }
@@ -278,6 +306,55 @@ async function main() {
     console.log(`✓ deleted ${id}`);
     console.log("  Remember: any workflow still naming it now points at nothing.");
     console.log("  node scripts/n8n-attach-error-workflow.mjs --revert --apply");
+    return done(0);
+  }
+
+  if (UPDATE_CODE) {
+    // Push BUILD_ALERT_JS onto the existing workflow, so this script stays the
+    // single source of truth rather than anyone hand-editing the live node.
+    // Only the one Code node's jsCode changes; every other node is resent
+    // verbatim and hashed either side, same discipline as the attach script.
+    const all = await api("/workflows?limit=250");
+    const found = (all.data ?? []).find((w) => w.name === WF_NAME);
+    if (!found) { console.error(`\n✗ "${WF_NAME}" is not deployed — nothing to update.`); return done(1); }
+    const w = await api(`/workflows/${found.id}`);
+    const before = w.nodes.find((n) => n.name === "Build Failure Alert");
+    if (!before) { console.error("\n✗ no 'Build Failure Alert' node"); return done(1); }
+
+    const otherHashBefore = JSON.stringify(w.nodes.filter((n) => n.name !== "Build Failure Alert"));
+    if (before.parameters.jsCode === BUILD_ALERT_JS) {
+      console.log("\n✓ deployed jsCode already matches the builder — nothing to do.");
+      return done(0);
+    }
+    console.log(`\nWould update "Build Failure Alert" on ${found.id} (active=${w.active})`);
+    console.log(`  deployed: ${before.parameters.jsCode.length} chars`);
+    console.log(`  builder:  ${BUILD_ALERT_JS.length} chars`);
+    if (!APPLY) { console.log("\nDry run — nothing written. Re-run with --update-code --apply."); return done(0); }
+
+    const nextNodes = w.nodes.map((n) =>
+      n.name === "Build Failure Alert"
+        ? { ...n, parameters: { ...n.parameters, jsCode: BUILD_ALERT_JS } }
+        : n);
+    await api(`/workflows/${found.id}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        name: w.name, nodes: nextNodes, connections: w.connections,
+        settings: { executionOrder: "v1" }, staticData: w.staticData ?? null,
+      }),
+    });
+    const after = await api(`/workflows/${found.id}`);
+    const problems = [];
+    if (after.nodes.find((n) => n.name === "Build Failure Alert")?.parameters?.jsCode !== BUILD_ALERT_JS) {
+      problems.push("jsCode did not take");
+    }
+    if (JSON.stringify(after.nodes.filter((n) => n.name !== "Build Failure Alert")) !== otherHashBefore) {
+      problems.push("another node CHANGED");
+    }
+    if (after.active !== w.active) problems.push(`active ${w.active} -> ${after.active}`);
+    if (problems.length) { console.error(`\n✗ post-write check FAILED: ${problems.join("; ")}`); return done(1); }
+    console.log(`✓ updated, active=${after.active}, all other nodes unchanged`);
+    writeFileSync(resolve(__dirname, "../n8n/error-alert-workflow.json"), JSON.stringify(after, null, 2));
+    console.log("✓ refreshed n8n/error-alert-workflow.json");
     return done(0);
   }
 

@@ -2095,10 +2095,29 @@ Error Trigger -> Build Failure Alert -> Send Failure Alert (twilio)
 > key means resending every node of a live workflow. Hence the attach script
 > hashes nodes/connections before and after and aborts on any drift.
 
-Payload shape (one item): `{ execution: { id, url, error: { message, stack,
-lineNumber }, lastNodeExecuted, mode }, workflow: { id, name } }`.
-`execution.url` is a ready-made deep link; `execution.id` is the **failed**
-execution's id, not the alerter's.
+**There are TWO payload shapes and they share no keys.** Reading only the first
+is what shipped, and the first real trigger failure produced an SMS saying
+*"node: unknown node / no error message"* — a true alert with the diagnosis
+stripped out, which is worse than useless at 00:01.
+
+```
+execution failure: { execution: { id, url, error:{message,stack,lineNumber},
+                                  lastNodeExecuted, mode }, workflow }
+TRIGGER failure:   { trigger:   { error:{message,name}, mode }, workflow }
+```
+
+`execution.url` is a ready-made deep link and `execution.id` is the **failed**
+execution's id, not the alerter's. A **trigger** failure carries neither, so the
+build node falls back to the workflow URL, which is the page you want anyway.
+
+> **Trigger failures dedupe on a 6-hour window, not 1 hour** (`TRIGGER_REPEAT_MS`).
+> The two Properties pollers fail on transient DNS/quota blips and self-heal —
+> the trigger never consumed anything, so its position does not advance, and
+> there are 7 such failures on record in a fortnight. At the 1-hour window that
+> is a steady drip of overnight texts about nothing, which is how an alarm gets
+> ignored. At 6 hours a genuinely dead poller still reports ~4x a day.
+> Observed live 2026-09-16: `W6PoSadMxnoHwxhG`, "The DNS server returned an
+> error", benign, recovered on the next poll.
 
 ### The throttle is not optional
 
@@ -2125,9 +2144,9 @@ alert, which is the correct direction for an alarm.
 > halves exist because only one of the two is visible when reading a canvas.
 
 ```bash
-node scripts/n8n-create-error-workflow.mjs [--apply] [--delete <id>] [--emit-js <dir>]
+node scripts/n8n-create-error-workflow.mjs [--apply] [--update-code --apply] [--delete <id>] [--emit-js <dir>]
 node scripts/n8n-attach-error-workflow.mjs [--apply] [--revert --apply] [--only <id>] [--include-inactive]
-node scripts/error-workflow-verify.mjs [--local] [--js <dir>]   # 38 assertions
+node scripts/error-workflow-verify.mjs [--local] [--js <dir>]   # 46 assertions
 ```
 Backups `n8n/BEFORE-error-workflow-attach/` (full pre-change JSON per workflow).
 
@@ -3041,7 +3060,7 @@ write nothing, and touch no n8n state.
 | `cal-link-email-verify.mjs` | **31** — the parallel email branch and its note logging |
 | `inquiry-alert-verify.mjs` | **36** — all three `Row Recorded?` wirings, fan-out |
 | `missed-code-sweep-verify.mjs` | **49** — the four finding kinds, both windows, dedupe, recipients, graph |
-| `error-workflow-verify.mjs` | **38** — the alarm's structure, throttle, self-exclusion, and that all 16 are attached |
+| `error-workflow-verify.mjs` | **46** — the alarm's structure, throttle, self-exclusion, and that all 16 are attached |
 | `launch-audit.mjs` | all 12 workflows, 16 hard gates, 3 alert phones |
 
 > **A verifier that fails at RANDOM stops being read just as surely as one that tests
