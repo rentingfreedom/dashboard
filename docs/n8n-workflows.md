@@ -1288,7 +1288,7 @@ and **Kameaka Garvin 2026-09-14** (`313-oakbend-street`).
 > could never have flagged it. Assigning lockboxes remains an operations task, but it
 > is not a complete answer, because the crash is reachable from any bookable property.
 
-### Park instead of crashing — `LOCKBOX_PARK_MARKER` (item 1a, BUILT NOT APPLIED)
+### Park instead of crashing — `LOCKBOX_PARK_MARKER` (item 1a, APPLIED 2026-09-16)
 
 Stops the crash above. `Find Property` no longer throws on a missing lockbox; it emits
 `lockboxMissing: true` and `Build Showing Row` writes
@@ -1343,7 +1343,7 @@ reading its immediate input.**
 
 ```bash
 node scripts/n8n-add-lockbox-park.mjs [--apply] [--revert --apply] [--emit-js <dir>]
-node scripts/lockbox-park-verify.mjs [--js <dir>]          # 45 assertions
+node scripts/lockbox-park-verify.mjs [--js <dir>]          # 64 assertions (45 without the graph)
 node scripts/lockbox-park-mutations.mjs                    # 11 mutations, proves the above
 ```
 Backup `n8n/BEFORE-lockbox-park/`. `--revert` restores the throw; **rows already
@@ -2698,7 +2698,7 @@ Backup `n8n/BEFORE-no-phone-skip/`. **`--revert` does not rewrite rows already s
 **Verified live 2026-08-30, execution 29918**, on a constructed fixture whose *only*
 unresolved step was a phoneless invitee SMS follow-up: `Mark Step Skipped=1`, while
 `Channel?`, `Send SMS` and `Send Failure Alert` **never ran**. Test row deleted after.
-### No code delivered → no follow-ups — `SHOWING_CODE_GATE_MARKER` (item 1c, BUILT NOT APPLIED)
+### No code delivered → no follow-ups — `SHOWING_CODE_GATE_MARKER` (item 1c, APPLIED 2026-09-16)
 
 **Rita Lewis could not get into 129 Towering Pine Drive on 2026-09-12** — the Booking
 Handler had crashed on the missing lockbox, so no code was sent — and then received the
@@ -2765,9 +2765,17 @@ send to", `skipped_no_code` means "they never got in".
 > precisely because these rules are unbounded. A Showings outage also must not take the
 > *other* categories down with it (B10).
 
+> **`no-phone-skip-verify.mjs` had to be updated in the same change.** It pinned
+> `Build Message -> Missing Recipient?` as a DIRECT edge, which this gate deliberately
+> breaks by inserting `No Code Delivered?` between them. It now pins the chain through
+> the gate's false branch instead — still protecting what it was written to protect
+> (that `Missing Recipient?` receives `Build Message`'s items unchanged) rather than
+> being loosened. Same discipline as the Zillow verifiers under
+> `APPLICATION_REVIEW_TASK_MARKER`.
+
 ```bash
 node scripts/n8n-add-showing-code-gate.mjs [--apply] [--revert --apply] [--emit-js <dir>]
-node scripts/showing-code-gate-verify.mjs [--js <dir>]     # 36 assertions
+node scripts/showing-code-gate-verify.mjs [--js <dir>]     # 55 assertions (36 without the graph)
 node scripts/showing-code-gate-mutations.mjs               # 10 mutations, proves the above
 ```
 Backup `n8n/BEFORE-showing-code-gate/`. **`--revert` does not rewrite rows already
@@ -3341,7 +3349,7 @@ write nothing, and touch no n8n state.
 | `application-alert-cc-verify.mjs` | **63** — message byte-identity, recipient fan-out |
 | `doorloop-recon-verify.mjs` / `doorloop-recon-cases.mjs` | the report; `--live` diffs deployed jsCode |
 | `sheets-retry-verify.mjs` | **62** — the retry cap, the served-filter, the wiring |
-| `no-phone-skip-verify.mjs` | **53** — the sentinel allowlist, recipient keying |
+| `no-phone-skip-verify.mjs` | **56** — the sentinel allowlist, recipient keying, and the 1c gate's position in the chain |
 | `application-inquiry-row-verify.mjs` | **64** — cal_link resolution, both dedup rules, fail-closed |
 | `application-review-task-verify.mjs` | **86** — the stage gate both ways, both branches, ET due date, wiring |
 | `stage-gate-race-verify.mjs` | **36** — race recovery, recency guard, both nodes |
@@ -3353,8 +3361,8 @@ write nothing, and touch no n8n state.
 | `inquiry-alert-verify.mjs` | **36** — all three `Row Recorded?` wirings, fan-out |
 | `missed-code-sweep-verify.mjs` | **49** — the four finding kinds, both windows, dedupe, recipients, graph |
 | `error-workflow-verify.mjs` | **46** — the alarm's structure, throttle, self-exclusion, and that all 16 are attached |
-| `lockbox-park-verify.mjs` | **45** — item 1a: parking, the alert fan-out, the graph, and that a parked row is inert in the dispatch cron |
-| `showing-code-gate-verify.mjs` | **36** — item 1c: the 7 gated rules, the category clause, the sentinel allowlist, defer-don't-decide |
+| `lockbox-park-verify.mjs` | **64** — item 1a: parking, the alert fan-out, the graph, and that a parked row is inert in the dispatch cron |
+| `showing-code-gate-verify.mjs` | **55** — item 1c: the 7 gated rules, the category clause, the sentinel allowlist, defer-don't-decide |
 | `delete-multirow-verify.mjs` | **36** — Delete Property multi-row: simulated deleteDimension, fail-closed guards, the `.item` rewrites |
 | `launch-audit.mjs` | all 12 workflows, 16 hard gates, 3 alert phones |
 
