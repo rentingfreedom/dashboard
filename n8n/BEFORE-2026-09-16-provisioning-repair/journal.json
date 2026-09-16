@@ -1,0 +1,54 @@
+{
+  "written_at": "2026-09-16T14:47:21.721Z",
+  "reason": "execution 41920 died at Google Admin - Create Resource before the sheet write-back",
+  "rows": [
+    {
+      "row": 77,
+      "property_key": "61-oak-grove-rd",
+      "before": {
+        "cal_event_type_id": "",
+        "cal_provisioning_status": ""
+      },
+      "after": {
+        "cal_event_type_id": "7091992",
+        "cal_provisioning_status": "provisioned"
+      }
+    },
+    {
+      "row": 78,
+      "property_key": "103-duke-ln",
+      "before": {
+        "cal_event_type_id": "",
+        "cal_provisioning_status": ""
+      },
+      "after": {
+        "cal_event_type_id": "7091994",
+        "cal_provisioning_status": "provisioned"
+      }
+    },
+    {
+      "row": 79,
+      "property_key": "154-old-jackson-rd",
+      "before": {
+        "cal_event_type_id": "",
+        "cal_provisioning_status": ""
+      },
+      "after": {
+        "cal_event_type_id": "7091993",
+        "cal_provisioning_status": "provisioned"
+      }
+    },
+    {
+      "row": 80,
+      "property_key": "220-goshen-rd",
+      "before": {
+        "cal_event_type_id": "",
+        "cal_provisioning_status": ""
+      },
+      "after": {
+        "cal_event_type_id": "7091991",
+        "cal_provisioning_status": "provisioned"
+      }
+    }
+  ]
+}
