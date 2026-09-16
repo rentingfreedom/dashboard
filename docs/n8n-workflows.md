@@ -1778,6 +1778,70 @@ preconditions live, including the Cheyla Zinck guard (*is the property still vac
 > **execution id and date** of the worst run so a hit that predates a fix is not misread
 > as current state.
 
+### The surviving `.first()` in provisioning — fixed 2026-09-16
+
+**`Google Admin - Create Resource` posted the FIRST property's key once per row.**
+Its body read `$('Google Sheets - Watch Properties').first().json.property_key`, so a
+poll carrying N rows sent item 0's key N times: the first POST creates the resource,
+the second collides with what the first just made, Google returns
+**`Entity Already Exists`**, the node throws, and the execution dies **before**
+`Prepare Sheet Update`.
+
+Fired live, execution **41920**. Justin added four properties from the DoorLoop panel
+inside fourteen seconds (10:44:12–10:44:26, `Dashboard_Audit_Log`), all four landed in
+one poll, **four cal.com event types were created and none reached the sheet**, and
+only `61-oak-grove-rd` got a Google resource — confirmed against the Admin Directory
+API; the other three were never attempted.
+
+> **This is gotcha 21 in the one node the multi-row fix missed.** `Build Cal.com Body`
+> and `Prepare Sheet Update` were both converted to multi-row handling under
+> `MULTI_ROW_MARKER` — and this HTTP node sits **between** them. It is invisible while
+> properties are added one at a time, which is how it survived months of correct
+> operation. **When fixing a `.first()` bug, fix the whole chain, not the Code nodes
+> you happen to be reading.**
+
+> **Nothing self-heals here.** The trigger *succeeded* and its stored position
+> advanced, so `rowAdded` will never re-emit those rows — unlike a trigger *failure*,
+> which consumes nothing and retries. Half-provisioned rows stay that way until
+> repaired by hand.
+
+**Fixed with `.item`**, which follows n8n's real item-pairing graph and therefore stays
+correct even when `Skip If Already Provisioned` — a Filter — drops rows. Index
+alignment against the trigger node would silently misalign in exactly that case.
+
+> **Proved in a throwaway workflow before being applied**, against a chain shaped like
+> this one (a `runOnceForAllItems` Code node that `out.push`es a new array without
+> setting `pairedItem`, then a node whose response replaces `$json` entirely):
+>
+> | expression | result |
+> |---|---|
+> | `.first()` | `aaa-first, aaa-first, aaa-first` — the bug |
+> | `.item` | `aaa-first, bbb-second, ccc-third` |
+> | `.all()[$itemIndex]` | `aaa-first, bbb-second, ccc-third` |
+>
+> Worth proving rather than assuming: n8n auto-pairs 1:1 Code node output, but **had
+> pairing been unavailable `.item` would have thrown on EVERY execution**, turning a
+> multi-row bug into a total outage.
+
+```bash
+node scripts/n8n-fix-provisioning-multirow.mjs [--apply] [--revert --apply]
+node scripts/_oneoff-2026-09-16-provisioning-repair.mjs [--apply]   # the 41920 rows
+```
+Backups `n8n/BEFORE-provisioning-multirow-fix/`,
+`n8n/BEFORE-2026-09-16-provisioning-repair/`.
+
+> **`google_resource_id` is an ARRAYFORMULA spill column**, identical in form to
+> `property_key`
+> (`=ARRAYFORMULA(IF(A2:A="","",LOWER(SUBSTITUTE(A2:A," ","-")))))`). It is generated
+> the instant a street address is written and is **never** written by the provisioning
+> workflow — so it can never be used as "has this been provisioned?", and a repair must
+> not write to it. `Skip If Already Provisioned` correctly keys on
+> `cal_provisioning_status` instead.
+
+> **`Prep Delete` in `W6PoSadMxnoHwxhG` has the SAME defect and is still unfixed.**
+> It deletes cal.com event types, Google resources and sheet rows, so it needs its own
+> sign-off. Fix it before anyone does a bulk cleanup.
+
 ### The two Properties pollers — 5-minute interval (2026-09-01)
 
 `TGGhSkTSZGYPrZo9` and `W6PoSadMxnoHwxhG` poll the **same** Properties tab, and
