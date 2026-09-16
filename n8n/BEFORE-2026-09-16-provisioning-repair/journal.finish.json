@@ -1,0 +1,62 @@
+{
+  "written_at": "2026-09-16T15:07:15.479Z",
+  "reason": "phase 2 — Google resources now exist for all four; completing what Prepare Sheet Update would have written",
+  "rows": [
+    {
+      "row": 77,
+      "property_key": "61-oak-grove-rd",
+      "before": {
+        "resource_calendar_email": "",
+        "provisioning_status": "pending_create",
+        "provisioned_at": ""
+      },
+      "after": {
+        "resource_calendar_email": "c_188901gatbklqj28gvmgjo434rt0q@resource.calendar.google.com",
+        "provisioning_status": "provisioned",
+        "provisioned_at": "2026-09-16T15:07:15.479Z"
+      }
+    },
+    {
+      "row": 78,
+      "property_key": "103-duke-ln",
+      "before": {
+        "resource_calendar_email": "",
+        "provisioning_status": "pending_create",
+        "provisioned_at": ""
+      },
+      "after": {
+        "resource_calendar_email": "c_18894g95hnhvqg4sjjdgrebl6tqv6@resource.calendar.google.com",
+        "provisioning_status": "provisioned",
+        "provisioned_at": "2026-09-16T15:07:15.479Z"
+      }
+    },
+    {
+      "row": 79,
+      "property_key": "154-old-jackson-rd",
+      "before": {
+        "resource_calendar_email": "",
+        "provisioning_status": "pending_create",
+        "provisioned_at": ""
+      },
+      "after": {
+        "resource_calendar_email": "c_188fbn270eb76g7hm8nt3ab0nk760@resource.calendar.google.com",
+        "provisioning_status": "provisioned",
+        "provisioned_at": "2026-09-16T15:07:15.479Z"
+      }
+    },
+    {
+      "row": 80,
+      "property_key": "220-goshen-rd",
+      "before": {
+        "resource_calendar_email": "",
+        "provisioning_status": "pending_create",
+        "provisioned_at": ""
+      },
+      "after": {
+        "resource_calendar_email": "c_1883dnd2903aih1fik40234nc65gg@resource.calendar.google.com",
+        "provisioning_status": "provisioned",
+        "provisioned_at": "2026-09-16T15:07:15.479Z"
+      }
+    }
+  ]
+}

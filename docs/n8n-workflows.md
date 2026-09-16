@@ -1838,9 +1838,51 @@ Backups `n8n/BEFORE-provisioning-multirow-fix/`,
 > not write to it. `Skip If Already Provisioned` correctly keys on
 > `cal_provisioning_status` instead.
 
-> **`Prep Delete` in `W6PoSadMxnoHwxhG` has the SAME defect and is still unfixed.**
-> It deletes cal.com event types, Google resources and sheet rows, so it needs its own
-> sign-off. Fix it before anyone does a bulk cleanup.
+### The same defect in Delete Property — fixed 2026-09-16
+
+`W6PoSadMxnoHwxhG` had **three** `.first()` uses, not one: `Prep Delete` itself, plus
+`Google Admin - Delete Resource` and `Google Sheets - Delete Row` both reaching back
+into it. Two properties marked `Delete` in one poll deleted only the first; the rest
+kept their event type, their Google resource and their row, and **`anyUpdate` does not
+re-report an unchanged row**, so nothing retried.
+
+> **It is NOT a one-word fix, and the naive version is destructive.**
+> `Google Sheets - Delete Row` deletes by INDEX
+> (`deleteDimension: { startIndex: row_number - 1 }`), and Google shifts every row
+> below the one it removes — deleting row 77 turns row 78 into row 77. Simply
+> "processing all items" in trigger order would delete the **wrong property** for every
+> row after the first, silently and irreversibly, on the one workflow in this estate
+> that destroys data.
+>
+> **Descending `row_number` order is load-bearing**: highest row first means each
+> deletion only shifts rows already handled. n8n runs a node across all its items before
+> moving on, so emission order is deletion order. The code also refuses a batch
+> containing a duplicate `row_number`, which under index-shifting would take out a
+> bystander.
+
+Applied 2026-09-16 while **0 rows were marked `Delete`**, so the change was inert on
+arrival. Fail-closed throws are kept and extended — on a destructive path, aborting
+beats acting on a row that cannot be identified.
+
+> **Error isolation is a separate, pre-existing gap, deliberately NOT addressed.** No
+> node carries `onError`, so a failure on one row aborts the batch — a row with an empty
+> `cal_event_type_id` yields a null `cal_delete_url` and fails the DELETE. That is
+> already today's behaviour for a single row; the change means it can now strand
+> siblings. Fixing it means deciding whether a partly-deleted property should continue,
+> which wants sign-off.
+
+```bash
+node scripts/n8n-fix-delete-multirow.mjs [--apply] [--revert --apply] [--emit-js <dir>]
+node scripts/delete-multirow-verify.mjs [--js <dir>]       # 36 assertions
+```
+Backup `n8n/BEFORE-delete-multirow-fix/`.
+
+> **The verifier SIMULATES `deleteDimension` against a mock grid** rather than asserting
+> "the output is sorted". Sorting is the mechanism; "no bystander is deleted" is the
+> property, and a re-implementation that sorted correctly and then deleted by a stale
+> index would pass a mechanism test. Assertion **B6 is a control** that feeds the
+> simulation an ascending batch and requires it to come out wrong — so the simulation is
+> known to be capable of detecting the bug it exists to catch.
 
 ### The two Properties pollers — 5-minute interval (2026-09-01)
 
@@ -3313,6 +3355,7 @@ write nothing, and touch no n8n state.
 | `error-workflow-verify.mjs` | **46** — the alarm's structure, throttle, self-exclusion, and that all 16 are attached |
 | `lockbox-park-verify.mjs` | **45** — item 1a: parking, the alert fan-out, the graph, and that a parked row is inert in the dispatch cron |
 | `showing-code-gate-verify.mjs` | **36** — item 1c: the 7 gated rules, the category clause, the sentinel allowlist, defer-don't-decide |
+| `delete-multirow-verify.mjs` | **36** — Delete Property multi-row: simulated deleteDimension, fail-closed guards, the `.item` rewrites |
 | `launch-audit.mjs` | all 12 workflows, 16 hard gates, 3 alert phones |
 
 > **A verifier that fails at RANDOM stops being read just as surely as one that tests
