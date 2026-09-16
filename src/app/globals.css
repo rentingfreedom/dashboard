@@ -128,3 +128,39 @@
     @apply font-sans;
   }
 }
+/*
+ * Data-visualisation palette (funnel dashboard).
+ *
+ * Slots 1–4 of the validated categorical theme, in fixed order — never cycled,
+ * and assigned to the FOUR FUNNEL STAGES as entities, so a stage keeps its
+ * colour across every panel it appears in. Dark is a selected re-step of the
+ * same hues against the dark card surface, not an automatic flip.
+ *
+ * Validated with the dataviz validator against this app's real card surfaces
+ * (#ffffff light, #111827 dark):
+ *   light  worst adjacent CVD ΔE 9.1 · normal ΔE 22.9 · all bands PASS
+ *   dark   worst adjacent CVD ΔE 8.4 · normal ΔE 19.8 · all bands PASS
+ *
+ * Light mode WARNs on contrast for aqua (2.82) and yellow (2.17) against white.
+ * That warning is not dismissable: every chart using them therefore carries a
+ * legend AND direct labels AND the underlying numbers in text, which is the
+ * relief the check requires.
+ */
+.viz-root {
+  --series-1: #2a78d6; /* reached out      */
+  --series-2: #eb6834; /* sent verification */
+  --series-3: #1baf7a; /* verified          */
+  --series-4: #eda100; /* booked            */
+  --viz-grid: #e5e7eb;
+  --viz-axis: #9ca3af;
+  --viz-surface: #ffffff;
+}
+.dark .viz-root {
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --viz-grid: #1f2937;
+  --viz-axis: #6b7280;
+  --viz-surface: #111827;
+}

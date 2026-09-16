@@ -3126,7 +3126,14 @@ wrong; watch the next real send to confirm the note lands in FUB.
 - Spreadsheet ID: `1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw`
 - Tabs: Properties, Settings, Text Log, Showings, Inquiries, Identity_Verifications,
   Lockboxes, Logs, Test_State, Source_Layout, Owners_Portfolios, Dashboard_Audit_Log,
-  Rental Applications, Cal Bookings
+  Rental Applications, Cal Bookings, Funnel_Snapshots
+- `Funnel_Snapshots` (added 2026-09-16) is one row per day behind the dashboard's
+  Lead funnel trend chart. It is written by `scripts/funnel-snapshots-setup.mjs`
+  (`--snapshot --apply`, one row per calendar day, idempotent) and read by nothing in
+  n8n. Its **first row is the pre-change baseline for item 4** — 74 reached out, 63
+  sent a verification SMS, 21 verified, 8 booked, captured before the switch exists.
+  `verification_enabled` records the state of that switch per row, and the chart marks
+  wherever it flips.
 - Sheets credential in n8n: `B1NdndfWsQ3pFzEV` — reuse it for new Sheets nodes
 - Service account creds for direct API access: `GOOGLE_SERVICE_ACCOUNT_EMAIL` +
   `GOOGLE_PRIVATE_KEY` in `.env.local`
