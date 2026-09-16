@@ -51,7 +51,53 @@ workflows should read this file first.
 | `TGGhSkTSZGYPrZo9` | New Property → Provision | Sheets `rowAdded` poll (**every 5 min** since 2026-09-01) → cal.com event type + Google resource. |
 | `zvwMJSOZBwqVM8Lo` | Automation Failure Alerts | **Error Trigger.** Named as `settings.errorWorkflow` by all 17 active workflows. SMS to Nicole + Andrew on any failed execution, throttled. **ACTIVE — and it must be.** `n8n/error-alert-workflow.json`. |
 | `PKdaOsoHatbuRTfZ` | Missed Access Code Sweep | Hourly. Reconciles Cal Bookings -> Showings and texts staff when a showing has, or will have, no door code. **ACTIVE since 2026-09-15.** `n8n/missed-code-sweep.json`. |
+| `xf660PmGgySg5pWY` | Funnel Daily Snapshot | Daily 23:30 UTC. One POST to the dashboard, which appends a `Funnel_Snapshots` row. Computes NOTHING itself and reads no Sheet. **INACTIVE — needs `FUNNEL_SNAPSHOT_SECRET` in Vercel *and* a dashboard deploy first.** |
 | `W6PoSadMxnoHwxhG` | Delete Property | Sheets `anyUpdate` poll (**every 5 min**) on the SAME tab → filter `active == "Delete"` → deletes the cal.com event type, the Google resource, and the sheet row. **ACTIVE.** |
+
+### Funnel Daily Snapshot — `xf660PmGgySg5pWY` (2026-09-16, INACTIVE)
+
+One HTTP POST a day to `dashboard.rentingfreedom.com/api/metrics/funnel/snapshot`,
+which appends one `Funnel_Snapshots` row. That row set is the Lead funnel page's
+trend chart and the record of whether the item 4 experiment moved anything.
+
+> **It deliberately computes NOTHING.** The house instinct is a Code node that reads
+> the tabs and counts them — which would be a **second implementation** of the funnel
+> arithmetic (dedupe, the identity join, the test-contact rules), free to drift from
+> the dashboard it is charting. Drift in a trend line is invisible, because wrong
+> numbers still look like numbers. Same reasoning as "do not write a fifth address
+> matcher". The cron is a POST and a status check; the maths has one home,
+> `src/lib/metrics/funnel.ts`.
+>
+> Useful side effect: this workflow **reads no Google Sheet**, so it adds nothing to
+> the quota bucket.
+
+**Two prerequisites before activating, neither of which the builder can satisfy:**
+
+1. **`FUNNEL_SNAPSHOT_SECRET` in the Vercel project** *and* the same value in n8n. The
+   route refuses every request when the variable is missing rather than defaulting to
+   open — a cron that silently stops is a far smaller problem than a public write
+   endpoint.
+2. **A dashboard deploy**, so the route exists at all. Deploys for this repo are
+   triggered by the client from vercel.com, never from this machine (`CLAUDE.md`).
+
+Activating before both are true just produces a nightly failure alert.
+
+`POST` returns 200 for **both** `appended` and `already_captured` — the endpoint is
+idempotent per calendar date, so a retry or a double fire is a success and must not
+page anyone. Anything else is thrown so the Error Trigger picks it up.
+
+```bash
+node scripts/n8n-create-funnel-snapshot-cron.mjs [--apply] [--delete <id>]
+node scripts/funnel-snapshots-setup.mjs [--apply] [--snapshot --apply]   # bootstrap / manual
+```
+
+> The setup script and the route share `computeFunnel` but each has its own ~20-line
+> row/idempotency wrapper. That duplication is deliberate: sharing it would mean the
+> plain-Node script importing a module that imports `../google/sheets-client`, which
+> Node's ESM loader cannot resolve without a file extension — and adding
+> `allowImportingTsExtensions` to tsconfig to suit one script is the worse trade. Both
+> writers emit in the **sheet's** header order, so a reordered column cannot shift
+> values in either path.
 
 ## LAUNCHED 2026-08-25 — the system is LIVE
 

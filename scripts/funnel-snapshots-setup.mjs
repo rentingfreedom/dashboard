@@ -21,8 +21,24 @@
  * fires twice, or a hand re-run, costs nothing.
  *
  * It computes the numbers by importing the SAME `computeFunnel` the dashboard
- * uses. A snapshot derived by a second, parallel implementation would drift
- * from the live page, and the drift would be invisible.
+ * uses. A snapshot derived by a second, parallel implementation of the funnel
+ * maths would drift from the live page, invisibly — the numbers would still
+ * look like numbers.
+ *
+ * ── Relationship to the cron ─────────────────────────────────────────────
+ * The daily cron does NOT run this script. It calls
+ * POST /api/metrics/funnel/snapshot, which runs `captureDailySnapshot()` in
+ * src/lib/metrics/snapshot.ts. Both paths share `computeFunnel`, so the
+ * arithmetic has exactly one definition; what exists twice is the ~20-line
+ * row/idempotency wrapper.
+ *
+ * That duplication is deliberate rather than overlooked. Sharing the wrapper
+ * too would mean this plain-Node script importing a module that imports
+ * `../google/sheets-client` — which Node's ESM loader cannot resolve without a
+ * file extension, and adding `allowImportingTsExtensions` to tsconfig to suit
+ * one script is a worse trade than a duplicated row builder. Both writers
+ * emit in the SHEET'S header order, so a reordered column cannot shift values
+ * in either path.
  */
 
 import { createRequire } from "module";
@@ -120,17 +136,22 @@ async function main() {
 
   const m = computeFunnel({ inquiries, verifications, bookings, properties, from: LAUNCH_DATE });
   const counts = Object.fromEntries(m.stages.map((s) => [s.key, s.count]));
-  const row = [
-    new Date().toISOString(),
-    String(counts.reached_out ?? 0),
-    String(counts.sent_verification ?? 0),
-    String(counts.verified ?? 0),
-    String(counts.booked ?? 0),
-    enabled ? "true" : "false",
-    already ? "" : (cur.length <= 1 ? "baseline before item 4" : ""),
-  ];
+  const values = {
+    captured_at: new Date().toISOString(),
+    reached_out: String(counts.reached_out ?? 0),
+    sent_verification: String(counts.sent_verification ?? 0),
+    verified: String(counts.verified ?? 0),
+    booked: String(counts.booked ?? 0),
+    verification_enabled: enabled ? "true" : "false",
+    note: cur.length <= 1 ? "baseline before item 4" : "",
+  };
+  // Emitted in the SHEET'S header order, not this script's, so a column
+  // reordered by hand cannot shift every value one to the left. The route's
+  // captureDailySnapshot() does the same.
+  const row = head.map((h) => values[h] ?? "");
 
-  console.log(`\nwould append: ${HEADERS.map((h, i) => `${h}=${row[i]}`).join("  ")}`);
+  console.log(`
+would append: ${head.map((h, i) => `${h}=${row[i]}`).join("  ")}`);
   if (!APPLY) { console.log("\nDry run — nothing written. Re-run with --apply."); return done(0); }
 
   await sheets.spreadsheets.values.append({
