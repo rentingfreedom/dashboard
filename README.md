@@ -70,7 +70,8 @@ This prints connection status, found tabs, and any missing columns.
 | `APP_ENV` | Optional | `development` or `production` |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Required | Clerk publishable key |
 | `CLERK_SECRET_KEY` | Required | Clerk secret key |
-| `DOORLOOP_API_KEY` | Scripts only | DoorLoop bearer token. Used by `scripts/doorloop-match.mjs`. The hourly sync itself runs in n8n and holds its own copy as an n8n Header Auth credential — the deployed app never reads this. |
+| `DOORLOOP_API_KEY` | Optional | DoorLoop bearer token. Used by `scripts/doorloop-match.mjs` **and by the deployed app** (`src/lib/doorloop/client.ts`, behind the DoorLoop panel's reconciliation actions). The hourly occupancy sync is separate — it runs in n8n and holds its own copy as an n8n Header Auth credential. |
+| `FUB_API_KEY` | Optional | Follow Up Boss API key, **read-only use**. Lets the Lead funnel page show each waiting lead's current FUB stage and flag the ones Nicole has rejected. Without it the page works unchanged, minus that column — and says so in its data-quality footer. Set it in the Vercel project to enable the column in production. |
 
 **Private key formatting:** Copy the `private_key` value from the downloaded JSON file exactly. It should start with `-----BEGIN PRIVATE KEY-----` and contain literal `\n` characters. Wrap the entire value in double quotes in `.env.local`.
 

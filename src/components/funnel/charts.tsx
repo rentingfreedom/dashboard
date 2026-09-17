@@ -19,12 +19,33 @@ import { useId, useState } from "react";
 
 export const STAGE_COLORS = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)"];
 
-/** Tooltip shown on hover. Positioned in DOM space, not SVG space, so it never clips. */
-function Tip({ x, y, children }: { x: number; y: number; children: React.ReactNode }) {
+/**
+ * Tooltip shown on hover. Positioned in DOM space, not SVG space.
+ *
+ * DOM space alone was not enough: the anchor for a bar is the TOP of that bar,
+ * so the tallest bar in any chart — always present, since the scale is set by
+ * the maximum — anchors at y≈0 and a tooltip drawn above it lands outside the
+ * card. The same happens horizontally for the first and last category. So the
+ * tooltip flips below its anchor near the top edge and stops centring itself
+ * near the left and right edges, rather than being clipped.
+ *
+ * `w` is the plot's rendered pixel width, measured at hover time by the caller.
+ */
+function Tip({ x, y, w, children }: { x: number; y: number; w: number; children: React.ReactNode }) {
+  const FLIP_BELOW_ABOVE_PX = 48;   // above this the tooltip would leave the card
+  const EDGE_PX = 90;               // roughly half a tooltip
+
+  const below = y < FLIP_BELOW_ABOVE_PX;
+  const nearLeft = x < EDGE_PX;
+  const nearRight = w > 0 && x > w - EDGE_PX;
+
+  const tx = nearLeft ? "0" : nearRight ? "-100%" : "-50%";
+  const ty = below ? "8px" : "-110%";
+
   return (
     <div
-      className="pointer-events-none absolute z-10 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs shadow-md dark:border-gray-700 dark:bg-gray-800"
-      style={{ left: x, top: y, transform: "translate(-50%, -110%)" }}
+      className="pointer-events-none absolute z-10 whitespace-nowrap rounded-md border border-gray-200 bg-white px-2 py-1 text-xs shadow-md dark:border-gray-700 dark:bg-gray-800"
+      style={{ left: x, top: y, transform: `translate(${tx}, ${ty})` }}
     >
       {children}
     </div>
@@ -77,7 +98,7 @@ export function FunnelChart({ stages, biggestDropIndex }: { stages: StageDatum[]
               <div className="w-36 shrink-0 text-sm text-gray-700 dark:text-gray-300">{s.label}</div>
               <div className="relative h-8 flex-1 overflow-hidden rounded bg-gray-100 dark:bg-gray-800">
                 <div
-                  className="h-full rounded-r"
+                  className="h-full rounded-r motion-safe:transition-[width] motion-safe:duration-500 motion-safe:ease-out"
                   style={{ width: `${widthPct}%`, backgroundColor: STAGE_COLORS[i % STAGE_COLORS.length] }}
                 />
               </div>
@@ -127,7 +148,7 @@ export function TrendChart({
   markers: { capturedAt: string; enabled: boolean }[];
 }) {
   const gid = useId();
-  const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null);
+  const [hover, setHover] = useState<{ i: number; x: number; y: number; w: number } | null>(null);
 
   if (points.length === 0) {
     return (
@@ -201,7 +222,7 @@ export function TrendChart({
             fill="transparent"
             onMouseEnter={(e) => {
               const r = (e.currentTarget.ownerSVGElement as SVGSVGElement).getBoundingClientRect();
-              setHover({ i, x: (x(i) / W) * r.width, y: (PAD_T / H) * r.height });
+              setHover({ i, x: (x(i) / W) * r.width, y: (PAD_T / H) * r.height, w: r.width });
             }}
             onMouseLeave={() => setHover(null)}
           />
@@ -215,7 +236,7 @@ export function TrendChart({
         )}
       </svg>
       {hover && (
-        <Tip x={hover.x} y={hover.y}>
+        <Tip x={hover.x} y={hover.y} w={hover.w}>
           <div className="mb-0.5 font-medium text-gray-900 dark:text-gray-100">{fmtDay(points[hover.i].capturedAt)}</div>
           {TREND_SERIES.map((s, si) => (
             <div key={s.key} className="flex items-center gap-1.5 text-gray-600 dark:text-gray-300">
@@ -240,7 +261,7 @@ export interface BarSeries { label: string; color: string; values: number[] }
  * panel title names it).
  */
 export function BarChart({ categories, series, formatValue }: { categories: string[]; series: BarSeries[]; formatValue?: (n: number) => string }) {
-  const [hover, setHover] = useState<{ c: number; s: number; x: number; y: number } | null>(null);
+  const [hover, setHover] = useState<{ c: number; s: number; x: number; y: number; w: number } | null>(null);
   const total = series.reduce((n, s) => n + s.values.reduce((a, b) => a + b, 0), 0);
   if (!categories.length || total === 0) return <EmptyPanel message="Nothing to show for this date range yet." />;
 
@@ -269,6 +290,10 @@ export function BarChart({ categories, series, formatValue }: { categories: stri
             const v = s.values[ci] ?? 0;
             const bx = PAD_L + ci * groupW + 6 + si * (barW + 2);
             const barH = Math.max(0, PAD_T + plotH - y(v));
+            // `y` and `height` are SVG geometry properties, animatable in CSS in
+            // every browser this dashboard is used in. Where they are not the bar
+            // simply snaps to its correct size — the degradation is the absence of
+            // an animation, never a wrong shape.
             return (
               <rect
                 key={`${ci}-${si}`}
@@ -278,9 +303,10 @@ export function BarChart({ categories, series, formatValue }: { categories: stri
                 height={barH}
                 rx={4}
                 fill={s.color}
+                style={{ transition: "y 450ms ease-out, height 450ms ease-out" }}
                 onMouseEnter={(e) => {
                   const r = (e.currentTarget.ownerSVGElement as SVGSVGElement).getBoundingClientRect();
-                  setHover({ c: ci, s: si, x: ((bx + barW / 2) / W) * r.width, y: (y(v) / H) * r.height });
+                  setHover({ c: ci, s: si, x: ((bx + barW / 2) / W) * r.width, y: (y(v) / H) * r.height, w: r.width });
                 }}
                 onMouseLeave={() => setHover(null)}
               />
@@ -294,7 +320,7 @@ export function BarChart({ categories, series, formatValue }: { categories: stri
         ))}
       </svg>
       {hover && (
-        <Tip x={hover.x} y={hover.y}>
+        <Tip x={hover.x} y={hover.y} w={hover.w}>
           <span className="font-medium text-gray-900 dark:text-gray-100">{categories[hover.c]}</span>
           <span className="ml-1.5 text-gray-600 dark:text-gray-300">
             {series[hover.s].label}:{" "}
@@ -338,7 +364,10 @@ export function InlineBar({ value, max, color }: { value: number; max: number; c
   return (
     <div className="flex items-center gap-2">
       <div className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
-        <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: color }} />
+        <div
+          className="h-full rounded-full motion-safe:transition-[width] motion-safe:duration-500 motion-safe:ease-out"
+          style={{ width: `${pct}%`, backgroundColor: color }}
+        />
       </div>
       <span className="tabular-nums text-sm text-gray-900 dark:text-gray-100">{value}</span>
     </div>

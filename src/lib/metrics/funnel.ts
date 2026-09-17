@@ -219,7 +219,27 @@ export interface FunnelMetrics {
   timeToVerify: { buckets: { label: string; count: number }[]; medianHours: number | null; n: number };
   bySource: { source: string; people: number; verified: number; booked: number }[];
   byProperty: { propertyKey: string; address: string; inquiries: number; people: number; booked: number }[];
-  stuck: { personId: string; name: string; phone: string; sentAt: string; daysWaiting: number; reminders: number; fubUrl: string }[];
+  /**
+   * `stage`, `trashTag` and `rejected` are OPTIONAL and are never set by
+   * computeFunnel — this module reads three sheet tabs and a lead's current FUB
+   * stage is not in any of them. The funnel repository fills them in from FUB
+   * when FUB_API_KEY is configured; the snapshot path leaves them undefined.
+   *
+   * So `rejected === undefined` means "not looked up", which is NOT the same as
+   * `rejected === false`. Consumers must render the unknown case as unknown.
+   */
+  stuck: {
+    personId: string;
+    name: string;
+    phone: string;
+    sentAt: string;
+    daysWaiting: number;
+    reminders: number;
+    fubUrl: string;
+    stage?: string;
+    trashTag?: string | null;
+    rejected?: boolean;
+  }[];
   trend: { capturedAt: string; reachedOut: number; sentVerification: number; verified: number; booked: number; verificationEnabled: boolean | null }[];
   verificationToggleMarkers: { capturedAt: string; enabled: boolean }[];
   dataQuality: {

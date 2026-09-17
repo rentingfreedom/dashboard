@@ -1,4 +1,5 @@
 import { readSheet, rowsToObjects } from "./sheets-client";
+import { fetchLeadStatuses, isConfigured as fubConfigured, type FubLeadStatus } from "@/lib/fub/client";
 import {
   computeFunnel,
   LAUNCH_DATE,
@@ -109,6 +110,53 @@ async function getTabs(force = false): Promise<RawTabs> {
 
 export interface FunnelResult extends FunnelMetrics {
   cachedAt: string;
+  /**
+   * Whether the stuck list carries FUB stages. False means FUB_API_KEY is not
+   * set in this environment, so the page must say "not available" rather than
+   * silently implying nobody is rejected.
+   */
+  fubEnriched: boolean;
+}
+
+/**
+ * Current FUB stage per lead, cached separately from the sheet tabs.
+ *
+ * Its own TTL, and a longer one: a lead's stage changes when Nicole works the
+ * CRM, which is not the every-minute churn the sheet tabs see, and each miss
+ * costs one HTTP request per stuck lead. Keyed by id so a changing stuck list
+ * only pays for the ids it has not seen.
+ */
+const FUB_TTL_MS = 5 * 60_000;
+const fubCache = new Map<string, { status: FubLeadStatus; at: number }>();
+
+async function enrichFromFub(
+  stuck: FunnelMetrics["stuck"],
+  force: boolean
+): Promise<{ stuck: FunnelMetrics["stuck"]; enriched: boolean }> {
+  if (!fubConfigured() || stuck.length === 0) return { stuck, enriched: false };
+
+  const now = Date.now();
+  const wanted = stuck.map((s) => s.personId).filter(Boolean);
+  const stale = wanted.filter((id) => {
+    const hit = fubCache.get(id);
+    return force || !hit || now - hit.at >= FUB_TTL_MS;
+  });
+
+  if (stale.length) {
+    const fresh = await fetchLeadStatuses(stale);
+    for (const [id, status] of fresh) fubCache.set(id, { status, at: now });
+  }
+
+  return {
+    // A lead absent from the cache was not resolvable, so its fields stay
+    // undefined and the page renders "unknown" — never "not rejected".
+    stuck: stuck.map((s) => {
+      const hit = fubCache.get(s.personId);
+      if (!hit) return s;
+      return { ...s, stage: hit.status.stage, trashTag: hit.status.trashTag, rejected: hit.status.rejected };
+    }),
+    enriched: true,
+  };
 }
 
 export async function getFunnelMetrics(opts: { from?: string; to?: string; force?: boolean } = {}): Promise<FunnelResult> {
@@ -122,7 +170,20 @@ export async function getFunnelMetrics(opts: { from?: string; to?: string; force
     from: opts.from ?? LAUNCH_DATE,
     to: opts.to,
   });
-  return { ...metrics, cachedAt: new Date(tabs.fetchedAt).toISOString() };
+
+  // Decoration only. A FUB outage, a revoked key or an unset key must cost the
+  // stage column and nothing else, so this can never throw past this point.
+  let stuck = metrics.stuck;
+  let fubEnriched = false;
+  try {
+    const r = await enrichFromFub(metrics.stuck, opts.force ?? false);
+    stuck = r.stuck;
+    fubEnriched = r.enriched;
+  } catch (err) {
+    console.warn("[funnel] FUB enrichment failed, continuing without stages:", err instanceof Error ? err.message : err);
+  }
+
+  return { ...metrics, stuck, cachedAt: new Date(tabs.fetchedAt).toISOString(), fubEnriched };
 }
 
 /** Exposed for the daily snapshot script, which wants today's numbers only. */

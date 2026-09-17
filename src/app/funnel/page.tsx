@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { RefreshCw, ExternalLink, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -18,9 +18,23 @@ interface FunnelMetrics {
   timeToVerify: { buckets: { label: string; count: number }[]; medianHours: number | null; n: number };
   bySource: { source: string; people: number; verified: number; booked: number }[];
   byProperty: { propertyKey: string; address: string; inquiries: number; people: number; booked: number }[];
-  stuck: { personId: string; name: string; phone: string; sentAt: string; daysWaiting: number; reminders: number; fubUrl: string }[];
+  stuck: {
+    personId: string;
+    name: string;
+    phone: string;
+    sentAt: string;
+    daysWaiting: number;
+    reminders: number;
+    fubUrl: string;
+    /** Present only when FUB_API_KEY is set server-side. Undefined means "not looked up". */
+    stage?: string;
+    trashTag?: string | null;
+    rejected?: boolean;
+  }[];
   trend: { capturedAt: string; reachedOut: number; sentVerification: number; verified: number; booked: number }[];
   verificationToggleMarkers: { capturedAt: string; enabled: boolean }[];
+  /** False when FUB_API_KEY is unset in this environment, so no stages were fetched. */
+  fubEnriched: boolean;
   dataQuality: {
     mergedPeople: string[][];
     skippedUnparseableDates: number;
@@ -54,18 +68,30 @@ export default function FunnelPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [range, setRange] = useState("launch");
 
-  const load = useCallback(async (rangeKey: string, silent = false) => {
-    if (!silent) setLoading(true); else setRefreshing(true);
+  /**
+   * Whether anything has ever loaded. Only the FIRST load shows a skeleton;
+   * every later one — a range switch, a manual refresh — leaves the existing
+   * charts on screen and dims them, so switching range animates the bars to
+   * their new values instead of blanking the page and rebuilding it.
+   *
+   * A ref rather than state because `load` must not be re-created when it
+   * flips, or the effect below would re-fire and fetch twice per range.
+   */
+  const hasLoaded = useRef(false);
+
+  const load = useCallback(async (rangeKey: string, force = false) => {
+    if (hasLoaded.current) setRefreshing(true); else setLoading(true);
     setError(null);
     try {
       const qs = new URLSearchParams({ from: rangeFrom(rangeKey) });
-      if (silent) qs.set("refresh", "1");
+      if (force) qs.set("refresh", "1");
       const data = await fetchJson<{ metrics: FunnelMetrics }>(`/api/metrics/funnel?${qs}`);
       setMetrics(data.metrics);
+      hasLoaded.current = true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to load funnel metrics";
       setError(msg);
-      if (silent) toast.error(msg);
+      if (hasLoaded.current) toast.error(msg);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -88,7 +114,7 @@ export default function FunnelPage() {
             <NativeSelect value={range} onChange={(e) => setRange(e.target.value)} className="h-8 w-40 text-sm">
               {RANGES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
             </NativeSelect>
-            <Button variant="outline" size="sm" onClick={() => load(range, true)} disabled={refreshing} className="h-8">
+            <Button variant="outline" size="sm" onClick={() => load(range, true)} disabled={refreshing || loading} className="h-8">
               <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
               Refresh
             </Button>
@@ -99,12 +125,17 @@ export default function FunnelPage() {
       <div className="flex-1 space-y-6 overflow-auto bg-gray-50 p-6 dark:bg-gray-950">
         {loading ? (
           <LoadingSkeleton />
-        ) : error ? (
+        ) : error && !metrics ? (
           <ErrorState message={error} onRetry={() => load(range)} />
         ) : !metrics ? (
           <EmptyPanel message="No metrics available." />
         ) : (
-          <FunnelDashboard m={metrics} />
+          <div
+            className={`space-y-6 transition-opacity duration-200 ${refreshing ? "opacity-50" : "opacity-100"}`}
+            aria-busy={refreshing}
+          >
+            <FunnelDashboard m={metrics} />
+          </div>
         )}
       </div>
     </div>
@@ -158,11 +189,11 @@ function FunnelDashboard({ m }: { m: FunnelMetrics }) {
 
         <Card>
           <CardHeader>
-            <CardTitle>Time to verify</CardTitle>
+            <CardTitle>Time to complete ID check</CardTitle>
             <CardDescription>
               {m.timeToVerify.medianHours === null
-                ? "No completed verifications in this range."
-                : `Median ${m.timeToVerify.medianHours}h across ${m.timeToVerify.n} verified ${m.timeToVerify.n === 1 ? "lead" : "leads"}.`}
+                ? "Hours from the verification SMS going out to Stripe Identity coming back. None completed in this range."
+                : `Hours from the verification SMS going out to Stripe Identity coming back. Median ${m.timeToVerify.medianHours}h across ${m.timeToVerify.n} verified ${m.timeToVerify.n === 1 ? "lead" : "leads"}.`}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -208,6 +239,7 @@ function FunnelDashboard({ m }: { m: FunnelMetrics }) {
             ) : (
               <div className="max-h-80 overflow-auto">
                 <Table
+                  stickyHead
                   head={["Property", "People", "Booked"]}
                   rows={m.byProperty.slice(0, 20).map((p) => [
                     <span key="a" className="text-sm text-gray-900 dark:text-gray-100">{p.address}</span>,
@@ -221,22 +253,109 @@ function FunnelDashboard({ m }: { m: FunnelMetrics }) {
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Currently stuck ({m.stuck.length})</CardTitle>
-          <CardDescription>
-            Leads sent a verification link who have not completed it. Longest wait first.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {m.stuck.length === 0 ? (
-            <EmptyPanel message="Nobody is mid-verification right now." />
-          ) : (
-            <div className="max-h-96 overflow-auto">
-              <Table
-                head={["Lead", "Waiting", "Reminders", ""]}
-                rows={m.stuck.map((s) => [
-                  <span key="n" className="text-sm text-gray-900 dark:text-gray-100">{s.name}</span>,
+      <WaitingOnVerification stuck={m.stuck} fubEnriched={m.fubEnriched} />
+
+      <DataQuality m={m} />
+    </>
+  );
+}
+
+/**
+ * Leads sent a verification link who have not completed it.
+ *
+ * NOT "stuck": most of this list has simply not got round to it yet, and some
+ * applied hours ago. The reminder count is the useful axis — a lead on 4 of 4
+ * has had every nudge the system will ever send and is now a human decision; a
+ * lead on 0 of 4 has had one SMS and may just need time.
+ *
+ * A SHORT COUNT ON AN OLD LEAD IS NOT A MISSED REMINDER. Reminders stop the
+ * moment the lead is trashed, tagged, or moved out of an allowed stage, and the
+ * day count is calendar-based, so a day skipped is never made up. Checked live
+ * against FUB 2026-09-16: every short-count lead older than a week was rejected
+ * or out of scope, none neglected.
+ *
+ * KNOWN LIMIT, deliberately not closed here: this panel cannot tell a lead who
+ * is genuinely waiting from one Nicole has already rejected, because the FUB
+ * stage lives in FUB and this page reads three sheet tabs. Showing it would mean
+ * the dashboard calling FUB once per lead — a dependency it has never had, and
+ * an API key it does not hold in Vercel.
+ */
+function WaitingOnVerification({ stuck, fubEnriched }: { stuck: FunnelMetrics["stuck"]; fubEnriched: boolean }) {
+  const [filter, setFilter] = useState<number | null>(null);
+  const [hideRejected, setHideRejected] = useState(false);
+
+  // Bucket counts drive the chip labels, so a chip that would show nothing says
+  // so before it is clicked rather than emptying the table without explanation.
+  const counts = useMemo(() => {
+    const c = [0, 0, 0, 0, 0];
+    for (const s of stuck) c[Math.min(Math.max(s.reminders, 0), 4)]++;
+    return c;
+  }, [stuck]);
+
+  const rejectedCount = stuck.filter((s) => s.rejected === true).length;
+
+  const rows = stuck
+    .filter((s) => filter === null || Math.min(Math.max(s.reminders, 0), 4) === filter)
+    // `rejected` is undefined when FUB was not consulted. Hiding on `!== true`
+    // would then hide the whole list; hiding on `=== true` correctly hides
+    // nothing until we actually know.
+    .filter((s) => !hideRejected || s.rejected !== true);
+
+  const chip = (active: boolean) =>
+    `rounded-full border px-2.5 py-1 text-xs transition-colors ${
+      active
+        ? "border-transparent bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900"
+        : "border-gray-200 text-gray-600 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+    }`;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Waiting on verification ({stuck.length})</CardTitle>
+        <CardDescription>
+          Leads sent a verification link who have not completed it. Longest wait first. A count below 4 of 4 on an
+          older lead means the reminders stopped — usually because the lead was trashed, tagged, or moved out of a
+          tenant stage.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="mb-3 flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 text-xs text-gray-500 dark:text-gray-400">Reminders sent:</span>
+          <button type="button" onClick={() => setFilter(null)} className={chip(filter === null)}>
+            All ({stuck.length})
+          </button>
+          {counts.map((n, i) => (
+            <button key={i} type="button" onClick={() => setFilter(i)} className={chip(filter === i)}>
+              {i === 4 ? "4 of 4" : i} ({n})
+            </button>
+          ))}
+          {fubEnriched && rejectedCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setHideRejected((v) => !v)}
+              className={`${chip(hideRejected)} ml-2`}
+            >
+              {hideRejected ? "Showing" : "Hide"} rejected ({rejectedCount})
+            </button>
+          )}
+        </div>
+        {stuck.length === 0 ? (
+          <EmptyPanel message="Nobody is mid-verification right now." />
+        ) : rows.length === 0 ? (
+          <EmptyPanel message="No leads have had that many reminders." />
+        ) : (
+          <div className="max-h-96 overflow-auto">
+            <Table
+              stickyHead
+              head={fubEnriched ? ["Lead", "Status in FUB", "Waiting", "Reminders", ""] : ["Lead", "Waiting", "Reminders", ""]}
+              rows={rows.map((s) => {
+                const cells: React.ReactNode[] = [
+                  <span key="n" className={`text-sm ${s.rejected ? "text-gray-500 dark:text-gray-400" : "text-gray-900 dark:text-gray-100"}`}>
+                    {s.name}
+                  </span>,
+                ];
+                if (fubEnriched) cells.push(<LeadStatus key="st" lead={s} />);
+                cells.push(
                   <span key="d" className="tabular-nums text-sm text-gray-600 dark:text-gray-300">
                     {s.daysWaiting < 0 ? "—" : `${s.daysWaiting}d`}
                   </span>,
@@ -248,16 +367,45 @@ function FunnelDashboard({ m }: { m: FunnelMetrics }) {
                       className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline dark:text-blue-400">
                       FUB <ExternalLink className="h-3 w-3" />
                     </a>
-                  ) : <span key="l" />,
-                ])}
-              />
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                  ) : <span key="l" />
+                );
+                return cells;
+              })}
+            />
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
-      <DataQuality m={m} />
-    </>
+/**
+ * A lead's current position in FUB: the literal stage, plus a Rejected badge
+ * when Nicole has trashed or tagged them.
+ *
+ * The stage is shown verbatim because it is a FACT, and the badge is derived
+ * from only two things — one of her three trash tags, or a trash-family stage.
+ * Anything subtler (the 90/365-day expiry windows, the tag precedence order)
+ * belongs to the n8n gate and is deliberately not reproduced here; see
+ * `src/lib/fub/client.ts`.
+ *
+ * `rejected === undefined` means the lookup did not resolve, which is rendered
+ * as a dash. Never as "not rejected".
+ */
+function LeadStatus({ lead }: { lead: FunnelMetrics["stuck"][number] }) {
+  if (lead.rejected === undefined) {
+    return <span className="text-xs text-gray-400" title="Could not be looked up in FUB">—</span>;
+  }
+  return (
+    <span className="flex flex-wrap items-center gap-1.5">
+      {lead.rejected && (
+        <span className="rounded-full bg-red-50 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-950 dark:text-red-300">
+          Rejected
+        </span>
+      )}
+      <span className="text-xs text-gray-600 dark:text-gray-300">{lead.stage || "—"}</span>
+      {lead.trashTag && <span className="text-xs text-gray-400">· {lead.trashTag}</span>}
+    </span>
   );
 }
 
@@ -277,6 +425,8 @@ function DataQuality({ m }: { m: FunnelMetrics }) {
   if (dq.bookingsUnmatchedToProperty) notes.push(`${dq.bookingsUnmatchedToProperty} bookings had no matching property`);
   if (dq.skippedUnparseableDates) notes.push(`${dq.skippedUnparseableDates} rows had an unreadable date`);
   if (dq.skippedNoIdentity) notes.push(`${dq.skippedNoIdentity} rows had no identifying details`);
+  // Said out loud, because an absent column reads as "nobody is rejected".
+  if (!m.fubEnriched) notes.push("FUB stages unavailable, so the waiting list cannot show who has been rejected (set FUB_API_KEY)");
 
   return (
     <Card size="sm">
@@ -294,13 +444,26 @@ function DataQuality({ m }: { m: FunnelMetrics }) {
   );
 }
 
-function Table({ head, rows }: { head: string[]; rows: React.ReactNode[][] }) {
+/**
+ * `stickyHead` is for a table inside a scroll container. The header needs its
+ * own opaque background (`bg-card`, the Card's own colour) or rows scroll
+ * visibly underneath it, and the bottom rule has to move onto the `th`: a
+ * border set on a sticky `tr` does not travel with it.
+ */
+function Table({ head, rows, stickyHead = false }: { head: string[]; rows: React.ReactNode[][]; stickyHead?: boolean }) {
   return (
     <table className="w-full">
-      <thead>
-        <tr className="border-b border-gray-200 dark:border-gray-700">
+      <thead className={stickyHead ? "sticky top-0 z-10 bg-card" : undefined}>
+        <tr className={stickyHead ? undefined : "border-b border-gray-200 dark:border-gray-700"}>
           {head.map((h, i) => (
-            <th key={i} className="pb-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400">{h}</th>
+            <th
+              key={i}
+              className={`pb-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 ${
+                stickyHead ? "border-b border-gray-200 bg-card pt-1 dark:border-gray-700" : ""
+              }`}
+            >
+              {h}
+            </th>
           ))}
         </tr>
       </thead>
