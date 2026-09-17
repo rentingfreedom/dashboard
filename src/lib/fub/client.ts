@@ -63,6 +63,37 @@ export const TRASH_TAGS = ["Permanent Trash", "No Response Trash", "Denied Credi
  */
 export const TRASH_STAGES = ["trash", "permanent trash", "cold rental lead 1 month hold"];
 
+/**
+ * Stages that mean the lead moved FORWARD, not that they are still waiting.
+ *
+ * This category exists because a binary rejected/active split is wrong, and
+ * dangerously so. A lead can be housed without ever completing ID verification
+ * — the estate has a documented case (Cheyla Zinck, 2726: "verified with the
+ * same kind of row but is now `Tenants Awaiting Move In`: housed. Do not
+ * contact."). Calling them "Active" on a chase list invites exactly the contact
+ * that note warns against.
+ */
+export const PROGRESSED_STAGES = [
+  "potential tenant holding stage",
+  "tenants awaiting move in",
+  "current tenants",
+];
+
+/**
+ * What to show against a lead on the waiting list.
+ *
+ *   rejected   — Nicole trashed or tagged them
+ *   progressed — they moved forward anyway (possibly housed); stop chasing
+ *   active     — still in a stage the automation works (`allowed_stages`)
+ *   other      — a real stage, but not a rental-tenant one: PM leads, owners,
+ *                vendors. Not rejected, not being chased either.
+ *
+ * "unknown" is deliberately NOT a value here. A lead we could not look up is
+ * simply absent from the result map, so the caller renders nothing — treating
+ * unknown as a category would make a lookup failure look like a finding.
+ */
+export type LeadCategory = "rejected" | "progressed" | "active" | "other";
+
 export interface FubLeadStatus {
   id: string;
   stage: string;
@@ -82,6 +113,7 @@ export interface FubLeadStatus {
    * If you ever need the real gate verdict, call the gate — do not grow this.
    */
   rejected: boolean;
+  category: LeadCategory;
 }
 
 export function isConfigured(): boolean {
@@ -102,7 +134,24 @@ const norm = (s: unknown) => String(s ?? "").trim().toLowerCase();
  * key, a network blip. This decorates a panel; it must never be able to take
  * the funnel page down with it.
  */
-async function fetchPerson(id: string): Promise<FubLeadStatus | null> {
+/**
+ * Exported ONLY so the verifier can pin it to synthetic stages. Two verifiers
+ * in this estate were found to be testing nothing because their fixtures were
+ * live CRM records that later changed underneath them; this is the pure
+ * function, so its test cannot rot.
+ */
+export function categorise(stage: string, trashTag: string | null, allowedStages: string[]): LeadCategory {
+  const s = norm(stage);
+  if (trashTag !== null || TRASH_STAGES.includes(s)) return "rejected";
+  if (PROGRESSED_STAGES.includes(s)) return "progressed";
+  // An EMPTY allow-list means "allow everything" everywhere else in this system
+  // (deleting the Settings row degrades to pre-gate behaviour rather than
+  // silently muting it), so it has to mean the same here.
+  if (allowedStages.length === 0 || allowedStages.some((a) => norm(a) === s)) return "active";
+  return "other";
+}
+
+async function fetchPerson(id: string, allowedStages: string[]): Promise<FubLeadStatus | null> {
   try {
     const res = await fetch(`${BASE}/people/${encodeURIComponent(id)}?fields=allFields`, {
       headers: {
@@ -134,13 +183,8 @@ async function fetchPerson(id: string): Promise<FubLeadStatus | null> {
     const stage = String(p.stage ?? "").trim();
     const trashTag = TRASH_TAGS.find((t) => tags.some((x) => norm(x) === norm(t))) ?? null;
 
-    return {
-      id: String(id),
-      stage,
-      tags,
-      trashTag,
-      rejected: trashTag !== null || TRASH_STAGES.includes(norm(stage)),
-    };
+    const category = categorise(stage, trashTag, allowedStages);
+    return { id: String(id), stage, tags, trashTag, rejected: category === "rejected", category };
   } catch (err) {
     console.warn(`[fub] GET /people/${id} failed:`, err instanceof Error ? err.message : err);
     return null;
@@ -154,7 +198,18 @@ async function fetchPerson(id: string): Promise<FubLeadStatus | null> {
  * "not in the map" as "unknown", never as "not rejected". Showing nothing is
  * correct when we do not know; showing "waiting" would be an assertion.
  */
-export async function fetchLeadStatuses(ids: string[]): Promise<Map<string, FubLeadStatus>> {
+export async function fetchLeadStatuses(
+  ids: string[],
+  /**
+   * The live `allowed_stages` Settings value, passed in rather than hardcoded.
+   *
+   * Several n8n nodes DO hardcode their copy and carry a standing warning to
+   * update them by hand if the production value changes. That warning is a
+   * maintenance trap, and there is no reason to add a sixth copy of it here:
+   * the repository already reads Settings, so this reads the real value.
+   */
+  allowedStages: string[] = []
+): Promise<Map<string, FubLeadStatus>> {
   const out = new Map<string, FubLeadStatus>();
   if (!isConfigured()) return out;
 
@@ -165,7 +220,7 @@ export async function fetchLeadStatuses(ids: string[]): Promise<Map<string, FubL
     for (;;) {
       const i = cursor++;
       if (i >= unique.length) return;
-      const status = await fetchPerson(unique[i]);
+      const status = await fetchPerson(unique[i], allowedStages);
       if (status) out.set(unique[i], status);
     }
   };

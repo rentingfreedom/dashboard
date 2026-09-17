@@ -143,9 +143,17 @@ const TREND_SERIES: { key: keyof Omit<TrendPoint, "capturedAt">; label: string }
 export function TrendChart({
   points,
   markers,
+  height = 150,
 }: {
   points: TrendPoint[];
   markers: { capturedAt: string; enabled: boolean }[];
+  /**
+   * Plot height in viewBox units. The chart scales to its container width, so
+   * this is really an aspect ratio — it was a fixed 240 against a 720 width,
+   * which made a four-point line taller than it needed to be and pushed
+   * everything below it off the screen.
+   */
+  height?: number;
 }) {
   const gid = useId();
   const [hover, setHover] = useState<{ i: number; x: number; y: number; w: number } | null>(null);
@@ -156,7 +164,7 @@ export function TrendChart({
     );
   }
 
-  const W = 720, H = 240, PAD_L = 36, PAD_R = 16, PAD_T = 12, PAD_B = 28;
+  const W = 720, H = height, PAD_L = 36, PAD_R = 16, PAD_T = 12, PAD_B = 26;
   const maxY = Math.max(1, ...points.flatMap((p) => TREND_SERIES.map((s) => p[s.key])));
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
@@ -260,12 +268,23 @@ export interface BarSeries { label: string; color: string; values: number[] }
  * series) and the time-to-verify histogram (one series, so no legend — the
  * panel title names it).
  */
-export function BarChart({ categories, series, formatValue }: { categories: string[]; series: BarSeries[]; formatValue?: (n: number) => string }) {
+export function BarChart({
+  categories,
+  series,
+  formatValue,
+  height = 220,
+}: {
+  categories: string[];
+  series: BarSeries[];
+  formatValue?: (n: number) => string;
+  /** viewBox height, i.e. an aspect ratio against the fixed 720 width. */
+  height?: number;
+}) {
   const [hover, setHover] = useState<{ c: number; s: number; x: number; y: number; w: number } | null>(null);
   const total = series.reduce((n, s) => n + s.values.reduce((a, b) => a + b, 0), 0);
   if (!categories.length || total === 0) return <EmptyPanel message="Nothing to show for this date range yet." />;
 
-  const W = 720, H = 220, PAD_L = 32, PAD_R = 12, PAD_T = 12, PAD_B = 34;
+  const W = 720, H = height, PAD_L = 32, PAD_R = 12, PAD_T = 12, PAD_B = 34;
   const maxY = Math.max(1, ...series.flatMap((s) => s.values));
   const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
   const groupW = plotW / categories.length;
@@ -331,6 +350,68 @@ export function BarChart({ categories, series, formatValue }: { categories: stri
         </Tip>
       )}
       {series.length > 1 && <Legend items={series.map((s) => ({ label: s.label, color: s.color }))} />}
+    </div>
+  );
+}
+
+/**
+ * Horizontal bars with the label on the left and the number on the right.
+ *
+ * Chosen over vertical bars because the categories here are long text — trash
+ * tag names like "No Response Trash" — and vertical bars would need rotated or
+ * truncated labels, which is the single most common way a small chart becomes
+ * unreadable. Horizontal also packs into a narrow column, which is the point.
+ *
+ * One series, so no legend: the panel title names the measure.
+ */
+export function HBarList({
+  items,
+  color,
+  emptyMessage,
+}: {
+  items: { label: string; count: number }[];
+  color: string;
+  emptyMessage: string;
+}) {
+  const [hover, setHover] = useState<number | null>(null);
+  const total = items.reduce((n, i) => n + i.count, 0);
+  if (!items.length || total === 0) return <EmptyPanel message={emptyMessage} />;
+  const max = Math.max(1, ...items.map((i) => i.count));
+
+  return (
+    <div className="space-y-2">
+      {items.map((it, i) => (
+        <div
+          key={it.label}
+          className="flex items-center gap-2"
+          onMouseEnter={() => setHover(i)}
+          onMouseLeave={() => setHover(null)}
+        >
+          <div className="min-w-0 flex-1">
+            <div className="mb-1 flex items-baseline justify-between gap-2">
+              <span className="truncate text-xs text-gray-700 dark:text-gray-300" title={it.label}>
+                {it.label}
+              </span>
+              <span className="shrink-0 tabular-nums text-xs font-semibold text-gray-900 dark:text-gray-100">
+                {it.count}
+                <span className="ml-1 font-normal text-gray-400">
+                  {Math.round((it.count / total) * 100)}%
+                </span>
+              </span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
+              <div
+                className="h-full rounded-full motion-safe:transition-[width,opacity] motion-safe:duration-500 motion-safe:ease-out"
+                style={{
+                  width: `${Math.max((it.count / max) * 100, 2)}%`,
+                  backgroundColor: color,
+                  opacity: hover === null || hover === i ? 1 : 0.55,
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

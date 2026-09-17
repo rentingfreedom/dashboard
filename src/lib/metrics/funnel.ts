@@ -239,6 +239,7 @@ export interface FunnelMetrics {
     stage?: string;
     trashTag?: string | null;
     rejected?: boolean;
+    category?: "rejected" | "progressed" | "active" | "other";
   }[];
   trend: { capturedAt: string; reachedOut: number; sentVerification: number; verified: number; booked: number; verificationEnabled: boolean | null }[];
   verificationToggleMarkers: { capturedAt: string; enabled: boolean }[];

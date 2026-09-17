@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { NativeSelect } from "@/components/ui/native-select";
 import { toast } from "sonner";
 import { fetchJson } from "@/lib/fetch-json";
-import { FunnelChart, TrendChart, BarChart, InlineBar, EmptyPanel, STAGE_COLORS } from "@/components/funnel/charts";
+import { FunnelChart, TrendChart, BarChart, HBarList, InlineBar, EmptyPanel, STAGE_COLORS } from "@/components/funnel/charts";
 
 interface FunnelMetrics {
   range: { from: string; to: string | null };
@@ -30,11 +30,13 @@ interface FunnelMetrics {
     stage?: string;
     trashTag?: string | null;
     rejected?: boolean;
+    category?: "rejected" | "progressed" | "active" | "other";
   }[];
   trend: { capturedAt: string; reachedOut: number; sentVerification: number; verified: number; booked: number }[];
   verificationToggleMarkers: { capturedAt: string; enabled: boolean }[];
   /** False when FUB_API_KEY is unset in this environment, so no stages were fetched. */
   fubEnriched: boolean;
+  rejectionReasons: { label: string; count: number }[];
   dataQuality: {
     mergedPeople: string[][];
     skippedUnparseableDates: number;
@@ -148,30 +150,38 @@ function FunnelDashboard({ m }: { m: FunnelMetrics }) {
 
   return (
     <>
-      <Card>
-        <CardHeader>
-          <CardTitle>Funnel</CardTitle>
-          <CardDescription>
-            Distinct people, deduplicated. Percentages are the share continuing from the previous stage.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <FunnelChart stages={m.stages} biggestDropIndex={m.biggestDropIndex} />
-        </CardContent>
-      </Card>
+      {/*
+        Two equal columns, not a stack. Every panel here was full-width, so the
+        page was five screens tall on a wide monitor while half the pixels sat
+        empty either side of a four-bar chart. The funnel and the trend answer
+        the same question at two timescales, so they belong side by side.
+      */}
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>Funnel</CardTitle>
+            <CardDescription>
+              Distinct people, deduplicated. Percentages are the share continuing from the previous stage.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <FunnelChart stages={m.stages} biggestDropIndex={m.biggestDropIndex} />
+          </CardContent>
+        </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Over time</CardTitle>
-          <CardDescription>One point per daily snapshot. Dashed lines mark ID-verification being switched on or off.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <TrendChart points={m.trend} markers={m.verificationToggleMarkers} />
-        </CardContent>
-      </Card>
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>Over time</CardTitle>
+            <CardDescription>One point per daily snapshot. Dashed lines mark ID-verification being switched on or off.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <TrendChart points={m.trend} markers={m.verificationToggleMarkers} height={150} />
+          </CardContent>
+        </Card>
+      </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
+      <div className="grid gap-4 xl:grid-cols-3">
+        <Card size="sm">
           <CardHeader>
             <CardTitle>Which nudge converts</CardTitle>
             <CardDescription>How far each lead got in the reminder sequence, and where they verified.</CardDescription>
@@ -183,11 +193,12 @@ function FunnelDashboard({ m }: { m: FunnelMetrics }) {
                 { label: "Reached this step", color: STAGE_COLORS[1], values: m.verificationDetail.map((d) => d.sent) },
                 { label: "Verified here", color: STAGE_COLORS[2], values: m.verificationDetail.map((d) => d.verified) },
               ]}
+              height={170}
             />
           </CardContent>
         </Card>
 
-        <Card>
+        <Card size="sm">
           <CardHeader>
             <CardTitle>Time to complete ID check</CardTitle>
             <CardDescription>
@@ -200,13 +211,36 @@ function FunnelDashboard({ m }: { m: FunnelMetrics }) {
             <BarChart
               categories={m.timeToVerify.buckets.map((b) => b.label)}
               series={[{ label: "Leads", color: STAGE_COLORS[2], values: m.timeToVerify.buckets.map((b) => b.count) }]}
+              height={170}
             />
+          </CardContent>
+        </Card>
+
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>Why leads were rejected</CardTitle>
+            <CardDescription>
+              {m.fubEnriched
+                ? "Of the leads on the waiting list below who Nicole has rejected \u2014 not of every lead ever rejected."
+                : "Needs FUB stages, which are unavailable in this environment."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {!m.fubEnriched ? (
+              <EmptyPanel message="Set FUB_API_KEY to see why leads were rejected." />
+            ) : (
+              <HBarList
+                items={m.rejectionReasons}
+                color={STAGE_COLORS[1]}
+                emptyMessage="Nobody on the waiting list has been rejected."
+              />
+            )}
           </CardContent>
         </Card>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Card size="sm">
           <CardHeader>
             <CardTitle>By source</CardTitle>
             <CardDescription>Where leads come from, and how far they get.</CardDescription>
@@ -216,6 +250,7 @@ function FunnelDashboard({ m }: { m: FunnelMetrics }) {
               <EmptyPanel message="No inquiries in this date range." />
             ) : (
               <Table
+                widths={["40%", "30%", "15%", "15%"]}
                 head={["Source", "People", "Verified", "Booked"]}
                 rows={m.bySource.map((s) => [
                   <span key="s" className="text-sm text-gray-900 dark:text-gray-100">{s.source}</span>,
@@ -228,7 +263,7 @@ function FunnelDashboard({ m }: { m: FunnelMetrics }) {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card size="sm">
           <CardHeader>
             <CardTitle>By property</CardTitle>
             <CardDescription>Which properties draw inquiries but no showings.</CardDescription>
@@ -237,9 +272,10 @@ function FunnelDashboard({ m }: { m: FunnelMetrics }) {
             {m.byProperty.length === 0 ? (
               <EmptyPanel message="No inquiries in this date range." />
             ) : (
-              <div className="max-h-80 overflow-auto">
+              <div className="max-h-64 overflow-auto">
                 <Table
                   stickyHead
+                  widths={["55%", "30%", "15%"]}
                   head={["Property", "People", "Booked"]}
                   rows={m.byProperty.slice(0, 20).map((p) => [
                     <span key="a" className="text-sm text-gray-900 dark:text-gray-100">{p.address}</span>,
@@ -292,14 +328,14 @@ function WaitingOnVerification({ stuck, fubEnriched }: { stuck: FunnelMetrics["s
     return c;
   }, [stuck]);
 
-  const rejectedCount = stuck.filter((s) => s.rejected === true).length;
+  const rejectedCount = stuck.filter((s) => s.category === "rejected").length;
 
   const rows = stuck
     .filter((s) => filter === null || Math.min(Math.max(s.reminders, 0), 4) === filter)
-    // `rejected` is undefined when FUB was not consulted. Hiding on `!== true`
-    // would then hide the whole list; hiding on `=== true` correctly hides
-    // nothing until we actually know.
-    .filter((s) => !hideRejected || s.rejected !== true);
+    // `category` is undefined when FUB was not consulted or a lookup failed.
+    // Hiding on `!== "rejected"` would then hide the whole list; hiding on
+    // `=== "rejected"` correctly hides nothing until we actually know.
+    .filter((s) => !hideRejected || s.category !== "rejected");
 
   const chip = (active: boolean) =>
     `rounded-full border px-2.5 py-1 text-xs transition-colors ${
@@ -345,23 +381,55 @@ function WaitingOnVerification({ stuck, fubEnriched }: { stuck: FunnelMetrics["s
           <EmptyPanel message="No leads have had that many reminders." />
         ) : (
           <div className="max-h-96 overflow-auto">
+            {/*
+              Column order answers "who do I chase next?": the name, then whether
+              they are even chaseable, then the two numbers that say how urgent.
+              Stage and tag are the EVIDENCE behind the pill, so they sit right,
+              to be read on demand rather than scanned.
+            */}
             <Table
               stickyHead
-              head={fubEnriched ? ["Lead", "Status in FUB", "Waiting", "Reminders", ""] : ["Lead", "Waiting", "Reminders", ""]}
+              widths={
+                fubEnriched
+                  ? ["20%", "12%", "9%", "12%", "27%", "14%", "6%"]
+                  : ["46%", "14%", "20%", "20%"]
+              }
+              head={
+                fubEnriched
+                  ? ["Lead", "FUB status", "Waiting", "Reminders", "FUB stage", "Tag", ""]
+                  : ["Lead", "Waiting", "Reminders", ""]
+              }
               rows={rows.map((s) => {
+                const dim = s.category === "rejected" || s.category === "progressed";
                 const cells: React.ReactNode[] = [
-                  <span key="n" className={`text-sm ${s.rejected ? "text-gray-500 dark:text-gray-400" : "text-gray-900 dark:text-gray-100"}`}>
+                  <span
+                    key="n"
+                    className={`block truncate text-sm ${dim ? "text-gray-500 dark:text-gray-400" : "text-gray-900 dark:text-gray-100"}`}
+                    title={s.name}
+                  >
                     {s.name}
                   </span>,
                 ];
-                if (fubEnriched) cells.push(<LeadStatus key="st" lead={s} />);
+                if (fubEnriched) cells.push(<StatusPill key="st" category={s.category} />);
                 cells.push(
                   <span key="d" className="tabular-nums text-sm text-gray-600 dark:text-gray-300">
                     {s.daysWaiting < 0 ? "—" : `${s.daysWaiting}d`}
                   </span>,
                   <span key="r" className="tabular-nums text-sm text-gray-600 dark:text-gray-300">
                     {s.reminders} of 4
-                  </span>,
+                  </span>
+                );
+                if (fubEnriched) {
+                  cells.push(
+                    <span key="sg" className="block truncate text-xs text-gray-600 dark:text-gray-300" title={s.stage || ""}>
+                      {s.stage || "—"}
+                    </span>,
+                    <span key="tg" className="block truncate text-xs text-gray-500 dark:text-gray-400" title={s.trashTag || ""}>
+                      {s.trashTag || "—"}
+                    </span>
+                  );
+                }
+                cells.push(
                   s.fubUrl ? (
                     <a key="l" href={s.fubUrl} target="_blank" rel="noreferrer"
                       className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline dark:text-blue-400">
@@ -380,31 +448,38 @@ function WaitingOnVerification({ stuck, fubEnriched }: { stuck: FunnelMetrics["s
 }
 
 /**
- * A lead's current position in FUB: the literal stage, plus a Rejected badge
- * when Nicole has trashed or tagged them.
+ * The four states a waiting lead can be in, and why it is not two.
  *
- * The stage is shown verbatim because it is a FACT, and the badge is derived
- * from only two things — one of her three trash tags, or a trash-family stage.
- * Anything subtler (the 90/365-day expiry windows, the tag precedence order)
- * belongs to the n8n gate and is deliberately not reproduced here; see
- * `src/lib/fub/client.ts`.
+ * "Rejected or Active" was the obvious split and it is wrong in both
+ * directions. A lead in `PM Lead Contact Made` is a property-management
+ * contact, not a rental prospect being ignored — calling them Active puts a
+ * non-tenant on a tenant chase list. Worse, a lead can be HOUSED without ever
+ * completing verification: the estate records Cheyla Zinck (2726) as
+ * `Tenants Awaiting Move In` with the standing note "housed. Do not contact."
+ * Labelling her Active invites precisely the contact that note forbids.
  *
- * `rejected === undefined` means the lookup did not resolve, which is rendered
- * as a dash. Never as "not rejected".
+ * So: Rejected, Progressed (moved forward, stop chasing), Active (still in an
+ * `allowed_stages` stage the automation works), and Out of scope.
+ *
+ * A fifth case is deliberately NOT a category: a lead whose FUB lookup failed
+ * has no `category` at all and renders as a dash. Unknown must look like
+ * unknown, never like a verdict.
  */
-function LeadStatus({ lead }: { lead: FunnelMetrics["stuck"][number] }) {
-  if (lead.rejected === undefined) {
+const STATUS_PILL: Record<string, { label: string; className: string }> = {
+  rejected: { label: "Rejected", className: "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300" },
+  progressed: { label: "Progressed", className: "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300" },
+  active: { label: "Active", className: "bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300" },
+  other: { label: "Out of scope", className: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300" },
+};
+
+function StatusPill({ category }: { category?: string }) {
+  if (!category) {
     return <span className="text-xs text-gray-400" title="Could not be looked up in FUB">—</span>;
   }
+  const pill = STATUS_PILL[category] ?? STATUS_PILL.other;
   return (
-    <span className="flex flex-wrap items-center gap-1.5">
-      {lead.rejected && (
-        <span className="rounded-full bg-red-50 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-950 dark:text-red-300">
-          Rejected
-        </span>
-      )}
-      <span className="text-xs text-gray-600 dark:text-gray-300">{lead.stage || "—"}</span>
-      {lead.trashTag && <span className="text-xs text-gray-400">· {lead.trashTag}</span>}
+    <span className={`inline-block whitespace-nowrap rounded-full px-1.5 py-0.5 text-xs font-medium ${pill.className}`}>
+      {pill.label}
     </span>
   );
 }
@@ -450,9 +525,31 @@ function DataQuality({ m }: { m: FunnelMetrics }) {
  * visibly underneath it, and the bottom rule has to move onto the `th`: a
  * border set on a sticky `tr` does not travel with it.
  */
-function Table({ head, rows, stickyHead = false }: { head: string[]; rows: React.ReactNode[][]; stickyHead?: boolean }) {
+function Table({
+  head,
+  rows,
+  stickyHead = false,
+  widths,
+}: {
+  head: string[];
+  rows: React.ReactNode[][];
+  stickyHead?: boolean;
+  /**
+   * Explicit column widths. Without them the browser sizes columns from the
+   * CONTENT of the rows currently rendered, so every filter change reflows the
+   * whole table -- the longest stage name in the visible set decides where every
+   * other column sits. Fixed widths make a filter change swap rows and nothing
+   * else.
+   */
+  widths?: string[];
+}) {
   return (
-    <table className="w-full">
+    <table className={`w-full ${widths ? "table-fixed" : ""}`}>
+      {widths && (
+        <colgroup>
+          {widths.map((w, i) => <col key={i} style={{ width: w }} />)}
+        </colgroup>
+      )}
       <thead className={stickyHead ? "sticky top-0 z-10 bg-card" : undefined}>
         <tr className={stickyHead ? undefined : "border-b border-gray-200 dark:border-gray-700"}>
           {head.map((h, i) => (
@@ -470,7 +567,7 @@ function Table({ head, rows, stickyHead = false }: { head: string[]; rows: React
       <tbody>
         {rows.map((r, i) => (
           <tr key={i} className="border-b border-gray-100 last:border-0 dark:border-gray-800">
-            {r.map((cell, j) => <td key={j} className="py-2 pr-3">{cell}</td>)}
+            {r.map((cell, j) => <td key={j} className="py-2 pr-3 align-middle">{cell}</td>)}
           </tr>
         ))}
       </tbody>

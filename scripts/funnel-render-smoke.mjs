@@ -44,7 +44,7 @@ const ok = (l, c, d = "") => { if (c) { pass++; return; } fails.push(`${l}${d ? 
 const HARNESS = `
 import { renderToStaticMarkup } from "react-dom/server";
 import * as React from "react";
-import { FunnelChart, TrendChart, BarChart, InlineBar } from "./charts";
+import { FunnelChart, TrendChart, BarChart, HBarList, InlineBar } from "./charts";
 
 const out = {};
 const render = (name, el) => { try { out[name] = renderToStaticMarkup(el); } catch (e) { out[name] = "THREW: " + e.message; } };
@@ -70,6 +70,12 @@ render("bar_single", React.createElement(BarChart, { categories: ["only"], serie
 render("bar_two_series", React.createElement(BarChart, { categories: ["a", "b", "c", "d", "e"], series: [{ label: "x", color: "red", values: [5, 3, 0, 9, 1] }, { label: "y", color: "blue", values: [2, 0, 0, 4, 1] }] }));
 render("bar_outlier", React.createElement(BarChart, { categories: ["a", "b"], series: [{ label: "x", color: "red", values: [100000, 1] }] }));
 render("bar_missing_values", React.createElement(BarChart, { categories: ["a", "b", "c"], series: [{ label: "x", color: "red", values: [1] }] }));
+
+render("hbar_empty", React.createElement(HBarList, { items: [], color: "red", emptyMessage: "none" }));
+render("hbar_allzero", React.createElement(HBarList, { items: [{ label: "a", count: 0 }], color: "red", emptyMessage: "none" }));
+render("hbar_single", React.createElement(HBarList, { items: [{ label: "only", count: 7 }], color: "red", emptyMessage: "none" }));
+render("hbar_outlier", React.createElement(HBarList, { items: [{ label: "big", count: 100000 }, { label: "tiny", count: 1 }], color: "red", emptyMessage: "none" }));
+render("hbar_longlabel", React.createElement(HBarList, { items: [{ label: "Moved to Cold Rental Lead 1 month Hold, untagged", count: 3 }, { label: "No Response Trash", count: 9 }], color: "red", emptyMessage: "none" }));
 
 render("inlinebar_zeromax", React.createElement(InlineBar, { value: 0, max: 0, color: "red" }));
 render("inlinebar_normal", React.createElement(InlineBar, { value: 3, max: 10, color: "red" }));

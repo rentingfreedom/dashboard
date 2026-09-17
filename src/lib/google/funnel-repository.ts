@@ -16,6 +16,7 @@ const VERIFICATIONS = "Identity_Verifications";
 const BOOKINGS = "Cal Bookings";
 const PROPERTIES = "Properties";
 const SNAPSHOTS = "Funnel_Snapshots";
+const SETTINGS = "Settings";
 
 /**
  * Short server-side cache over the raw tab reads.
@@ -38,6 +39,8 @@ interface RawTabs {
   bookings: BookingRow[];
   properties: PropertyRow[];
   snapshots: SnapshotRow[];
+  /** The live `allowed_stages` value, split and trimmed. Empty means "allow all". */
+  allowedStages: string[];
   fetchedAt: number;
 }
 
@@ -72,13 +75,37 @@ async function readSnapshots(): Promise<SnapshotRow[]> {
   }
 }
 
+/**
+ * `allowed_stages` decides which waiting leads read as "Active".
+ *
+ * Read live rather than hardcoded. Several n8n nodes hold their own frozen copy
+ * and carry a standing "update this by hand if production changes" warning;
+ * that warning has been a recurring maintenance trap, and there is no reason to
+ * add another copy when this module is already reading the spreadsheet.
+ *
+ * Unreadable degrades to an empty list, which means "allow everything" — the
+ * same semantics the gate gives a missing Settings row, and the direction that
+ * over-reports Active rather than silently marking live leads out of scope.
+ */
+async function readAllowedStages(): Promise<string[]> {
+  try {
+    const objs = await objectsOf(SETTINGS);
+    const row = objs.find((o) => String(o.key ?? "").trim() === "allowed_stages");
+    return String(row?.value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  } catch (err) {
+    console.warn("[funnel] Settings unavailable, treating allowed_stages as empty:", err instanceof Error ? err.message : err);
+    return [];
+  }
+}
+
 async function fetchTabs(): Promise<RawTabs> {
-  const [inqObjs, verObjs, bookObjs, propObjs, snapshots] = await Promise.all([
+  const [inqObjs, verObjs, bookObjs, propObjs, snapshots, allowedStages] = await Promise.all([
     objectsOf(INQUIRIES),
     objectsOf(VERIFICATIONS),
     objectsOf(BOOKINGS),
     objectsOf(PROPERTIES),
     readSnapshots(),
+    readAllowedStages(),
   ]);
 
   return {
@@ -93,6 +120,7 @@ async function fetchTabs(): Promise<RawTabs> {
     ),
     properties: propObjs.map((o) => pick<PropertyRow>(o, ["property_key", "cal_event_type_id", "street_address"])),
     snapshots,
+    allowedStages,
     fetchedAt: Date.now(),
   };
 }
@@ -116,6 +144,16 @@ export interface FunnelResult extends FunnelMetrics {
    * silently implying nobody is rejected.
    */
   fubEnriched: boolean;
+  /**
+   * Why the rejected leads ON THE WAITING LIST were rejected.
+   *
+   * Scoped to that list on purpose, and the page says so. Widening it to every
+   * lead in the funnel would mean a FUB lookup for the whole population rather
+   * than the ~50 already being fetched, and would fold in people who were
+   * rejected long AFTER converting — which is a different question from "why
+   * did these leads not convert".
+   */
+  rejectionReasons: { label: string; count: number }[];
 }
 
 /**
@@ -131,6 +169,7 @@ const fubCache = new Map<string, { status: FubLeadStatus; at: number }>();
 
 async function enrichFromFub(
   stuck: FunnelMetrics["stuck"],
+  allowedStages: string[],
   force: boolean
 ): Promise<{ stuck: FunnelMetrics["stuck"]; enriched: boolean }> {
   if (!fubConfigured() || stuck.length === 0) return { stuck, enriched: false };
@@ -143,7 +182,7 @@ async function enrichFromFub(
   });
 
   if (stale.length) {
-    const fresh = await fetchLeadStatuses(stale);
+    const fresh = await fetchLeadStatuses(stale, allowedStages);
     for (const [id, status] of fresh) fubCache.set(id, { status, at: now });
   }
 
@@ -153,10 +192,37 @@ async function enrichFromFub(
     stuck: stuck.map((s) => {
       const hit = fubCache.get(s.personId);
       if (!hit) return s;
-      return { ...s, stage: hit.status.stage, trashTag: hit.status.trashTag, rejected: hit.status.rejected };
+      return {
+        ...s,
+        stage: hit.status.stage,
+        trashTag: hit.status.trashTag,
+        rejected: hit.status.rejected,
+        category: hit.status.category,
+      };
     }),
     enriched: true,
   };
+}
+
+/**
+ * Group the rejected waiting leads by WHY.
+ *
+ * A rejection with no tag is its own bucket rather than being dropped: those
+ * are leads moved to a trash-family stage without one of Nicole's three tags,
+ * which is a real and distinct case (seen live — Sophie Rice, Patricia Pettus,
+ * both sitting in `Trash` untagged). Folding them into a tag would invent a
+ * reason; omitting them would make the bars not add up to the badge count.
+ */
+function rejectionBreakdown(stuck: FunnelMetrics["stuck"]): { label: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const s of stuck) {
+    if (s.category !== "rejected") continue;
+    const label = s.trashTag ?? (s.stage ? `Moved to ${s.stage}, untagged` : "Rejected, reason unrecorded");
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([label, count]) => ({ label, count }))
+    .sort((a, b) => b.count - a.count);
 }
 
 export async function getFunnelMetrics(opts: { from?: string; to?: string; force?: boolean } = {}): Promise<FunnelResult> {
@@ -176,14 +242,20 @@ export async function getFunnelMetrics(opts: { from?: string; to?: string; force
   let stuck = metrics.stuck;
   let fubEnriched = false;
   try {
-    const r = await enrichFromFub(metrics.stuck, opts.force ?? false);
+    const r = await enrichFromFub(metrics.stuck, tabs.allowedStages, opts.force ?? false);
     stuck = r.stuck;
     fubEnriched = r.enriched;
   } catch (err) {
     console.warn("[funnel] FUB enrichment failed, continuing without stages:", err instanceof Error ? err.message : err);
   }
 
-  return { ...metrics, stuck, cachedAt: new Date(tabs.fetchedAt).toISOString(), fubEnriched };
+  return {
+    ...metrics,
+    stuck,
+    cachedAt: new Date(tabs.fetchedAt).toISOString(),
+    fubEnriched,
+    rejectionReasons: rejectionBreakdown(stuck),
+  };
 }
 
 /** Exposed for the daily snapshot script, which wants today's numbers only. */
