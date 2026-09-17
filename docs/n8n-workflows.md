@@ -51,7 +51,7 @@ workflows should read this file first.
 | `TGGhSkTSZGYPrZo9` | New Property → Provision | Sheets `rowAdded` poll (**every 5 min** since 2026-09-01) → cal.com event type + Google resource. |
 | `zvwMJSOZBwqVM8Lo` | Automation Failure Alerts | **Error Trigger.** Named as `settings.errorWorkflow` by all 17 active workflows. SMS to Nicole + Andrew on any failed execution, throttled. **ACTIVE — and it must be.** `n8n/error-alert-workflow.json`. |
 | `PKdaOsoHatbuRTfZ` | Missed Access Code Sweep | Hourly. Reconciles Cal Bookings -> Showings and texts staff when a showing has, or will have, no door code. **ACTIVE since 2026-09-15.** `n8n/missed-code-sweep.json`. |
-| `xf660PmGgySg5pWY` | Funnel Daily Snapshot | Daily 23:30 UTC. One POST to the dashboard, which appends a `Funnel_Snapshots` row. Computes NOTHING itself and reads no Sheet. **INACTIVE — needs `FUNNEL_SNAPSHOT_SECRET` in Vercel *and* a dashboard deploy first.** |
+| `87TEvHQzAv5rnuMT` | Funnel Daily Snapshot | Daily 23:30 UTC. One POST to the dashboard, which appends a `Funnel_Snapshots` row. Computes NOTHING itself and reads no Sheet. **INACTIVE — needs a dashboard deploy first.** |
 | `W6PoSadMxnoHwxhG` | Delete Property | Sheets `anyUpdate` poll (**every 5 min**) on the SAME tab → filter `active == "Delete"` → deletes the cal.com event type, the Google resource, and the sheet row. **ACTIVE.** |
 
 ### Funnel Daily Snapshot — `xf660PmGgySg5pWY` (2026-09-16, INACTIVE)
@@ -71,16 +71,24 @@ trend chart and the record of whether the item 4 experiment moved anything.
 > Useful side effect: this workflow **reads no Google Sheet**, so it adds nothing to
 > the quota bucket.
 
-**Two prerequisites before activating, neither of which the builder can satisfy:**
+**Auth reuses the EXISTING n8n→dashboard mechanism — do not invent a second one.**
+Header `x-internal-api-key`, credential **`RF Dashboard Internal API`**
+(`LstfkvTtbGOIQdtO`), checked against **`IDENTITY_SESSION_API_KEY`**, exactly as
+`/api/identity/create-session` does from two ACTIVE workflows. No new secret and no
+new credential are needed.
 
-1. **`FUNNEL_SNAPSHOT_SECRET` in the Vercel project** *and* the same value in n8n. The
-   route refuses every request when the variable is missing rather than defaulting to
-   open — a cron that silently stops is a far smaller problem than a public write
-   endpoint.
-2. **A dashboard deploy**, so the route exists at all. Deploys for this repo are
-   triggered by the client from vercel.com, never from this machine (`CLAUDE.md`).
+> **A first pass at this invented `FUNNEL_SNAPSHOT_SECRET` + `x-snapshot-secret` and
+> read it from `$env`.** Three things were wrong with that, and each fails silently:
+> the estate already had an internal-API scheme; **no workflow in this instance has
+> ever used `$env`**, so it is unproven here and resolves to `undefined` if
+> `N8N_BLOCK_ENV_ACCESS_IN_NODE` is set; and the route was **not listed in
+> `SERVER_TO_SERVER_PATHS` in `src/proxy.ts`**, so Clerk would have 307'd the cron to
+> `/sign-in` before its own auth check ever ran. **Any new server-to-server route must
+> be added to that list**, or it fails in a way that looks nothing like an auth bug.
 
-Activating before both are true just produces a nightly failure alert.
+**One prerequisite before activating:** a **dashboard deploy**, so the route exists.
+Deploys for this repo are triggered by the client from vercel.com, never from this
+machine (`CLAUDE.md`).
 
 `POST` returns 200 for **both** `appended` and `already_captured` — the endpoint is
 idempotent per calendar date, so a retry or a double fire is a success and must not

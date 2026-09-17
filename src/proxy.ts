@@ -9,6 +9,10 @@ const PUBLIC_PATHS = ["/sign-in", "/sign-up"];
 const SERVER_TO_SERVER_PATHS = [
   "/api/identity/create-session",
   "/api/webhooks/stripe-identity",
+  // Daily funnel snapshot, called by the n8n cron. Without this entry Clerk
+  // redirects the cron to /sign-in with a 307 and the route's own shared-secret
+  // check never runs — a nightly failure that looks nothing like an auth bug.
+  "/api/metrics/funnel/snapshot",
 ];
 
 // Role/permission checks happen close to the resource (page and route handler

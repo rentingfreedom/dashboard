@@ -22,16 +22,20 @@
  * this workflow reads NO Google Sheet, so it cannot contribute to the quota
  * pressure that has caused most of the estate's real incidents.
  *
- * ── Two hard prerequisites, neither of which this script can satisfy ─────
- * 1. `FUNNEL_SNAPSHOT_SECRET` must be set in the **Vercel project**, and the
- *    same value in the n8n credential. The route refuses every request when the
- *    variable is missing rather than defaulting to open.
- * 2. The route only exists once the dashboard is **deployed**. Deploys for this
- *    repo are triggered by the client from vercel.com, not from this machine —
- *    see CLAUDE.md. Until then the cron would 404 nightly.
+ * ── Auth reuses what already exists ──────────────────────────────────────
+ * Header `x-internal-api-key` via the credential "RF Dashboard Internal API"
+ * (`LstfkvTtbGOIQdtO`), checked against `IDENTITY_SESSION_API_KEY` — the exact
+ * mechanism `/api/identity/create-session` uses from two ACTIVE workflows. No
+ * new secret, no new credential, and no `$env` (which no workflow in this
+ * instance has ever used, so it is unproven here).
  *
- * Hence it is created INACTIVE. Activating it before both are true produces a
- * nightly failure alert and nothing else.
+ * ── One prerequisite this script cannot satisfy ──────────────────────────
+ * The route only exists once the dashboard is **deployed**, and it must be
+ * listed in `SERVER_TO_SERVER_PATHS` in `src/proxy.ts` or Clerk 307s the cron
+ * to /sign-in before its auth check runs. Deploys for this repo are triggered
+ * by the client from vercel.com, not from this machine — see CLAUDE.md.
+ *
+ * Hence it is created INACTIVE.
  *
  * ── Timing ───────────────────────────────────────────────────────────────
  * 23:30 UTC, which is 7:30pm ET in winter and 6:30pm in summer. The row is a
@@ -102,12 +106,16 @@ const workflow = {
       parameters: {
         method: "POST",
         url: `${DASHBOARD}/api/metrics/funnel/snapshot`,
-        sendHeaders: true,
-        headerParameters: {
-          parameters: [{ name: "x-snapshot-secret", value: "={{ $env.FUNNEL_SNAPSHOT_SECRET }}" }],
-        },
+        // The ESTABLISHED n8n->dashboard mechanism: the same header, key and
+        // credential that /api/identity/create-session already uses from two
+        // active workflows. Not a second scheme, and not $env — no workflow in
+        // this instance has ever used $env, so it is an unproven path here and
+        // would resolve to undefined if env access is blocked.
+        authentication: "genericCredentialType",
+        genericAuthType: "httpHeaderAuth",
         options: { timeout: 60000 },
       },
+      credentials: { httpHeaderAuth: { id: "LstfkvTtbGOIQdtO", name: "RF Dashboard Internal API" } },
       // Continue so a 401/503 body reaches Check Result and is reported with
       // its message, rather than the node dying on a bare status code.
       onError: "continueRegularOutput",
@@ -148,12 +156,11 @@ async function main() {
   console.log(`\nWould create "${NAME}", INACTIVE:`);
   console.log("  Daily 23:30 UTC -> POST Funnel Snapshot -> Check Result");
   console.log(`  POST ${DASHBOARD}/api/metrics/funnel/snapshot`);
-  console.log(`  header x-snapshot-secret from the n8n env var FUNNEL_SNAPSHOT_SECRET`);
+  console.log(`  auth: httpHeaderAuth credential "RF Dashboard Internal API" (LstfkvTtbGOIQdtO)`);
   console.log(`  errorWorkflow ${ERROR_WF} attached from creation`);
-  console.log("\n  BEFORE ACTIVATING, both must be true:");
-  console.log("    1. FUNNEL_SNAPSHOT_SECRET set in the Vercel project AND in n8n");
-  console.log("    2. the dashboard redeployed, so /api/metrics/funnel/snapshot exists");
-  console.log("  Activating earlier just produces a nightly failure alert.");
+  console.log(`\n  BEFORE ACTIVATING: redeploy the dashboard, so the route exists`);
+  console.log("  AND is exempted from Clerk in src/proxy.ts. No new secret is needed —");
+  console.log("  IDENTITY_SESSION_API_KEY is already set and already in use.");
 
   if (!APPLY) { console.log("\nDry run — nothing created. Re-run with --apply."); return done(0); }
 
