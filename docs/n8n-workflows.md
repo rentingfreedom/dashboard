@@ -51,10 +51,15 @@ workflows should read this file first.
 | `TGGhSkTSZGYPrZo9` | New Property → Provision | Sheets `rowAdded` poll (**every 5 min** since 2026-09-01) → cal.com event type + Google resource. |
 | `zvwMJSOZBwqVM8Lo` | Automation Failure Alerts | **Error Trigger.** Named as `settings.errorWorkflow` by all 17 active workflows. SMS to Nicole + Andrew on any failed execution, throttled. **ACTIVE — and it must be.** `n8n/error-alert-workflow.json`. |
 | `PKdaOsoHatbuRTfZ` | Missed Access Code Sweep | Hourly. Reconciles Cal Bookings -> Showings and texts staff when a showing has, or will have, no door code. **ACTIVE since 2026-09-15.** `n8n/missed-code-sweep.json`. |
-| `87TEvHQzAv5rnuMT` | Funnel Daily Snapshot | Daily 23:30 UTC. One POST to the dashboard, which appends a `Funnel_Snapshots` row. Computes NOTHING itself and reads no Sheet. **INACTIVE — needs a dashboard deploy first.** |
+| `87TEvHQzAv5rnuMT` | Funnel Daily Snapshot | Daily 23:30 UTC. One POST to the dashboard, which appends a `Funnel_Snapshots` row. Computes NOTHING itself and reads no Sheet. **ACTIVE since 2026-09-17.** |
 | `W6PoSadMxnoHwxhG` | Delete Property | Sheets `anyUpdate` poll (**every 5 min**) on the SAME tab → filter `active == "Delete"` → deletes the cal.com event type, the Google resource, and the sheet row. **ACTIVE.** |
 
-### Funnel Daily Snapshot — `xf660PmGgySg5pWY` (2026-09-16, INACTIVE)
+### Funnel Daily Snapshot — `87TEvHQzAv5rnuMT` (2026-09-16, ACTIVE since 2026-09-17)
+
+> This section named `xf660PmGgySg5pWY` until 2026-09-17. **That id 404s** — it has
+> never existed in this instance. The workflow is `87TEvHQzAv5rnuMT`, as the table
+> above always said. A wrong id in this file is worse than no id, because it sends
+> the next session hunting for a workflow rather than reading the one that runs.
 
 One HTTP POST a day to `dashboard.rentingfreedom.com/api/metrics/funnel/snapshot`,
 which appends one `Funnel_Snapshots` row. That row set is the Lead funnel page's
@@ -86,9 +91,24 @@ new credential are needed.
 > `/sign-in` before its own auth check ever ran. **Any new server-to-server route must
 > be added to that list**, or it fails in a way that looks nothing like an auth bug.
 
-**One prerequisite before activating:** a **dashboard deploy**, so the route exists.
+~~**One prerequisite before activating:** a dashboard deploy, so the route exists.~~
+**DONE 2026-09-17.** `master` was fast-forwarded 40 commits and the client deployed.
 Deploys for this repo are triggered by the client from vercel.com, never from this
 machine (`CLAUDE.md`).
+
+Proved live before flipping it on, in this order — each step checks the thing the
+next one assumes:
+
+| Check | Result |
+|---|---|
+| `POST` with a bad key | **401**, not a 307 — so the route exists AND `SERVER_TO_SERVER_PATHS` covers it |
+| `POST` with the real key | `appended`, row `78 / 67 / 23 / 10` |
+| `POST` again, same day | `already_captured`, still 2 rows — the idempotency the unattended cron rests on |
+| re-fetch after activate | `active: true`, `errorWorkflow` still `zvwMJSOZBwqVM8Lo` |
+
+> The 401 is the load-bearing one. A 307 there would have meant Clerk was redirecting
+> the cron to `/sign-in` before the route's own auth ran — the failure mode recorded
+> below, which looks nothing like an auth bug.
 
 `POST` returns 200 for **both** `appended` and `already_captured` — the endpoint is
 idempotent per calendar date, so a retry or a double fire is a success and must not
