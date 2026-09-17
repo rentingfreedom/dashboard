@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { RefreshCw, ExternalLink, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { NativeSelect } from "@/components/ui/native-select";
 import { toast } from "sonner";
@@ -144,6 +144,39 @@ export default function FunnelPage() {
   );
 }
 
+/**
+ * A panel title whose explanation is on hover rather than always on screen.
+ *
+ * The descriptions were costing two or three lines under every heading, which
+ * on a seven-panel page is a whole screen of prose nobody re-reads after the
+ * first visit.
+ *
+ * The tradeoff is real and worth naming: a caveat nobody hovers is a caveat
+ * nobody reads. So anything that changes how a NUMBER should be read stays in
+ * the title itself rather than moving in here — "Why waiting leads were
+ * rejected" carries its own scope, instead of relying on a subtitle to say the
+ * chart is not about every lead ever rejected.
+ *
+ * `title` gives the native tooltip; the same text is repeated in a screen-reader
+ * span, because a `title` attribute is not reliably announced and is invisible
+ * to keyboard users. The dotted underline is the affordance — without one,
+ * nobody knows there is anything to hover.
+ */
+function PanelTitle({ title, hint }: { title: string; hint: string }) {
+  return (
+    <CardTitle className="flex items-center gap-1.5">
+      <span
+        title={hint}
+        className="cursor-help decoration-dotted underline-offset-4 hover:underline"
+      >
+        {title}
+      </span>
+      <Info className="h-3.5 w-3.5 shrink-0 text-gray-400" aria-hidden />
+      <span className="sr-only">{hint}</span>
+    </CardTitle>
+  );
+}
+
 function FunnelDashboard({ m }: { m: FunnelMetrics }) {
   const maxProp = Math.max(1, ...m.byProperty.map((p) => p.people));
   const maxSource = Math.max(1, ...m.bySource.map((s) => s.people));
@@ -159,10 +192,10 @@ function FunnelDashboard({ m }: { m: FunnelMetrics }) {
       <div className="grid gap-4 xl:grid-cols-2">
         <Card size="sm">
           <CardHeader>
-            <CardTitle>Funnel</CardTitle>
-            <CardDescription>
-              Distinct people, deduplicated. Percentages are the share continuing from the previous stage.
-            </CardDescription>
+            <PanelTitle
+              title="Funnel"
+              hint="Distinct people, deduplicated. Percentages are the share continuing from the previous stage."
+            />
           </CardHeader>
           <CardContent>
             <FunnelChart stages={m.stages} biggestDropIndex={m.biggestDropIndex} />
@@ -171,8 +204,10 @@ function FunnelDashboard({ m }: { m: FunnelMetrics }) {
 
         <Card size="sm">
           <CardHeader>
-            <CardTitle>Over time</CardTitle>
-            <CardDescription>One point per daily snapshot. Dashed lines mark ID-verification being switched on or off.</CardDescription>
+            <PanelTitle
+              title="Over time"
+              hint="One point per daily snapshot. Dashed lines mark ID-verification being switched on or off."
+            />
           </CardHeader>
           <CardContent>
             <TrendChart points={m.trend} markers={m.verificationToggleMarkers} height={150} />
@@ -183,8 +218,10 @@ function FunnelDashboard({ m }: { m: FunnelMetrics }) {
       <div className="grid gap-4 xl:grid-cols-3">
         <Card size="sm">
           <CardHeader>
-            <CardTitle>Which nudge converts</CardTitle>
-            <CardDescription>How far each lead got in the reminder sequence, and where they verified.</CardDescription>
+            <PanelTitle
+              title="Which nudge converts"
+              hint="How far each lead got in the reminder sequence, and where they verified."
+            />
           </CardHeader>
           <CardContent>
             <BarChart
@@ -200,12 +237,14 @@ function FunnelDashboard({ m }: { m: FunnelMetrics }) {
 
         <Card size="sm">
           <CardHeader>
-            <CardTitle>Time to complete ID check</CardTitle>
-            <CardDescription>
-              {m.timeToVerify.medianHours === null
-                ? "Hours from the verification SMS going out to Stripe Identity coming back. None completed in this range."
-                : `Hours from the verification SMS going out to Stripe Identity coming back. Median ${m.timeToVerify.medianHours}h across ${m.timeToVerify.n} verified ${m.timeToVerify.n === 1 ? "lead" : "leads"}.`}
-            </CardDescription>
+            <PanelTitle
+              title="Time to complete ID check"
+              hint={
+                m.timeToVerify.medianHours === null
+                  ? "Hours from the verification SMS going out to Stripe Identity coming back. None completed in this range."
+                  : `Hours from the verification SMS going out to Stripe Identity coming back. Median ${m.timeToVerify.medianHours}h across ${m.timeToVerify.n} verified ${m.timeToVerify.n === 1 ? "lead" : "leads"}.`
+              }
+            />
           </CardHeader>
           <CardContent>
             <BarChart
@@ -218,12 +257,14 @@ function FunnelDashboard({ m }: { m: FunnelMetrics }) {
 
         <Card size="sm">
           <CardHeader>
-            <CardTitle>Why leads were rejected</CardTitle>
-            <CardDescription>
-              {m.fubEnriched
-                ? "Of the leads on the waiting list below who Nicole has rejected \u2014 not of every lead ever rejected."
-                : "Needs FUB stages, which are unavailable in this environment."}
-            </CardDescription>
+            <PanelTitle
+              title="Why waiting leads were rejected"
+              hint={
+                m.fubEnriched
+                  ? "Counts only the rejected leads on the waiting list below, not every lead ever rejected. Leads moved to a trash stage without one of the three tags get their own bar."
+                  : "Needs FUB stages, which are unavailable in this environment."
+              }
+            />
           </CardHeader>
           <CardContent>
             {!m.fubEnriched ? (
@@ -242,8 +283,7 @@ function FunnelDashboard({ m }: { m: FunnelMetrics }) {
       <div className="grid gap-4 xl:grid-cols-2">
         <Card size="sm">
           <CardHeader>
-            <CardTitle>By source</CardTitle>
-            <CardDescription>Where leads come from, and how far they get.</CardDescription>
+            <PanelTitle title="By source" hint="Where leads come from, and how far they get." />
           </CardHeader>
           <CardContent>
             {m.bySource.length === 0 ? (
@@ -265,8 +305,7 @@ function FunnelDashboard({ m }: { m: FunnelMetrics }) {
 
         <Card size="sm">
           <CardHeader>
-            <CardTitle>By property</CardTitle>
-            <CardDescription>Which properties draw inquiries but no showings.</CardDescription>
+            <PanelTitle title="By property" hint="Which properties draw inquiries but no showings. Top 20 by people." />
           </CardHeader>
           <CardContent>
             {m.byProperty.length === 0 ? (
@@ -347,12 +386,14 @@ function WaitingOnVerification({ stuck, fubEnriched }: { stuck: FunnelMetrics["s
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Waiting on verification ({stuck.length})</CardTitle>
-        <CardDescription>
-          Leads sent a verification link who have not completed it. Longest wait first. A count below 4 of 4 on an
-          older lead means the reminders stopped — usually because the lead was trashed, tagged, or moved out of a
-          tenant stage.
-        </CardDescription>
+        <PanelTitle
+          title={`Waiting on verification (${stuck.length})`}
+          hint={
+            "Leads sent a verification link who have not completed it. Longest wait first. A count below 4 of 4 on an " +
+            "older lead means the reminders stopped, usually because the lead was trashed, tagged, or moved out of a " +
+            "tenant stage."
+          }
+        />
       </CardHeader>
       <CardContent>
         <div className="mb-3 flex flex-wrap items-center gap-1.5">
