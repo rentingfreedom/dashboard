@@ -9,6 +9,8 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { toast } from "sonner";
 import { fetchJson } from "@/lib/fetch-json";
 import { FunnelChart, TrendChart, BarChart, HBarList, InlineBar, EmptyPanel, STAGE_COLORS } from "@/components/funnel/charts";
+import { VerificationToggle } from "@/components/funnel/verification-toggle";
+import { useRole } from "@/lib/auth/use-role";
 
 interface FunnelMetrics {
   range: { from: string; to: string | null };
@@ -69,6 +71,7 @@ export default function FunnelPage() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [range, setRange] = useState("launch");
+  const { isAdmin } = useRole();
 
   /**
    * Whether anything has ever loaded. Only the FIRST load shows a skeleton;
@@ -113,6 +116,8 @@ export default function FunnelPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <VerificationToggle isAdmin={isAdmin} />
+            <div className="h-5 w-px bg-gray-200 dark:bg-gray-700" aria-hidden />
             <NativeSelect value={range} onChange={(e) => setRange(e.target.value)} className="h-8 w-40 text-sm">
               {RANGES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
             </NativeSelect>

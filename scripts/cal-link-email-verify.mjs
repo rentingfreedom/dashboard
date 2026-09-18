@@ -75,16 +75,28 @@ if (!buildNode) {
     return fn({ all: () => items.map((json) => ({ json })) }, { log: () => {} });
   };
 
+  // CAL_LINK_EMAIL_COPY_MARKER: the body is now the SMS text that
+  // Check & Build Message already rendered, so these fixtures carry `message`
+  // the way the real sweep does. The apply link reaches the reader through that
+  // text — it lives in `sms_template` — rather than through a separate line
+  // built here from `apply_link`, which Check & Build Message never emitted.
+  const smsFor = (addr, link, extra) =>
+    "Hello Jane, Thanks for either applying or requesting a showing of our property.  " +
+    "You can schedule a self guided showing for " + addr + " via the link below.\n" +
+    "Self Guided Tour: " + link + (extra || "");
+
   const two = run([
     {
       person_id: "2700", person_name: "Jane Q Smith", email: "jane@example.com",
       property_address: "130 Sandtrap Rd", enrichedCalLink: "https://cal.com/rf/a?x=1",
-      event_id: "e1", apply_link: "https://apply.example.com",
+      event_id: "e1",
+      message: smsFor("130 Sandtrap Rd", "https://cal.com/rf/a?x=1", "\nApply: https://apply.example.com"),
     },
     {
       person_id: "2700", person_name: "Jane Q Smith", email: "jane@example.com",
       property_address: "102 Braeford", enrichedCalLink: "https://cal.com/rf/b?x=2",
       event_id: "e2",
+      message: smsFor("102 Braeford", "https://cal.com/rf/b?x=2"),
     },
   ]);
   ok("two properties -> two emails", two.length, 2);
@@ -94,9 +106,21 @@ if (!buildNode) {
   ok("email 2 carries its OWN link", two[1].json.cal_link, "https://cal.com/rf/b?x=2");
   okTrue("distinct links (gotcha 11 regression)", two[0].json.cal_link !== two[1].json.cal_link);
   ok("recipient", two[0].json.to, "jane@example.com");
-  ok("first name only in greeting", two[0].json.message.split("\n")[0], "Hi Jane,");
-  okTrue("apply link included when present", two[0].json.message.includes("https://apply.example.com"));
-  okTrue("apply link omitted when absent", !two[1].json.message.includes("Ready to apply"));
+  // The body IS the SMS, so the greeting is the template's, not a second one
+  // composed here. A body opening "Hi Jane," again would mean the email had
+  // gone back to writing its own copy, which is what drifted into a falsehood.
+  okTrue("body opens with the SMS text", two[0].json.message.startsWith("Hello Jane, Thanks for either applying"));
+  okTrue("no second greeting bolted on", !two[0].json.message.startsWith("Hi Jane,"));
+  okTrue("apply link reaches the reader (via the SMS text)", two[0].json.message.includes("https://apply.example.com"));
+  okTrue("no apply line invented when the SMS has none", !two[1].json.message.includes("Ready to apply"));
+  ok("sign-off retained", two[0].json.message.trim().split("\n").pop(), "— Renting Freedom");
+
+  // THE ASSERTION THIS FIX EXISTS FOR. The old body opened "Thanks for verifying
+  // your ID", which is false for every lead released by turning
+  // identity_verification_enabled off — they are released BECAUSE they never
+  // verified. No path may claim it, the empty-template fallback included.
+  okTrue("never claims the lead verified", !/verif/i.test(two[0].json.message));
+  okTrue("never claims the lead verified (2nd property)", !/verif/i.test(two[1].json.message));
 
   const none = run([{ person_id: "2701", person_name: "No Email", email: "", property_address: "x", enrichedCalLink: "y" }]);
   ok("no address -> no email item (never empty `to`)", none.length, 0);
@@ -108,8 +132,12 @@ if (!buildNode) {
   ok("zillow relay address IS emailed (client decision)", relay.length, 1);
   ok("relay recipient preserved", relay[0].json.to, "abc123@convo.zillow.com");
 
+  // With no SMS text the node falls back to its own minimal copy. That path
+  // must still never mention verification, and still degrade an absent name.
   const missingName = run([{ person_id: "2703", email: "x@y.com", property_address: "z", enrichedCalLink: "l" }]);
-  ok("missing name degrades to 'there'", missingName[0].json.message.split("\n")[0], "Hi there,");
+  ok("fallback: missing name degrades to 'there'", missingName[0].json.message.split("\n")[0], "Hi there,");
+  okTrue("fallback never claims the lead verified", !/verif/i.test(missingName[0].json.message));
+  okTrue("fallback still carries the link", missingName[0].json.message.includes("Schedule your showing: l"));
 
   const fallbackLink = run([{ person_id: "2704", person_name: "A B", email: "x@y.com", property_address: "z", cal_link: "https://raw.link" }]);
   ok("falls back to cal_link when enrichedCalLink absent", fallbackLink[0].json.cal_link, "https://raw.link");

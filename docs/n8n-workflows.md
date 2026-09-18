@@ -990,6 +990,131 @@ genuinely open.
 Test artifacts left in place deliberately: FUB persons 2607/2649/2650, notes
 2549/2653/2654, and the `Rental Applications` rows from those runs.
 
+## ID verification on/off switch — item 4 (2026-09-18, APPLIED; UI not deployed)
+
+One Settings key, `identity_verification_enabled`, decides whether a matched lead
+must pass Stripe Identity before getting their cal link. Created **`TRUE`**, which
+is the pre-existing behaviour written down explicitly.
+
+> **THE DEFAULT IS INVERTED versus every other `*_enabled` key, and must stay that
+> way.** The others read `=== "true"`, so absent means OFF. This one reads
+> `?? "true"` + `!== "false"`, so absent means **verification is REQUIRED**.
+> "Tidying" it to match its neighbours means a lost or blanked Settings row
+> silently stops verifying every lead, with nothing looking broken. `??` guards
+> *absent*, the comparison guards *blank/garbage* — mutations M1 and M1b cover
+> them separately.
+
+**Read in three places, one expression, `VERIFICATION_TOGGLE_MARKER`:**
+
+| Workflow | Node | When OFF |
+|---|---|---|
+| `JDsKrVRHf9TEVj7j` Inquiry flow | `Resolve Inquiry` | the real switch — `send_now` / `needs_gate` route on `isVerified \|\| !required`, so nobody is handed to the gate |
+| `L13GUyrWbjSJwn8p` Identity Gate | `Check Guards` | bails `verification_disabled` |
+| `R3rhuCYEGoBFArBa` Identity Reminders | `Find Due Reminders` | stops chasing leads mid-ladder |
+
+The Gate bail is belt and braces, not redundancy: that gate is also entered by the
+**Result Handler replay** and the `SHEETS_RETRY_MARKER` self-POST, paths the inquiry
+flow does not control.
+
+> **The sweep needs NOTHING and must not acquire it.** `Check & Build Message` bails
+> only on `no_phone`, `trashBlock || stage_not_allowed`, `no_pending_inquiries` and
+> `all_already_sent` — it has never consulted verification. Enforcement lives in the
+> inquiry flow's path choice.
+
+> **The toggle must never become a skeleton key.** With it OFF, `Permanent Trash`,
+> `Denied Credit`, out-of-stage and no-phone all stay blocked. Verifier section C
+> pins this; mutations M5/M6 turn it red.
+
+### Policy stamping — `VERIFICATION_STAMP_MARKER`
+
+`Inquiries.verification_required` records **the policy in force**, not an outcome. A
+row reads `link_sent = true` either way, so after one flip the funnel would compare
+verification rates across two regimes without knowing it.
+
+**The grid was EXACTLY FULL** — 16 allocated, 16 used — so `--setup-column` issues an
+`appendDimension` first, as `cal-booking-reminders-setup.mjs` had to.
+
+> **All THREE append nodes are patched.** `Append Inquiry Row` plus
+> `Retry Append Inquiry Row (2)` and `(3)` — a row recorded on attempt 2 or 3 goes
+> through those, so patching only the first stamps most rows and silently blanks
+> exactly the ones that hit the retry path. Same shape as the `Row Recorded? (N)`
+> wiring lesson.
+
+**No backfill**, deliberately: verification was required continuously since launch,
+so blank means "was required". **Nothing reads the column yet** — it is capture-only
+until the funnel is taught to segment by it.
+
+### Turning it OFF strands people — the release
+
+Their row sits at `link_sent = false` waiting on a Result Handler replay that will
+never come. The dashboard re-POSTs each person's uri to the sweep webhook, the
+`_oneoff-2026-08-31-marchae-repair.mjs` pattern. **It writes nothing** — the rows are
+already `false`, and the sweep marks them sent itself, so it is idempotent.
+
+> **Measured 2026-09-18: 29 leads eligible, 32 held back — and 32 of those are held
+> by the VACANCY check alone.** Without the Cheyla Zinck guard a flip texts 61 people,
+> half of them about houses that are now occupied. The sweep has never checked
+> availability and nothing downstream does.
+
+> **All-or-nothing per person.** The sweep is addressed by PERSON and sends one SMS per
+> unsent row, so a lead with one vacant and one leased property cannot be part-released.
+> Releasing them would deliver both. Such a person is skipped entirely and reported.
+
+> **Pacing is measured, not guessed.** 48h of main-bucket traffic: activity in 21% of
+> minutes, median busy minute 7 requests, p90 15, p99 23, peak 45. Each release costs a
+> sweep execution (~4.6 requests). At 8s that adds ~35/min and lands over 60 on a bad
+> minute — self-inflicted quota failure. **12s** holds it to ~23/min (~46 stacked on
+> p99), so a 29-lead release takes ~6 minutes. That is why it CANNOT run inline in the
+> flip request; it runs in chunks of 3 via `/api/verification/release`, which re-plans
+> and re-checks every precondition on every chunk.
+
+**Turning it back ON leaves existing link-holders alone** — served in good faith, and
+cal.com links are public URLs. **Do NOT add a dispatch-time verification check**; that
+is Proposal Three and is not approved.
+
+### The cal-link email claimed something false — `CAL_LINK_EMAIL_COPY_MARKER`
+
+`Build Cal Link Email` opened *"Thanks for verifying your ID."* Every lead released by
+a flip to OFF is released **precisely because they never verified**, so the first flip
+would have emailed 29 real customers thanking them for something they did not do.
+
+**Fixed by making the body the rendered SMS** (`d.message`, from the `sms_template`
+Settings key) plus the sign-off, rather than re-wording it — two hand-maintained copies
+of one message is what let them diverge. Change the copy in Settings and both channels
+follow. **This changes the email on the normal path too**: a verified lead no longer
+reads that line either.
+
+> Found while reading the node: `d.apply_link` was **never emitted** by
+> `Check & Build Message`, so the old "Ready to apply?" line had never once sent. The
+> apply link is in the SMS template, so it now genuinely appears. An unnamed lead
+> renders "Hello ," — pre-existing in the SMS, and now shared; fix it in the template,
+> not in one channel.
+
+```bash
+node scripts/n8n-add-verification-toggle.mjs [--setup-key --apply] [--apply] [--revert --apply]
+node scripts/verification-toggle-verify.mjs [--js <dir>]     # 34 deployed / 31 offline
+node scripts/verification-toggle-mutations.mjs               # 10 mutations
+node scripts/n8n-add-verification-policy-stamp.mjs [--setup-column --apply] [--apply]
+node scripts/n8n-fix-cal-link-email-copy.mjs [--apply] [--revert --apply]
+node scripts/cal-link-email-verify.mjs                       # 37 assertions
+```
+Backups `n8n/BEFORE-verification-toggle/`, `n8n/BEFORE-verification-policy-stamp/`,
+`n8n/BEFORE-cal-link-email-copy/`. The stamp builder **refuses to apply** without
+`VERIFICATION_TOGGLE_MARKER` present, since it reads `verificationRequired`.
+
+> **`cal-link-email-verify.mjs` was updated in the same change** — it pinned the old
+> apply-link line. The assertion now checks the apply link still reaches the reader via
+> the SMS text, protecting what it was written for rather than being loosened. Its new
+> "never claims the lead verified" assertion was **confirmed non-vacuous** against the
+> pre-fix code in the backup.
+
+> **The dashboard half is UNDEPLOYED and its write paths have never executed.** The
+> toggle lives on `/funnel` (admin-only control, state shown to everyone),
+> `POST /api/settings/key` writes the key and returns the release plan, and
+> `/api/verification/release` does the sends. Neither route is server-to-server —
+> **do not add them to `SERVER_TO_SERVER_PATHS`.** The first flip is the live test,
+> and it messages real customers: run it watched.
+
 ## FUB stage gating
 
 Only leads in the client's two rental smart lists get automated contact. The
@@ -3499,7 +3624,8 @@ write nothing, and touch no n8n state.
 | `identity-reminders-verify.mjs` | **41** — day arithmetic, cap, guards |
 | `rejection-cancel-verify.mjs` | **73** — A-2 both layers, now applied; `--js <dir>` predates that |
 | `cal-booking-notify-verify.mjs` | **48** — B routing, both defects, the connections graph |
-| `cal-link-email-verify.mjs` | **31** — the parallel email branch and its note logging |
+| `cal-link-email-verify.mjs` | **37** — the parallel email branch, its note logging, and that no copy claims the lead verified |
+| `verification-toggle-verify.mjs` | **34** — item 4: the inverted default, routing, and that the switch opens nothing else |
 | `inquiry-alert-verify.mjs` | **36** — all three `Row Recorded?` wirings, fan-out |
 | `missed-code-sweep-verify.mjs` | **49** — the four finding kinds, both windows, dedupe, recipients, graph |
 | `error-workflow-verify.mjs` | **46** — the alarm's structure, throttle, self-exclusion, and that all 16 are attached |
