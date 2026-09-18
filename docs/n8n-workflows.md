@@ -1319,6 +1319,67 @@ shape would pass every behavioural assertion while silently reintroducing it.
 caught by `Already Recorded?` and skipped, so testing the send path needs a
 genuinely new `booking_uid`.
 
+### Consult and walkthrough bookings crashed the Booking Handler — `NON_SHOWING_SKIP_MARKER` (APPLIED 2026-09-18)
+
+Cal.com fires **one** `BOOKING_CREATED` webhook for all three event categories,
+but `gR6FWXMcc08ps8LT` only has a job for a **self-guided showing**. A consult or
+a generic walkthrough reached `Parse Created Booking`, which sets
+`propertyKey = booking.type` — the event **slug** — so `Find Property` looked up
+`45-minute-initial-consult` in Properties, failed, and threw.
+
+Live on executions **33462** (09-04), **34401** (09-05) and **36421** (09-08).
+
+> **Harmless until 2026-09-14, then not.** A consult needs no Showings row and no
+> door code, so dying produced the right outcome by the wrong means. Then the
+> error workflow went live and started texting **Nicole and Andrew on every
+> failed execution** — about twice a week, about nothing. That alarm exists to
+> catch the crashes nobody anticipated; it was built *because* Rita Lewis reached
+> a locked door while the crash sat unread. **An alarm that cries wolf is an
+> alarm that stops being read, and the next Rita is the cost.**
+
+**The fix** classifies on `eventTypeId` in `Parse Created Booking` and returns
+`[]` for the two non-showing categories, so the chain simply never runs.
+`classify()` is **copied verbatim** from `Classify & Build Row` in
+`5LwTZS4dw5qmInL2` — n8n Code nodes cannot import, so it is duplicated on
+purpose and `non-showing-skip-verify.mjs` asserts the two stay byte-identical.
+
+> **Never by title or slug.** Every per-property showing event type is *titled*
+> `"<address> Walk-Through"`, so title matching would classify every showing as a
+> walkthrough — the one send that must never be skipped. Mutation M5 exists
+> solely to keep that door shut.
+
+**Why it cannot cost a real showing its code.** The dangerous failure would be a
+genuine showing read as consult/walkthrough: no row, no code, and **no alert
+either**, because the execution would succeed. Checked live: **79 Properties
+rows, 79 carry a `cal_event_type_id`, all 79 DISTINCT, and neither `6483828` nor
+`6483829` is among them.** No property can collide with the two generic ids;
+verifier section F re-checks this every run.
+
+A payload carrying **no** `eventTypeId` classifies as `showing` and keeps today's
+behaviour, throw included. **Unknown stays loud on the path that ends in a locked
+door.**
+
+**Scope is the CREATED branch only, and that was derived rather than assumed.**
+`Find Showing (Reschedule)` and `Find Showing (Cancel)` contain no `throw`, so a
+rescheduled or cancelled consult already ends cleanly. Only three of the six
+recorded failures were this bug; the rest were the lockbox throw 1a fixed.
+
+```bash
+node scripts/n8n-skip-non-showing-bookings.mjs [--apply] [--revert --apply] [--emit-js <dir>]
+node scripts/non-showing-skip-verify.mjs [--js <dir>]      # 24 assertions
+node scripts/non-showing-skip-mutations.mjs                # 5 mutations, proves the above
+```
+Backup `n8n/BEFORE-skip-non-showing/`. The builder **refuses to apply** if
+`Find Property` ever stops throwing on an absent property — that throw is the
+entire reason this patch exists.
+
+> **The mutation suite earned its keep on its first run.** THREE of the five made
+> the verifier **crash rather than report** — a consult that stops being skipped
+> falls through to the uid validation and throws, and the uncaught throw killed
+> the run, silently skipping every assertion after it. A crash reads like a
+> broken script, not a caught bug. Fixed with `tryRun`; same lesson as
+> `lockbox-park-mutations.mjs`.
+
 ### A property with no `populife_lock_id` — a showing there HARD-FAILS
 
 **`Find Property`** — *not* `Build Showing Row` — throws
@@ -3443,6 +3504,8 @@ write nothing, and touch no n8n state.
 | `missed-code-sweep-verify.mjs` | **49** — the four finding kinds, both windows, dedupe, recipients, graph |
 | `error-workflow-verify.mjs` | **46** — the alarm's structure, throttle, self-exclusion, and that all 16 are attached |
 | `lockbox-park-verify.mjs` | **64** — item 1a: parking, the alert fan-out, the graph, and that a parked row is inert in the dispatch cron |
+| `non-showing-skip-verify.mjs` | **24** — consult/walkthrough skipped, showings untouched, classify() parity, no event-type collision |
+| `fub-status-verify.mjs` | **25** — the dashboard's FUB status column: rejected / progressed / active / out-of-scope, pinned to synthetic stages |
 | `showing-code-gate-verify.mjs` | **55** — item 1c: the 7 gated rules, the category clause, the sentinel allowlist, defer-don't-decide |
 | `delete-multirow-verify.mjs` | **36** — Delete Property multi-row: simulated deleteDimension, fail-closed guards, the `.item` rewrites |
 | `launch-audit.mjs` | all 12 workflows, 16 hard gates, 3 alert phones |
