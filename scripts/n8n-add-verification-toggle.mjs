@@ -34,9 +34,16 @@
  *    entered by paths the inquiry flow does not control: the Result Handler
  *    replay and the `SHEETS_RETRY_MARKER` self-POST. Without a bail here, a
  *    verify SMS could still escape after the switch was thrown.
- * 3. `Find Due Reminders` (`R3rhuCYEGoBFArBa`) — nobody should be chased to
- *    finish a verification that is no longer required. This one is a pure
- *    stop: it already has an `enabled` gate, so the new check sits beside it.
+ * A THIRD site, `Find Due Reminders` (`R3rhuCYEGoBFArBa`), used to live here and
+ * has MOVED OUT — see `n8n-grandfather-verification.mjs`
+ * (VERIFICATION_GRANDFATHER_MARKER). Grandfathering keeps a lead on the policy
+ * in force when they entered, and that workflow already chases only `pending`
+ * rows, which can only exist for a lead asked to verify while the switch was ON.
+ * So its existing selection IS the grandfathering, and a global stop there would
+ * leave that cohort neither chased nor released.
+ *
+ * REVERT ORDER MATTERS: revert the grandfathering script FIRST, since its revert
+ * restores the bail this one used to own.
  *
  * **The sweep needs nothing** — verified by reading it: `Check & Build Message`
  * bails only on `no_phone`, `trashBlock || stage_not_allowed`,
@@ -150,30 +157,8 @@ const TARGETS = [
       "if (!(" + READ_EXPR + ")) return fail(\"verification_disabled\");",
     ),
   },
-  {
-    wf: "R3rhuCYEGoBFArBa", node: "Find Due Reminders",
-    what: "stop chasing leads mid-ladder once verification is optional",
-    from: J(
-      'if (!enabled) {',
-      '  console.log("[identity-reminders] disabled via identity_reminder_enabled");',
-      '  return [{ json: { due: false, reason: "disabled" } }];',
-      '}',
-    ),
-    to: J(
-      'if (!enabled) {',
-      '  console.log("[identity-reminders] disabled via identity_reminder_enabled");',
-      '  return [{ json: { due: false, reason: "disabled" } }];',
-      '}',
-      "// ── " + MARKER + " ────────────────────────────────────────────────",
-      "// Nobody should be nudged to finish a verification that is no longer",
-      "// required. Note the inverted default again: absent means REQUIRED, so",
-      "// this never silently mutes the reminders.",
-      "if (!(" + READ_EXPR + ")) {",
-      '  console.log("[identity-reminders] verification is switched off — nothing to chase");',
-      '  return [{ json: { due: false, reason: "verification_disabled" } }];',
-      "}",
-    ),
-  },
+  // NOTE: `Find Due Reminders` (R3rhuCYEGoBFArBa) is deliberately NOT here.
+  // See the header — grandfathering moved it to n8n-grandfather-verification.mjs.
 ];
 
 async function setupKey() {
@@ -218,7 +203,18 @@ async function main() {
 
   const applied = loaded.filter((t) => String(t.node.parameters.jsCode ?? "").includes(MARKER));
   console.log(`\nalready applied: ${applied.length} of ${loaded.length}`);
-  if (!REVERT && applied.length === loaded.length) { console.log("\n✓ Already applied (idempotent)."); return done(0); }
+  if (!REVERT && applied.length === loaded.length) {
+    console.log("\n✓ Already applied (idempotent).");
+    // Once live, the DEPLOYED code is the patched code — so --emit-js must still
+    // hand it back, or the verifier and the mutation suite lose their baseline
+    // the moment the patch ships.
+    if (EMIT_JS) {
+      mkdirSync(EMIT_JS, { recursive: true });
+      for (const t of loaded) writeFileSync(`${EMIT_JS}/${t.node.name.replace(/[^\w]+/g, "-")}.js`, String(t.node.parameters.jsCode ?? ""));
+      console.log(`  deployed jsCode written to ${EMIT_JS}/`);
+    }
+    return done(0);
+  }
   if (REVERT && applied.length === 0) { console.log("\n✓ Nothing to revert (idempotent)."); return done(0); }
   if (applied.length !== 0 && applied.length !== loaded.length) {
     console.error(`✗ PARTIALLY applied (${applied.map((t) => t.node).join(", ")}) — refusing to guess.`);
@@ -244,6 +240,7 @@ async function main() {
   }
   console.log(`\n  key: ${SETTING}, read as "required unless explicitly false"`);
   console.log("  the sweep is deliberately untouched — it has never checked verification");
+  console.log("  Find Due Reminders is owned by n8n-grandfather-verification.mjs");
 
   if (EMIT_JS) {
     mkdirSync(EMIT_JS, { recursive: true });

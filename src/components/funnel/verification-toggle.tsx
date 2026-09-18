@@ -21,6 +21,8 @@ const CHUNK = 3;
 interface Plan {
   eligible: { personId: string; rows: { propertyAddress: string }[] }[];
   skipped: { personId: string; reason: string }[];
+  /** Mid-verification leads, left on the track they started on. */
+  grandfathered: { personId: string; reason: string }[];
 }
 
 /**
@@ -279,6 +281,15 @@ export function VerificationToggle({ isAdmin }: { isAdmin: boolean }) {
                       {Math.max(1, Math.round((plan.eligible.length * 12) / 60))} minute
                       {Math.round((plan.eligible.length * 12) / 60) === 1 ? "" : "s"}.
                     </p>
+                    {plan.grandfathered.length > 0 && (
+                      <p className="text-gray-500">
+                        {plan.grandfathered.length} lead
+                        {plan.grandfathered.length === 1 ? " is" : "s are"} part-way through
+                        verifying and {plan.grandfathered.length === 1 ? "stays" : "stay"} on that
+                        track — {plan.grandfathered.length === 1 ? "they" : "they"} finish as normal
+                        and get their link that way. Reminders keep going to them.
+                      </p>
+                    )}
                     {plan.skipped.length > 0 && (
                       <p className="text-gray-500">
                         {plan.skipped.length} other{plan.skipped.length === 1 ? "" : "s"} will{" "}

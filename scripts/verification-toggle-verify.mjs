@@ -109,7 +109,13 @@ async function main() {
       const w = await api(`/workflows/${id}`);
       NODES[n] = String(w.nodes.find((x) => x.name === n)?.parameters?.jsCode ?? "");
     }
-    const missing = Object.entries(NODES).filter(([, c]) => !c.includes(MARKER)).map(([n]) => n);
+    // VERIFICATION_GRANDFATHER_MARKER: Find Due Reminders deliberately no longer
+    // reads the toggle — its pending-only selection IS the grandfathering — so
+    // only the two decision nodes are required to carry the toggle marker.
+    const missing = Object.entries(NODES)
+      .filter(([n]) => n !== "Find Due Reminders")
+      .filter(([, c]) => !c.includes(MARKER))
+      .map(([n]) => n);
     if (missing.length) {
       console.log(`\n✗ Not deployed — ${missing.join(", ")} lack the marker.`);
       console.log("      node scripts/n8n-add-verification-toggle.mjs --emit-js /tmp/js4");
@@ -154,8 +160,11 @@ async function main() {
     eq("A.RI.'false': unverified lead sent directly", [off.send_now, off.needs_gate], [true, false]);
   }
 
-  ok("A1  all three nodes carry the marker", Object.values(NODES).every((c) => c.includes(MARKER)));
-  ok("A2  all three read the key the SAME way", Object.values(NODES).every((c) => c.includes(`settings.${SETTING} ?? "true"`) && c.includes('!== "false"')));
+  // The two DECISION nodes carry the toggle. Find Due Reminders no longer reads
+  // it at all (see section D) and carries the grandfathering tombstone instead.
+  const DECIDERS = ["Resolve Inquiry", "Check Guards"];
+  ok("A1  both decision nodes carry the marker", DECIDERS.every((n) => NODES[n].includes(MARKER)));
+  ok("A2  both read the key the SAME way", DECIDERS.every((n) => NODES[n].includes(`settings.${SETTING} ?? "true"`) && NODES[n].includes('!== "false"')));
 
   // ── B. Resolve Inquiry: the actual switch ──────────────────────────────
   section("B. Resolve Inquiry routes by the toggle");
@@ -217,10 +226,21 @@ async function main() {
     run(NODES["Find Due Reminders"], {
       "Read Identity Verifications": [], "Read Settings": settingsRows({ [SETTING]: toggle, identity_reminder_enabled: reminderEnabled }),
     }).out[0] ?? {};
-  eq("D1  toggle OFF -> reminders stop with a distinct reason", remOut("FALSE").reason, "verification_disabled");
-  ok("D2  toggle ON -> not stopped by this check", remOut("TRUE").reason !== "verification_disabled", JSON.stringify(remOut("TRUE").reason));
+  // GRANDFATHERING. Turning the switch off must NOT mute the reminders: a pending
+  // row only ever exists for a lead asked to verify while the switch was ON, and
+  // the dashboard release skips exactly those leads. Mute this as well and that
+  // cohort is neither chased nor released — they receive nothing at all.
+  ok(
+    "D1  toggle OFF does NOT stop reminders (mid-flight cohort keeps its track)",
+    remOut("FALSE").reason !== "verification_disabled",
+    JSON.stringify(remOut("FALSE").reason)
+  );
+  ok("D2  toggle ON likewise unaffected by the toggle", remOut("TRUE").reason !== "verification_disabled");
   eq("D3  the existing reminder switch still wins when it is off", remOut("TRUE", "FALSE").reason, "disabled");
-  ok("D4  absent toggle does not stop reminders", remOut(undefined).reason !== "verification_disabled");
+  ok("D4  the grandfathering tombstone is present", NODES["Find Due Reminders"].includes("VERIFICATION_GRANDFATHER_MARKER"));
+  // The cohort selector is what makes removing the bail correct. If this filter
+  // ever widened, the reminders would start chasing leads the switch excluded.
+  ok("D5  still selects on a pending status (the cohort selector)", /["']pending["']/.test(NODES["Find Due Reminders"]));
 
   // ── E. the sweep is untouched ──────────────────────────────────────────
   section("E. the sweep still knows nothing about verification");

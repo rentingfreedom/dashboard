@@ -68,9 +68,19 @@ const MUTATIONS = [
   ["M8  put the Check Guards bail ABOVE the no_phone check", CG,
     ['if (!phone) return fail("no_phone");', ""],
     ["C6"]],
-  ["M9  remove the reminder stop", FR,
-    ['  return [{ json: { due: false, reason: "verification_disabled" } }];', '  return [{ json: { due: false, reason: "still_going" } }];'],
+  // Grandfathering: putting a global stop back into Find Due Reminders abandons
+  // the mid-flight cohort, because the dashboard release skips those leads too —
+  // they would be neither chased nor released.
+  ["M9  re-add a global reminder stop (breaks grandfathering)", FR,
+    ['if (etHour !== HOUR) {',
+     'if (String(settings.identity_verification_enabled ?? "true").trim().toLowerCase() === "false") {\n  return [{ json: { due: false, reason: "verification_disabled" } }];\n}\nif (etHour !== HOUR) {'],
     ["D1"]],
+  ["M9b delete the grandfathering tombstone", FR,
+    ['VERIFICATION_GRANDFATHER_MARKER', 'REMOVED_MARKER'],
+    ["D4"]],
+  ["M9c widen the cohort selector off `pending`", FR,
+    ['"pending"', '"any-status"'],
+    ["D5"]],
 ];
 
 async function main() {
@@ -80,7 +90,11 @@ async function main() {
 
   rmSync(WORK, { recursive: true, force: true });
   mkdirSync(SRC, { recursive: true });
+  // Two builders own the three nodes: the toggle owns the two decision sites,
+  // and n8n-grandfather-verification.mjs owns Find Due Reminders. The verifier
+  // reads all three, so the baseline has to be emitted from both.
   execFileSync("node", [resolve(ROOT, "scripts/n8n-add-verification-toggle.mjs"), "--emit-js", SRC], { encoding: "utf8" });
+  execFileSync("node", [resolve(ROOT, "scripts/n8n-grandfather-verification.mjs"), "--emit-js", SRC], { encoding: "utf8" });
 
   let baseline = "";
   try { baseline = execFileSync("node", [resolve(ROOT, "scripts/verification-toggle-verify.mjs"), "--js", SRC], { encoding: "utf8" }); }

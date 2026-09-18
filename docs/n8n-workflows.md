@@ -1010,7 +1010,7 @@ is the pre-existing behaviour written down explicitly.
 |---|---|---|
 | `JDsKrVRHf9TEVj7j` Inquiry flow | `Resolve Inquiry` | the real switch — `send_now` / `needs_gate` route on `isVerified \|\| !required`, so nobody is handed to the gate |
 | `L13GUyrWbjSJwn8p` Identity Gate | `Check Guards` | bails `verification_disabled` |
-| `R3rhuCYEGoBFArBa` Identity Reminders | `Find Due Reminders` | stops chasing leads mid-ladder |
+| `R3rhuCYEGoBFArBa` Identity Reminders | `Find Due Reminders` | **nothing — grandfathered, see below** |
 
 The Gate bail is belt and braces, not redundancy: that gate is also entered by the
 **Result Handler replay** and the `SHEETS_RETRY_MARKER` self-POST, paths the inquiry
@@ -1024,6 +1024,64 @@ flow does not control.
 > **The toggle must never become a skeleton key.** With it OFF, `Permanent Trash`,
 > `Denied Credit`, out-of-stage and no-phone all stay blocked. Verifier section C
 > pins this; mutations M5/M6 turn it red.
+
+### Grandfathering — `VERIFICATION_GRANDFATHER_MARKER` (2026-09-18)
+
+**A lead stays on the policy in force when they entered.** Flipping the switch OFF
+used to release everyone mid-ladder; now the ON-era cohort finishes on the ON-era
+track and only leads arriving after the flip get the new regime.
+
+**"Has a `pending` Identity_Verifications row" IS "entered under ON"** — under OFF
+nobody is ever routed to the gate (`Resolve Inquiry` delivers the link directly), so
+a pending row cannot be created while the switch is off. That makes the cohort
+selector free: all three relevant nodes already read that tab, so grandfathering
+costs **zero extra Sheets reads** — which is why it was affordable on the Identity
+Gate at all.
+
+It is **two changes, one of which is a removal**:
+
+| Where | Change |
+|---|---|
+| `Find Due Reminders` | the VERIFICATION_TOGGLE_MARKER bail is **removed**. Its pending-only selection already IS the grandfathering |
+| `release-stranded.ts` | leads with a pending row are reported as `grandfathered` and never messaged |
+
+> **`Check Guards` needed NO change, and that was verified rather than assumed.**
+> `alreadySent` bails on **any** Identity_Verifications row and sits **above** the
+> pending check, so a mid-flight lead already never gets a second Stripe session or
+> a second SMS from the gate. The toggle bail there only ever blocks a **first**
+> verify SMS, which is correct under OFF. Their route forward is the Stripe link
+> they already hold → Result Handler → sweep replay.
+
+> **THE TWO HALVES MUST AGREE.** The release skips pending leads *because* the
+> reminders still chase them. Re-add a global bail to `Find Due Reminders` while
+> keeping that filter and the cohort is **neither chased nor released** — they
+> receive nothing at all. Mutation M9 exists solely to keep that door shut.
+
+**Measured 2026-09-18**: of 30 leads a flip would otherwise release, **23 are
+mid-flight and 7 have no identity row at all**. The 7 are the genuinely stranded —
+never asked, or their row was lost to a Sheets quota failure — and are who the
+release is now for. Grandfathering therefore also shrinks the release enough that
+the pacing concern largely evaporates.
+
+> **Accepted tradeoff:** a mid-flight lead who never finishes verifying gets four
+> reminders and then nothing. That is unchanged from the ON regime — it is not a
+> regression — but it is now a *choice*, so it is written down.
+
+> **It is better for the experiment, not just kinder.** A flip no longer mixes two
+> cohorts mid-flight, and `verification_required` records which track each lead was
+> on, so the funnel can segment instead of averaging across a regime change.
+
+> **Ownership moved.** `Find Due Reminders` is no longer a target of
+> `n8n-add-verification-toggle.mjs` — the grandfathering script owns it.
+> **Revert order matters: revert grandfathering FIRST**, since its `--revert`
+> restores the bail the toggle script used to own.
+
+```bash
+node scripts/n8n-grandfather-verification.mjs [--apply] [--revert --apply] [--emit-js <dir>]
+```
+Backup `n8n/BEFORE-verification-grandfather/`. The builder **refuses to apply** if
+`Find Due Reminders` stops filtering on a `pending` status — that filter is the
+entire cohort selector.
 
 ### Policy stamping — `VERIFICATION_STAMP_MARKER`
 
@@ -1051,10 +1109,11 @@ never come. The dashboard re-POSTs each person's uri to the sweep webhook, the
 `_oneoff-2026-08-31-marchae-repair.mjs` pattern. **It writes nothing** — the rows are
 already `false`, and the sweep marks them sent itself, so it is idempotent.
 
-> **Measured 2026-09-18: 29 leads eligible, 32 held back — and 32 of those are held
-> by the VACANCY check alone.** Without the Cheyla Zinck guard a flip texts 61 people,
-> half of them about houses that are now occupied. The sweep has never checked
-> availability and nothing downstream does.
+> **Measured 2026-09-18: the VACANCY check alone holds back 32 leads.** Without the
+> Cheyla Zinck guard a flip texts them about houses that are now occupied. The sweep
+> has never checked availability and nothing downstream does. Of those that survive
+> it, grandfathering leaves 23 mid-flight leads alone, so a flip today releases **7**.
+> The population moves daily — the dialog recomputes it, and so should you.
 
 > **All-or-nothing per person.** The sweep is addressed by PERSON and sends one SMS per
 > unsent row, so a lead with one vacant and one leased property cannot be part-released.
@@ -1092,8 +1151,8 @@ reads that line either.
 
 ```bash
 node scripts/n8n-add-verification-toggle.mjs [--setup-key --apply] [--apply] [--revert --apply]
-node scripts/verification-toggle-verify.mjs [--js <dir>]     # 34 deployed / 31 offline
-node scripts/verification-toggle-mutations.mjs               # 10 mutations
+node scripts/verification-toggle-verify.mjs [--js <dir>]     # 35 assertions
+node scripts/verification-toggle-mutations.mjs               # 12 mutations
 node scripts/n8n-add-verification-policy-stamp.mjs [--setup-column --apply] [--apply]
 node scripts/n8n-fix-cal-link-email-copy.mjs [--apply] [--revert --apply]
 node scripts/cal-link-email-verify.mjs                       # 37 assertions
@@ -3625,7 +3684,7 @@ write nothing, and touch no n8n state.
 | `rejection-cancel-verify.mjs` | **73** — A-2 both layers, now applied; `--js <dir>` predates that |
 | `cal-booking-notify-verify.mjs` | **48** — B routing, both defects, the connections graph |
 | `cal-link-email-verify.mjs` | **37** — the parallel email branch, its note logging, and that no copy claims the lead verified |
-| `verification-toggle-verify.mjs` | **34** — item 4: the inverted default, routing, and that the switch opens nothing else |
+| `verification-toggle-verify.mjs` | **35** — item 4: the inverted default, routing, grandfathering, and that the switch opens nothing else |
 | `inquiry-alert-verify.mjs` | **36** — all three `Row Recorded?` wirings, fan-out |
 | `missed-code-sweep-verify.mjs` | **49** — the four finding kinds, both windows, dedupe, recipients, graph |
 | `error-workflow-verify.mjs` | **46** — the alarm's structure, throttle, self-exclusion, and that all 16 are attached |

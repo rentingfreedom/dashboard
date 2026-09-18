@@ -99,6 +99,8 @@ export interface SkippedLead {
 export interface ReleasePlan {
   eligible: StrandedLead[];
   skipped: SkippedLead[];
+  /** Mid-verification leads left on the track they started on. See planRelease. */
+  grandfathered: SkippedLead[];
 }
 
 export interface ReleaseResult extends ReleasePlan {
@@ -136,6 +138,34 @@ export async function planRelease(): Promise<ReleasePlan> {
       .filter(Boolean)
   );
 
+  /**
+   * ── GRANDFATHERING ──────────────────────────────────────────────────────
+   * A lead stays on the policy in force when they entered. Anyone MID-FLIGHT —
+   * asked to verify while the switch was ON, and still holding a `pending` row —
+   * is left on that track: they finish Stripe Identity, the Result Handler
+   * replays the sweep, and they get their link the ordinary way.
+   *
+   * A pending row is a reliable stand-in for "entered under ON" because under
+   * OFF nobody is ever routed to the gate — `Resolve Inquiry` delivers the link
+   * directly — so no pending row can be created while the switch is off.
+   *
+   * The other half lives in n8n (VERIFICATION_GRANDFATHER_MARKER): Identity
+   * Reminders keeps chasing exactly this cohort. THE TWO HALVES MUST AGREE. If
+   * this filter is kept while a global bail is re-added there, the cohort is
+   * neither chased nor released and receives nothing at all.
+   *
+   * Measured 2026-09-18: of 30 leads a flip would otherwise release, 23 are
+   * mid-flight and 7 have no identity row at all. The 7 are the ones genuinely
+   * stranded — never asked, or their row was lost to a Sheets quota failure —
+   * and they are exactly who this release is for.
+   */
+  const midVerification = new Set(
+    verifications
+      .filter((v) => norm(v.status) === "pending")
+      .map((v) => String(v.lead_id ?? "").trim())
+      .filter(Boolean)
+  );
+
   const propertyByKey = new Map(
     properties.map((p) => [String(p.property_key ?? "").trim(), p])
   );
@@ -154,8 +184,19 @@ export async function planRelease(): Promise<ReleasePlan> {
 
   const eligible: StrandedLead[] = [];
   const skipped: SkippedLead[] = [];
+  const grandfathered: SkippedLead[] = [];
 
   for (const [personId, rows] of byPerson) {
+    // Grandfathered: recorded rather than silently dropped, so the operator sees
+    // how many leads are being left on the verification track by this flip.
+    if (midVerification.has(personId)) {
+      grandfathered.push({
+        personId,
+        reason: "mid-verification — left on the track they started on",
+      });
+      continue;
+    }
+
     const problems: string[] = [];
 
     for (const row of rows) {
@@ -193,7 +234,7 @@ export async function planRelease(): Promise<ReleasePlan> {
     });
   }
 
-  return { eligible, skipped };
+  return { eligible, skipped, grandfathered };
 }
 
 /**
