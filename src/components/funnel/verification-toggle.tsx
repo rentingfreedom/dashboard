@@ -23,6 +23,10 @@ interface Plan {
   skipped: { personId: string; reason: string }[];
   /** Mid-verification leads, left on the track they started on. */
   grandfathered: { personId: string; reason: string }[];
+  /** Eligible leads that look rejected; still attempted, but flagged. */
+  likelyBlocked: { personId: string; reason: string }[];
+  /** True when phones could not be checked, so `eligible` is an upper bound. */
+  countIsUpperBound: boolean;
 }
 
 /**
@@ -150,7 +154,9 @@ export function VerificationToggle({ isAdmin }: { isAdmin: boolean }) {
   async function runRelease(p: Plan) {
     const ids = p.eligible.map((l) => l.personId);
     if (ids.length === 0) {
-      toast.success("Nobody needed releasing.");
+      // Routine, not a failure: on 2026-09-19 every candidate was refused for an
+      // unrelated reason, so an honest plan is empty far more often than not.
+      toast.success("ID verification is off. Nobody needed a link sending.");
       setDialog(null);
       return;
     }
@@ -270,17 +276,37 @@ export function VerificationToggle({ isAdmin }: { isAdmin: boolean }) {
                   </p>
             ) : plan ? (
               <>
-                <p>
-                      <strong>
-                        {plan.eligible.length} lead{plan.eligible.length === 1 ? "" : "s"}
-                      </strong>{" "}
-                      {plan.eligible.length === 1 ? "is" : "are"} waiting on a verification that
-                      will now never be asked for. They will be sent their link straight away — a
-                      real text and email each, twelve seconds apart to stay clear of the
-                      Google Sheets rate limit, so this takes roughly{" "}
-                      {Math.max(1, Math.round((plan.eligible.length * 12) / 60))} minute
-                      {Math.round((plan.eligible.length * 12) / 60) === 1 ? "" : "s"}.
-                    </p>
+                {plan.eligible.length === 0 ? (
+                  <p>
+                    <strong>Nobody will be messaged.</strong> No lead is currently waiting on a
+                    verification that this would release.
+                  </p>
+                ) : (
+                  <p>
+                    <strong>
+                      {plan.countIsUpperBound ? "Up to " : ""}
+                      {plan.eligible.length} lead{plan.eligible.length === 1 ? "" : "s"}
+                    </strong>{" "}
+                    will be sent their link straight away — a real text and email each,
+                    twelve seconds apart to stay clear of the Google Sheets rate limit, so this
+                    takes roughly{" "}
+                    {Math.max(1, Math.round((plan.eligible.length * 12) / 60))} minute
+                    {Math.round((plan.eligible.length * 12) / 60) === 1 ? "" : "s"}.
+                  </p>
+                )}
+                {plan.likelyBlocked.length > 0 && (
+                  <p className="text-gray-500">
+                    {plan.likelyBlocked.length} of them look rejected in FUB and will probably be
+                    refused when the message is attempted. They are still tried, because that
+                    check is a display estimate rather than the real send rule.
+                  </p>
+                )}
+                {plan.countIsUpperBound && (
+                  <p className="text-gray-500">
+                    Phone numbers could not be checked, so this is an upper bound — some of
+                    these may be refused for having no number on file.
+                  </p>
+                )}
                     {plan.grandfathered.length > 0 && (
                       <p className="text-gray-500">
                         {plan.grandfathered.length} lead
@@ -293,8 +319,8 @@ export function VerificationToggle({ isAdmin }: { isAdmin: boolean }) {
                     {plan.skipped.length > 0 && (
                       <p className="text-gray-500">
                         {plan.skipped.length} other{plan.skipped.length === 1 ? "" : "s"} will{" "}
-                        <strong>not</strong> be contacted — mostly because the property they asked
-                        about is no longer vacant. Nobody is texted about a house that is gone.
+                        <strong>not</strong> be contacted — no phone number on file, or the
+                        property they asked about is no longer vacant. Nobody is texted about a house that is gone.
                       </p>
                     )}
                     {progress && (

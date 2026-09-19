@@ -114,6 +114,14 @@ export interface FubLeadStatus {
    */
   rejected: boolean;
   category: LeadCategory;
+  /**
+   * Whether FUB holds a phone number for this lead.
+   *
+   * A plain fact, not a policy judgement — which is why it is safe to act on.
+   * Every send path in the estate bails `no_phone` before doing anything else,
+   * so a lead without one provably cannot be texted.
+   */
+  hasPhone: boolean;
 }
 
 export function isConfigured(): boolean {
@@ -169,7 +177,12 @@ async function fetchPerson(id: string, allowedStages: string[]): Promise<FubLead
       return null;
     }
 
-    const p = (await res.json()) as { id?: number | string; stage?: string; tags?: string[] };
+    const p = (await res.json()) as {
+      id?: number | string;
+      stage?: string;
+      tags?: string[];
+      phones?: { value?: string }[];
+    };
 
     // Gotcha 17: a malformed id can make FUB fall back to a LIST response
     // instead of erroring, handing back whoever happens to be first. Refuse
@@ -184,7 +197,8 @@ async function fetchPerson(id: string, allowedStages: string[]): Promise<FubLead
     const trashTag = TRASH_TAGS.find((t) => tags.some((x) => norm(x) === norm(t))) ?? null;
 
     const category = categorise(stage, trashTag, allowedStages);
-    return { id: String(id), stage, tags, trashTag, rejected: category === "rejected", category };
+    const hasPhone = Array.isArray(p.phones) && p.phones.some((x) => String(x?.value ?? "").trim() !== "");
+    return { id: String(id), stage, tags, trashTag, rejected: category === "rejected", category, hasPhone };
   } catch (err) {
     console.warn(`[fub] GET /people/${id} failed:`, err instanceof Error ? err.message : err);
     return null;

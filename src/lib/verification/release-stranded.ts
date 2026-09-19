@@ -1,4 +1,5 @@
 import { readSheet, rowsToObjects } from "@/lib/google/sheets-client";
+import { fetchLeadStatuses, isConfigured as fubConfigured } from "@/lib/fub/client";
 
 /**
  * Releasing the leads that turning ID verification OFF would otherwise strand.
@@ -101,6 +102,16 @@ export interface ReleasePlan {
   skipped: SkippedLead[];
   /** Mid-verification leads left on the track they started on. See planRelease. */
   grandfathered: SkippedLead[];
+  /**
+   * Eligible leads the FUB status classifier thinks Nicole has rejected. They
+   * are STILL attempted — see planRelease for why they are flagged, not dropped.
+   */
+  likelyBlocked: SkippedLead[];
+  /**
+   * True when phone numbers could not be checked (FUB unconfigured, or every
+   * lookup failed), so `eligible` is an upper bound rather than a real count.
+   */
+  countIsUpperBound: boolean;
 }
 
 export interface ReleaseResult extends ReleasePlan {
@@ -185,6 +196,7 @@ export async function planRelease(): Promise<ReleasePlan> {
   const eligible: StrandedLead[] = [];
   const skipped: SkippedLead[] = [];
   const grandfathered: SkippedLead[] = [];
+  const likelyBlocked: SkippedLead[] = [];
 
   for (const [personId, rows] of byPerson) {
     // Grandfathered: recorded rather than silently dropped, so the operator sees
@@ -234,7 +246,82 @@ export async function planRelease(): Promise<ReleasePlan> {
     });
   }
 
-  return { eligible, skipped, grandfathered };
+  /**
+   * ── The count has to mean "messages that will be sent" ──────────────────
+   * Everything above filters on SHEET state. The sweep then re-applies its own
+   * guards at send time, and on 2026-09-19 that gap made the plan actively
+   * misleading: all 8 candidates were reported as eligible, and running the
+   * deployed sweep against them returned no_phone for seven and
+   * trash_denied_credit for the eighth. **Zero** would have been messaged, under
+   * a confirmation dialog promising 8.
+   *
+   * Nothing was unsafe — the sweep is the enforcement layer and it refused them
+   * correctly. But this number is the one an operator presses a button against,
+   * so it must not describe a send that cannot happen.
+   *
+   * ── Phone: excluded. Rejection: flagged, never dropped ──────────────────
+   * "Has FUB got a phone number" is a FACT, and every send path bails no_phone
+   * before anything else, so such a lead provably cannot be texted. Excluding
+   * them is safe in both directions.
+   *
+   * Rejection is a POLICY, with 90/365-day windows, tag precedence and a
+   * dateless-tag rule spread across six n8n nodes. `categorise()` answers the
+   * narrower display question "has Nicole rejected them" and is explicitly NOT
+   * the gate's verdict. Dropping leads on it would eventually withhold a link
+   * from someone the gate would have allowed — an expired No Response Trash tag,
+   * say — which is the one direction that actually costs a customer. So they
+   * stay in `eligible` and are merely flagged.
+   *
+   * If FUB cannot be reached the filter degrades to today's behaviour rather
+   * than silently dropping anyone, and the plan says the count is an upper bound.
+   */
+  const ids = eligible.map((l) => l.personId);
+  let countIsUpperBound = !fubConfigured();
+  if (ids.length > 0 && fubConfigured()) {
+    const allowedStages = await readAllowedStages();
+    const statuses = await fetchLeadStatuses(ids, allowedStages);
+    // Not in the map means the lookup failed — unknown, never "no phone".
+    if (statuses.size === 0) countIsUpperBound = true;
+
+    for (let i = eligible.length - 1; i >= 0; i--) {
+      const lead = eligible[i];
+      const st = statuses.get(lead.personId);
+      if (!st) continue;
+      if (!st.hasPhone) {
+        skipped.push({
+          personId: lead.personId,
+          reason: "no phone number in FUB — every send path refuses this before anything else",
+        });
+        eligible.splice(i, 1);
+        continue;
+      }
+      if (st.rejected) {
+        likelyBlocked.push({
+          personId: lead.personId,
+          reason: st.trashTag ? `tagged ${st.trashTag}` : `stage ${st.stage}`,
+        });
+      }
+    }
+  }
+
+  return { eligible, skipped, grandfathered, likelyBlocked, countIsUpperBound };
+}
+
+/**
+ * `allowed_stages`, read live, purely so `categorise()` can tell an in-scope lead
+ * from an out-of-scope one. Unreadable degrades to empty, which means "allow
+ * everything" — the same semantics the gate gives a missing Settings row, and the
+ * direction that flags fewer leads rather than more.
+ */
+async function readAllowedStages(): Promise<string[]> {
+  try {
+    const { objects } = rowsToObjects(await readSheet("Settings"));
+    const row = objects.find((o) => String(o.key ?? "").trim() === "allowed_stages");
+    return String(row?.value ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+  } catch (err) {
+    console.warn("[verification-release] Settings unreadable:", err instanceof Error ? err.message : err);
+    return [];
+  }
 }
 
 /**

@@ -1195,6 +1195,22 @@ already `false`, and the sweep marks them sent itself, so it is idempotent.
 > it, grandfathering leaves 23 mid-flight leads alone, so a flip today releases **7**.
 > The population moves daily — the dialog recomputes it, and so should you.
 
+> **The count must mean "messages that will be sent", not "candidates".** Measured
+> 2026-09-19: the plan reported **8** eligible, and running the DEPLOYED sweep over
+> those same 8 returned `no_phone` for seven and `trash_denied_credit` for the
+> eighth. **Zero** would have been messaged, under a dialog promising eight. Nothing
+> was unsafe — the sweep is the enforcement layer and refused them correctly — but
+> that number is what an operator presses a button against.
+>
+> `planRelease` now excludes leads with **no phone in FUB**: a fact, not a policy,
+> and every send path bails `no_phone` before anything else, so such a lead provably
+> cannot be texted. Rejection is the opposite case and is **flagged, never dropped**
+> — `categorise()` answers the narrow display question "has Nicole rejected them"
+> and is explicitly NOT the gate's verdict, so dropping on it would eventually
+> withhold a link from someone the gate would have allowed (an expired
+> `No Response Trash` tag, say). If FUB is unreachable the filter degrades to the old
+> behaviour and the plan reports `countIsUpperBound`.
+
 > **All-or-nothing per person.** The sweep is addressed by PERSON and sends one SMS per
 > unsent row, so a lead with one vacant and one leased property cannot be part-released.
 > Releasing them would deliver both. Such a person is skipped entirely and reported.
