@@ -242,6 +242,71 @@ async function main() {
   // ever widened, the reminders would start chasing leads the switch excluded.
   ok("D5  still selects on a pending status (the cohort selector)", /["']pending["']/.test(NODES["Find Due Reminders"]));
 
+  // ── F. the waiver: applied while OFF -> never asked ────────────────────
+  section("F. VERIFICATION_WAIVER_MARKER — applied while OFF, never asked");
+  {
+    const guard = (toggle, inquiryRows, person = PERSON, identityRows = []) =>
+      run(NODES["Check Guards"], {
+        Webhook: [{ body: { uri: "https://api.followupboss.com/v1/people?id=9001" } }],
+        "FUB - Get Person": [{ people: [person] }],
+        "Read Identity Verifications": identityRows,
+        "Read Inquiries (Waiver)": inquiryRows,
+        "Read Settings": settingsRows({ [SETTING]: toggle }),
+      }).out[0] ?? {};
+
+    // Sheets coerces "FALSE" to a real boolean on write (gotcha 14), so the
+    // realistic fixture is `false`, not the string.
+    const WAIVED = [{ person_id: "9001", phone: "18035551212", verification_required: false }];
+    const REQUIRED = [{ person_id: "9001", phone: "18035551212", verification_required: "TRUE" }];
+
+    // THE GAP THIS CLOSES. Proved against the deployed gate before the fix:
+    // toggle ON + zero identity rows returned proceed=true, so flipping back ON
+    // asked a lead who had applied while it was OFF.
+    eq("F1  applied while OFF, switch back ON -> never asked", guard("TRUE", WAIVED).reason, "verification_waived");
+
+    // ...and it is not a mute button.
+    ok("F2  applied while ON, unverified -> STILL asked", guard("TRUE", REQUIRED).proceed === true, JSON.stringify(guard("TRUE", REQUIRED).reason));
+    ok("F3  blank (pre-stamp row) is NOT a waiver", guard("TRUE", [{ person_id: "9001", verification_required: "" }]).proceed === true);
+    ok("F4  no inquiry rows at all -> still asked", guard("TRUE", []).proceed === true);
+
+    // A FUB merge changes person_id, and losing the waiver would mean asking
+    // someone we promised never to ask — so the join is person_id OR phone.
+    eq("F5  waiver still found by phone after a merge",
+      guard("TRUE", [{ person_id: "7777", phone: "+1 803-555-1212", verification_required: false }]).reason,
+      "verification_waived");
+    ok("F6  another person's waiver does not leak across",
+      guard("TRUE", [{ person_id: "1234", phone: "9995550000", verification_required: false }]).proceed === true);
+
+    // ORDERING. The waiver is the LAST guard, so every pre-existing bail keeps
+    // its precedence and its REASON. That is not cosmetic: Check Guards feeds
+    // `Tag Cleanup Needed?` and `Needs Reapply Reroute?`, and those fields ride
+    // only the trash-blocked and success return paths. A waiver that bailed
+    // first would silently stop tag-expiry cleanup and the reapply-reroute for
+    // any waived lead who was later trash-tagged. The first version of this
+    // patch did exactly that, and these three assertions caught it.
+    eq("F7  Permanent Trash still bails as trash (reroute/cleanup path intact)",
+      guard("TRUE", WAIVED, { ...PERSON, tags: ["Permanent Trash"] }).reason, "trash_permanent");
+    eq("F8  no_phone still wins over the waiver",
+      guard("TRUE", WAIVED, { ...PERSON, phones: [] }).reason, "no_phone");
+    eq("F9  out-of-stage still bails as stage, not as waiver",
+      guard("TRUE", WAIVED, { ...PERSON, stage: "PM Lead Onboarding" }).reason,
+      "stage_not_allowed:PM Lead Onboarding");
+
+    // The read node must stay executeOnce: its input is Read Identity
+    // Verifications (~262 items), so without it this is ~262 Sheets requests
+    // per execution — gotcha 4, the estate's worst outage.
+    if (!JS_DIR) {
+      const gw = await api("/workflows/L13GUyrWbjSJwn8p");
+      const rn = gw.nodes.find((n) => n.name === "Read Inquiries (Waiver)");
+      ok("F10 the waiver read node exists", !!rn);
+      ok("F11 it carries executeOnce (gotcha 4)", rn?.executeOnce === true);
+      ok("F12 it declares serviceAccount auth (gotcha 22)", rn?.parameters?.authentication === "serviceAccount");
+      ok("F13 it reads the Inquiries tab", rn?.parameters?.sheetName?.value === "Inquiries");
+      const feeds = (gw.connections["Read Inquiries (Waiver)"]?.main?.[0] ?? []).map((x) => x.node);
+      eq("F14 it feeds Check Guards", feeds.join(","), "Check Guards");
+    }
+  }
+
   // ── E. the sweep is untouched ──────────────────────────────────────────
   section("E. the sweep still knows nothing about verification");
   if (JS_DIR) {

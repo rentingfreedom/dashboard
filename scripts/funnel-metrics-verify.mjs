@@ -216,6 +216,83 @@ async function main() {
   }
 
   // ── A. live data against the measured baseline ─────────────────────────
+  // ── G. the ID-check experiment ─────────────────────────────────────────
+  //
+  // These are SYNTHETIC on purpose and will stay that way. Live data has zero
+  // waived leads until the switch is first turned off, so a live check here
+  // could only ever confirm that one column is empty — it would pass with the
+  // whole cohort split deleted.
+  section("G. cohorts — ID check on vs off");
+  {
+    // Two leads served under each policy; one of each books.
+    const m = run({
+      inquiries: [
+        inq({ person_id: "1", phone: "5550000001", verification_required: "TRUE" }),
+        inq({ person_id: "2", phone: "5550000002", verification_required: "TRUE" }),
+        inq({ person_id: "3", phone: "5550000003", verification_required: false }),
+        inq({ person_id: "4", phone: "5550000004", verification_required: false }),
+      ],
+      bookings: [
+        bk({ fub_person_id: "1", invitee_phone: "5550000001" }),
+        bk({ fub_person_id: "3", invitee_phone: "5550000003" }),
+      ],
+    });
+    eq("G1  required cohort counts its own people", m.cohorts.required.people, 2);
+    eq("G2  waived cohort counts its own people", m.cohorts.waived.people, 2);
+    eq("G3  required booked", m.cohorts.required.booked, 1);
+    eq("G4  waived booked", m.cohorts.waived.booked, 1);
+    eq("G5  booked-per-link is the comparable rate", m.cohorts.required.bookedPerLink, 50);
+    eq("G6  both sides have links -> comparable", m.cohorts.comparable, true);
+  }
+  {
+    // BLANK is the pre-stamp state and must read as "verification was required".
+    // If it ever read as a waiver, every historical row would silently land in
+    // the wrong column and the experiment would compare noise against noise.
+    const m = run({ inquiries: [inq({ person_id: "1", phone: "5550000001", verification_required: "" })] });
+    eq("G7  blank counts as REQUIRED, not waived", m.cohorts.required.people, 1);
+    eq("G8  blank does not leak into waived", m.cohorts.waived.people, 0);
+  }
+  {
+    // Sheets writes "FALSE" as a real boolean (gotcha 14), so both spellings
+    // have to land in the same column.
+    const a = run({ inquiries: [inq({ person_id: "1", phone: "5550000001", verification_required: false })] });
+    const b = run({ inquiries: [inq({ person_id: "1", phone: "5550000001", verification_required: "FALSE" })] });
+    eq("G9  boolean false is a waiver", a.cohorts.waived.people, 1);
+    eq("G10 the string 'FALSE' is the same waiver", b.cohorts.waived.people, 1);
+  }
+  {
+    // One side empty is not a 0% result, it is an absent one.
+    const m = run({ inquiries: [inq({ person_id: "1", phone: "5550000001", verification_required: "TRUE" })] });
+    eq("G11 one empty side -> NOT comparable", m.cohorts.comparable, false);
+  }
+  {
+    // A lead who straddles a flip is assigned by their FIRST inquiry and is
+    // reported, because they are not clean evidence for either side.
+    const m = run({
+      inquiries: [
+        inq({ person_id: "1", phone: "5550000001", inquired_at: "2026-09-01T00:00:00.000Z", verification_required: "TRUE" }),
+        inq({ person_id: "1", phone: "5550000001", inquired_at: "2026-09-05T00:00:00.000Z", verification_required: false }),
+      ],
+    });
+    eq("G12 straddler is assigned by their FIRST inquiry", m.cohorts.required.people, 1);
+    eq("G13 and is not double counted", m.cohorts.waived.people, 0);
+    eq("G14 and is surfaced in data quality", m.dataQuality.mixedCohortPeople, 1);
+  }
+  {
+    // A lead whose link never went out is in the cohort but not the denominator.
+    const m = run({
+      inquiries: [
+        inq({ person_id: "1", phone: "5550000001", link_sent: "false", verification_required: "TRUE" }),
+        inq({ person_id: "2", phone: "5550000002", link_sent: "true", verification_required: "TRUE" }),
+      ],
+      bookings: [bk({ fub_person_id: "2", invitee_phone: "5550000002" })],
+    });
+    eq("G15 people counts everyone who inquired", m.cohorts.required.people, 2);
+    eq("G16 linkDelivered counts only those served", m.cohorts.required.linkDelivered, 1);
+    eq("G17 booked-per-link uses the served denominator", m.cohorts.required.bookedPerLink, 100);
+    eq("G18 booked-per-person keeps the friction visible", m.cohorts.required.bookedPerPerson, 50);
+  }
+
   section("A. live data vs the documented baseline");
   if (OFFLINE) {
     console.log("  SKIPPED (--offline)");

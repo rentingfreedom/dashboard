@@ -12,6 +12,15 @@ import { FunnelChart, TrendChart, BarChart, HBarList, InlineBar, EmptyPanel, STA
 import { VerificationToggle } from "@/components/funnel/verification-toggle";
 import { useRole } from "@/lib/auth/use-role";
 
+interface CohortStats {
+  label: string;
+  people: number;
+  linkDelivered: number;
+  booked: number;
+  bookedPerLink: number;
+  bookedPerPerson: number;
+}
+
 interface FunnelMetrics {
   range: { from: string; to: string | null };
   stages: { key: string; label: string; count: number; conversionFromPrev: number | null; shareOfTop: number }[];
@@ -35,6 +44,11 @@ interface FunnelMetrics {
     category?: "rejected" | "progressed" | "active" | "other";
   }[];
   trend: { capturedAt: string; reachedOut: number; sentVerification: number; verified: number; booked: number }[];
+  cohorts: {
+    required: CohortStats;
+    waived: CohortStats;
+    comparable: boolean;
+  };
   verificationToggleMarkers: { capturedAt: string; enabled: boolean }[];
   /** False when FUB_API_KEY is unset in this environment, so no stages were fetched. */
   fubEnriched: boolean;
@@ -47,6 +61,7 @@ interface FunnelMetrics {
     bookingsUnmatchedToProperty: number;
     testPeopleExcluded: number;
     unmergeablePeople: number;
+    mixedCohortPeople: number;
   };
   cachedAt: string;
 }
@@ -216,6 +231,20 @@ function FunnelDashboard({ m }: { m: FunnelMetrics }) {
           </CardHeader>
           <CardContent>
             <TrendChart points={m.trend} markers={m.verificationToggleMarkers} height={150} />
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-4">
+        <Card size="sm">
+          <CardHeader>
+            <PanelTitle
+              title="ID check on vs off"
+              hint="Each lead is counted under the policy in force when they first inquired, not the switch's current position. Booking rate is measured from the link being delivered, because that is the last step both groups share."
+            />
+          </CardHeader>
+          <CardContent>
+            <CohortComparison cohorts={m.cohorts} mixed={m.dataQuality.mixedCohortPeople} />
           </CardContent>
         </Card>
       </div>
@@ -536,6 +565,91 @@ function StatusPill({ category }: { category?: string }) {
  * whose adjustments are invisible is indistinguishable from one that is simply
  * wrong.
  */
+/**
+ * The ID-verification experiment, side by side.
+ *
+ * ── Why the headline number is booked-per-LINK ───────────────────────────
+ * The two groups do not share a funnel: a waived lead has no "sent
+ * verification" or "verified" stage at all, so a stage-by-stage comparison
+ * would be comparing a four-step path against a two-step one. The last event
+ * both groups genuinely share is the booking link arriving, and everything
+ * after it is the thing under test. Booked-per-person is shown too, because it
+ * carries the friction the experiment is meant to remove.
+ *
+ * ── It refuses to draw a comparison it cannot support ────────────────────
+ * Until both sides have someone who actually received a link, one column is
+ * structurally empty, and 0% sitting next to a real number reads as a finding
+ * rather than as an absence. So the comparison is withheld and the reason is
+ * stated instead.
+ */
+function CohortComparison({ cohorts, mixed }: { cohorts: FunnelMetrics["cohorts"]; mixed: number }) {
+  const rows = [cohorts.required, cohorts.waived];
+  const delta = cohorts.comparable
+    ? Math.round((cohorts.waived.bookedPerLink - cohorts.required.bookedPerLink) * 10) / 10
+    : null;
+
+  return (
+    <div className="space-y-3">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[32rem] text-sm">
+          <thead>
+            <tr className="border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-500 dark:border-gray-700 dark:text-gray-400">
+              <th className="py-2 pr-4 font-medium">Policy when they inquired</th>
+              <th className="py-2 pr-4 text-right font-medium">People</th>
+              <th className="py-2 pr-4 text-right font-medium">Got a link</th>
+              <th className="py-2 pr-4 text-right font-medium">Booked</th>
+              <th className="py-2 pr-4 text-right font-medium">Booked / link</th>
+              <th className="py-2 text-right font-medium">Booked / person</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((c) => (
+              <tr key={c.label} className="border-b border-gray-100 last:border-0 dark:border-gray-800">
+                <td className="py-2 pr-4 font-medium text-gray-900 dark:text-gray-100">{c.label}</td>
+                <td className="py-2 pr-4 text-right tabular-nums">{c.people}</td>
+                <td className="py-2 pr-4 text-right tabular-nums">{c.linkDelivered}</td>
+                <td className="py-2 pr-4 text-right tabular-nums">{c.booked}</td>
+                <td className="py-2 pr-4 text-right tabular-nums font-medium">
+                  {c.linkDelivered === 0 ? "—" : `${c.bookedPerLink}%`}
+                </td>
+                <td className="py-2 text-right tabular-nums">
+                  {c.people === 0 ? "—" : `${c.bookedPerPerson}%`}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {cohorts.comparable ? (
+        <p className="text-sm text-gray-600 dark:text-gray-300">
+          Leads served without an ID check booked{" "}
+          <strong>
+            {delta === 0 ? "at the same rate" : `${Math.abs(delta ?? 0)} points ${(delta ?? 0) > 0 ? "more" : "less"} often`}
+          </strong>{" "}
+          once they had a link. Treat this as directional until several weeks of
+          leads have gone through each way — the groups are consecutive periods,
+          not a randomised split, so demand and available properties differ
+          between them.
+        </p>
+      ) : (
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          No comparison yet — this needs leads who received a link under{" "}
+          <strong>both</strong> settings. The switch has to be turned off for a
+          while before the second row fills in.
+        </p>
+      )}
+
+      {mixed > 0 && (
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          {mixed} {mixed === 1 ? "person" : "people"} inquired both before and after a
+          change and {mixed === 1 ? "is" : "are"} counted under whichever came first.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function DataQuality({ m }: { m: FunnelMetrics }) {
   const dq = m.dataQuality;
   const notes: string[] = [];

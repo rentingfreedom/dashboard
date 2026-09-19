@@ -44,6 +44,13 @@ export interface InquiryRow {
   phone: string;
   email: string;
   booked_at: string;
+  /**
+   * VERIFICATION_STAMP_MARKER. The policy in force when this row was written:
+   * "FALSE" means the lead was served without an ID check. BLANK means the row
+   * predates the stamp, i.e. verification WAS required — never read blank as a
+   * waiver.
+   */
+  verification_required: string;
 }
 
 export interface VerificationRow {
@@ -211,6 +218,19 @@ export interface FunnelStage {
   shareOfTop: number;
 }
 
+export interface CohortStats {
+  label: string;
+  /** Distinct people who inquired under this policy. */
+  people: number;
+  /** Of those, how many actually received a booking link. */
+  linkDelivered: number;
+  booked: number;
+  /** Booked as a percentage of those who received a link — the comparable rate. */
+  bookedPerLink: number;
+  /** Booked as a percentage of everyone who inquired, friction included. */
+  bookedPerPerson: number;
+}
+
 export interface FunnelMetrics {
   range: { from: string; to: string | null };
   stages: FunnelStage[];
@@ -241,6 +261,20 @@ export interface FunnelMetrics {
     rejected?: boolean;
     category?: "rejected" | "progressed" | "active" | "other";
   }[];
+  /**
+   * The ID-verification experiment, split by the policy each lead entered under.
+   *
+   * The two cohorts do NOT share a funnel: a waived lead never has a
+   * "sent verification" or "verified" stage at all. So the only honest common
+   * ground is what happens AFTER a link reaches them — hence `bookedPerLink`,
+   * which is the number the experiment is actually about.
+   */
+  cohorts: {
+    required: CohortStats;
+    waived: CohortStats;
+    /** True once both cohorts have at least one lead who received a link. */
+    comparable: boolean;
+  };
   trend: { capturedAt: string; reachedOut: number; sentVerification: number; verified: number; booked: number; verificationEnabled: boolean | null }[];
   verificationToggleMarkers: { capturedAt: string; enabled: boolean }[];
   dataQuality: {
@@ -262,6 +296,13 @@ export interface FunnelMetrics {
      * sheet reads.
      */
     unmergeablePeople: number;
+    /**
+     * People whose inquiries straddle a flip of the switch. They are counted in
+     * the cohort they FIRST inquired under, which is the only defensible choice,
+     * but they are not clean evidence either way — so the number is surfaced
+     * rather than buried.
+     */
+    mixedCohortPeople: number;
   };
 }
 
@@ -285,6 +326,7 @@ export function computeFunnel(input: FunnelInput): FunnelMetrics {
     bookingsUnmatchedToProperty: 0,
     testPeopleExcluded: 0,
     unmergeablePeople: 0,
+    mixedCohortPeople: 0,
   };
 
   // Rule 4 — names live on Identity_Verifications, not Inquiries, so build the
@@ -395,6 +437,74 @@ export function computeFunnel(input: FunnelInput): FunnelMetrics {
     if (!bookedKeysByIdentity.has(ident)) bookedKeysByIdentity.set(ident, new Set());
     bookedKeysByIdentity.get(ident)!.add(key);
   }
+
+  // ── the experiment: required vs waived ─────────────────────────────────
+  //
+  // Which policy a lead entered under is read from the row, not from the switch's
+  // CURRENT position — that is the whole reason verification_required is stamped
+  // at inquiry time. A lead is assigned by their EARLIEST in-range inquiry,
+  // matching how the client describes it ("if it was off when they applied").
+  //
+  // Blank is "required": every row predates the stamp, and a blank must never be
+  // mistaken for a waiver.
+  const firstRowByIdentity = new Map<Identity, InquiryRow>();
+  const waivedFlagsByIdentity = new Map<Identity, Set<boolean>>();
+  for (const r of inquiriesInRange) {
+    const ident = identityFor(r);
+    if (!ident) continue;
+    const prev = firstRowByIdentity.get(ident);
+    if (!prev || (parseTime(r.inquired_at) ?? 0) < (parseTime(prev.inquired_at) ?? 0)) {
+      firstRowByIdentity.set(ident, r);
+    }
+    if (!waivedFlagsByIdentity.has(ident)) waivedFlagsByIdentity.set(ident, new Set());
+    waivedFlagsByIdentity.get(ident)!.add(norm(r.verification_required) === "false");
+  }
+  for (const flags of waivedFlagsByIdentity.values()) if (flags.size > 1) dq.mixedCohortPeople++;
+
+  // "Received a link" is the common denominator, because it is the last event
+  // both cohorts share. Everything between it and a booking is the thing under
+  // test; everything before it is the same for both.
+  const gotLinkByIdentity = new Set<Identity>();
+  for (const r of inquiriesInRange) {
+    if (norm(r.link_sent) !== "true") continue;
+    const ident = identityFor(r);
+    if (ident) gotLinkByIdentity.add(ident);
+  }
+
+  const cohortOf = (ident: Identity): "required" | "waived" =>
+    norm(firstRowByIdentity.get(ident)?.verification_required) === "false" ? "waived" : "required";
+
+  const tally = (label: string, want: "required" | "waived"): CohortStats => {
+    let people = 0;
+    let linkDelivered = 0;
+    let bookedCount = 0;
+    for (const ident of reachedOut) {
+      if (cohortOf(ident) !== want) continue;
+      people++;
+      const hasLink = gotLinkByIdentity.has(ident);
+      if (hasLink) linkDelivered++;
+      if (booked.has(ident)) bookedCount++;
+    }
+    return {
+      label,
+      people,
+      linkDelivered,
+      booked: bookedCount,
+      bookedPerLink: pct(bookedCount, linkDelivered),
+      bookedPerPerson: pct(bookedCount, people),
+    };
+  };
+
+  const cohortRequired = tally("ID check required", "required");
+  const cohortWaived = tally("No ID check", "waived");
+  const cohorts = {
+    required: cohortRequired,
+    waived: cohortWaived,
+    // Until both sides have someone who actually received a link there is
+    // nothing to compare, and a 0% next to a real number reads as a finding
+    // rather than as an empty cell.
+    comparable: cohortRequired.linkDelivered > 0 && cohortWaived.linkDelivered > 0,
+  };
 
   const stages: FunnelStage[] = [
     { key: "reached_out", label: "Reached out", count: reachedOut.size, conversionFromPrev: null, shareOfTop: 100 },
@@ -543,6 +653,7 @@ export function computeFunnel(input: FunnelInput): FunnelMetrics {
     byProperty,
     stuck,
     trend,
+    cohorts,
     verificationToggleMarkers,
     dataQuality: dq,
   };

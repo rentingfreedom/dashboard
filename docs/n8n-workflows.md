@@ -1099,8 +1099,88 @@ verification rates across two regimes without knowing it.
 > wiring lesson.
 
 **No backfill**, deliberately: verification was required continuously since launch,
-so blank means "was required". **Nothing reads the column yet** — it is capture-only
-until the funnel is taught to segment by it.
+so blank means "was required".
+
+**Two things read the column now**, and both depend on blank meaning "required":
+the funnel's cohort comparison (below), and the Identity Gate's waiver
+(`VERIFICATION_WAIVER_MARKER`).
+
+### The waiver — applied while OFF, never asked — `VERIFICATION_WAIVER_MARKER` (2026-09-19)
+
+Grandfathering covered ON -> OFF. **The reverse was assumed safe and was not**, and
+the assumption was caught by testing the deployed gate rather than by reading it:
+
+```
+toggle ON, zero identity rows  ->  proceed=true, reason=ok  ->  SENDS A VERIFICATION SMS
+```
+
+A lead who arrived while the switch was OFF has **no** `Identity_Verifications` row,
+so `alreadySent` is false for them. Flip back ON and any routine `peopleUpdated` — a
+stage change, a note, a reassignment — walks them through every guard to a verify SMS.
+It never blocked them (they hold their link, and cal.com pages are public), but they
+were asked. Client decision 2026-09-19: **"if the ID verification is off when they
+apply, they should never be asked for ID verification."**
+
+`Check Guards` now bails `verification_waived` when any Inquiries row for that lead
+carries `verification_required = FALSE`. Matched on **person_id OR phone last-10** —
+a FUB merge changes `person_id`, and losing the waiver means asking someone we
+promised never to ask. **Blank is NOT a waiver.**
+
+> **It is the LAST guard, and that placement is load-bearing.** The first version sat
+> beside the toggle bail, above the trash and stage checks — identical for the lead,
+> wrong for everything else: `Check Guards` feeds `Tag Cleanup Needed?` and
+> `Needs Reapply Reroute?`, and those fields ride only the trash-blocked and success
+> return paths. Bailing early silently stops tag-expiry cleanup and the reapply-reroute
+> for any waived lead later trash-tagged. **Assertions F7-F9 caught it**, and pin the
+> ordering by requiring `trash_permanent` and `stage_not_allowed:` as the reasons.
+
+> **The cost is ONE Sheets request.** `Read Inquiries (Waiver)` carries `executeOnce` —
+> its input is `Read Identity Verifications` (~262 items), so without it this is ~262
+> requests per execution (gotcha 4). It runs on the **Project 2** credential with
+> `authentication: "serviceAccount"` copied from its neighbour (gotcha 22); that bucket
+> peaked at 3 requests/minute across 48h.
+
+```bash
+node scripts/n8n-add-verification-waiver.mjs [--apply] [--revert --apply] [--emit-js <dir>]
+```
+Backup `n8n/BEFORE-verification-waiver/`. The builder refuses if `Check Guards` ever
+starts reading `$json`/`$input` (gotcha 19 — the insertion's whole safety argument), if
+the upstream wiring has moved, or if `Resolve Inquiry` lacks `VERIFICATION_STAMP_MARKER`
+(nothing would write the column, so no lead could ever be waived and the patch would be
+a silent no-op). `--revert` also recognises the FIRST placement, so a workflow patched
+by that version can still be undone.
+
+### The on/off comparison on the funnel page (2026-09-19)
+
+`computeFunnel` splits leads into **required** and **waived** cohorts, assigned by the
+policy stamped on their **earliest** in-range inquiry — the switch's current position is
+irrelevant, which is the entire reason the stamp exists.
+
+> **The headline number is booked-per-LINK, not booked-per-person, and not a stage
+> comparison.** The two cohorts do not share a funnel: a waived lead has no "sent
+> verification" or "verified" stage at all, so a stage-by-stage view compares a
+> four-step path against a two-step one. The last event both genuinely share is the
+> booking link arriving; everything after it is the thing under test. Booked-per-person
+> is shown alongside, because it carries the friction the experiment exists to remove.
+
+> **It refuses to draw a comparison it cannot support.** Until both sides have someone
+> who received a link, `comparable` is false and the panel says so — a `0%` beside a
+> real number reads as a finding rather than an absence.
+
+A lead whose inquiries straddle a flip is counted under whichever came **first** and is
+reported as `dataQuality.mixedCohortPeople`, because they are not clean evidence either
+way.
+
+> **Section G of `funnel-metrics-verify.mjs` is synthetic and stays that way.** Live data
+> has **zero** waived leads until the switch is first turned off, so a live check could
+> only confirm that one column is empty — it would pass with the whole split deleted.
+> Non-vacuity confirmed by mutation: making blank read as a waiver turns **10** of the 18
+> red.
+
+> **Power, stated plainly because the number will be read as if it settles things.** At
+> ~4 leads/day the two cohorts are consecutive time periods, not a randomised split, so
+> demand and available inventory differ between them. It will show a large difference or
+> an obvious null quickly; it will not settle a small one.
 
 ### Turning it OFF strands people — the release
 
@@ -3736,7 +3816,8 @@ write nothing, and touch no n8n state.
 | `rejection-cancel-verify.mjs` | **73** — A-2 both layers, now applied; `--js <dir>` predates that |
 | `cal-booking-notify-verify.mjs` | **48** — B routing, both defects, the connections graph |
 | `cal-link-email-verify.mjs` | **37** — the parallel email branch, its note logging, and that no copy claims the lead verified |
-| `verification-toggle-verify.mjs` | **35** — item 4: the inverted default, routing, grandfathering, and that the switch opens nothing else |
+| `verification-toggle-verify.mjs` | **49** — item 4: the inverted default, routing, grandfathering, the waiver and its ordering |
+| `funnel-metrics-verify.mjs` | **59 offline** — the four data rules, plus section G: the on/off cohort split |
 | `inquiry-alert-verify.mjs` | **36** — all three `Row Recorded?` wirings, fan-out |
 | `missed-code-sweep-verify.mjs` | **49** — the four finding kinds, both windows, dedupe, recipients, graph |
 | `error-workflow-verify.mjs` | **52** — the alarm's structure, throttle, confirm-before-alert, self-exclusion, and that every active workflow is attached |

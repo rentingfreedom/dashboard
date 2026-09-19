@@ -110,7 +110,7 @@ async function fetchTabs(): Promise<RawTabs> {
 
   return {
     inquiries: inqObjs.map((o) =>
-      pick<InquiryRow>(o, ["person_id", "property_key", "inquired_at", "link_sent", "link_sent_at", "source", "property_address", "match_status", "phone", "email", "booked_at"])
+      pick<InquiryRow>(o, ["person_id", "property_key", "inquired_at", "link_sent", "link_sent_at", "source", "property_address", "match_status", "phone", "email", "booked_at", "verification_required"])
     ),
     verifications: verObjs.map((o) =>
       pick<VerificationRow>(o, ["session_id", "lead_id", "lead_name", "phone", "status", "sent_at", "resolved_at", "reminder_number"])

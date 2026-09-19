@@ -88,7 +88,7 @@ export async function captureDailySnapshot(): Promise<SnapshotResult> {
   const enabled = (settings.identity_verification_enabled ?? "true").toLowerCase() !== "false";
 
   const metrics = computeFunnel({
-    inquiries: inqObjs.map((o) => pick<InquiryRow>(o, ["person_id", "property_key", "inquired_at", "link_sent", "link_sent_at", "source", "property_address", "match_status", "phone", "email", "booked_at"])),
+    inquiries: inqObjs.map((o) => pick<InquiryRow>(o, ["person_id", "property_key", "inquired_at", "link_sent", "link_sent_at", "source", "property_address", "match_status", "phone", "email", "booked_at", "verification_required"])),
     verifications: verObjs.map((o) => pick<VerificationRow>(o, ["session_id", "lead_id", "lead_name", "phone", "status", "sent_at", "resolved_at", "reminder_number"])),
     bookings: bookObjs.map((o) => pick<BookingRow>(o, ["booking_uid", "cal_event_type_id", "event_category", "status", "is_test", "fub_person_id", "invitee_name", "invitee_phone", "invitee_email", "start_time"])),
     properties: propObjs.map((o) => pick<PropertyRow>(o, ["property_key", "cal_event_type_id", "street_address"])),
