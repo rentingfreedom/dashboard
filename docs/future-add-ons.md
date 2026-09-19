@@ -96,3 +96,114 @@ What it cost, for reference if the write half is ever quoted:
   trash-family stage" — no 90/365-day windows, no tag precedence. Reproducing
   the real policy in TypeScript would be a second implementation free to drift
   from the six n8n nodes that actually gate sends.
+
+---
+
+## Show which verification path each waiting lead is on
+
+**Raised** 2026-09-19, closing out item 4. Asked for as "a column on the bottom
+table saying if the person is on the ID Verification path or not".
+
+### Why it is not a column
+
+The bottom table is `WaitingOnVerification`, and `stuck` is built as
+`sentVerification` minus `verified` (`src/lib/metrics/funnel.ts`). **Every row in
+it is on the ID path by construction.** A path column there can only ever print
+one value, for every row, forever — it would look like information and carry
+none.
+
+### What the ask actually needs
+
+Broaden the panel from *"waiting on verification"* to *"waiting on a booking"*:
+everyone who received a link and has not booked, **waived leads included**. Then
+the column distinguishes two real populations and the panel answers "who is
+outstanding, and which route are they on".
+
+That is a redesign of an existing panel, not an addition:
+
+1. **It changes what the panel is for.** Today it is the actionable "chase these
+   people to verify" list — sorted by days waiting, with a reminders-sent filter
+   and a rejected-hiding toggle, all of which are verification-shaped. A waived
+   lead has no reminders and no days-since-verification-sent, so those controls
+   become partly meaningless and the sort key needs rethinking (days since the
+   link, presumably).
+2. **`stuck` is a documented output shape** consumed by the page and pinned by
+   `funnel-render-smoke.mjs`. Widening it means new fields, new empty states for
+   the fields that do not apply to waived leads, and updating that smoke suite.
+3. **The FUB enrichment cost scales with the list.** One `GET /people/{id}` per
+   row, no batch endpoint (see the section above). Today the list is the stuck
+   cohort; broadened, it is everyone unbooked, which is a larger set.
+
+None of it is hard. It is half a day, and it is a design decision about what
+that panel is, which is why it was not done silently as "a column".
+
+> **The data is already there.** `Inquiries.verification_required` is stamped per
+> row (`VERIFICATION_STAMP_MARKER`) and `computeFunnel` already assigns every
+> lead a cohort for the "ID check on vs off" panel. Nothing new needs recording —
+> this is presentation only.
+
+---
+
+## Track lease signings, and split them by ID check on vs off
+
+**Raised** 2026-09-19, same conversation. *"Is there a way we can track people
+that sign leases as well and keep that as a stat, then track that in ID vs no?"*
+Explicitly not wanted immediately.
+
+### Why it is the metric worth having
+
+Every funnel number today stops at **booked a showing**. A showing is a
+proxy — the business outcome is a signed lease, and the ID-check experiment is
+ultimately asking whether the friction costs *tenancies*, not appointments. A
+lease-level cohort split would answer the real question; booked-per-link only
+approximates it.
+
+### The lease data is the easy half
+
+DoorLoop already holds it and this estate already reads it. `4bMsEAi18j4CPK8k`
+polls Units and **ACTIVE leases** hourly for occupancy, and
+`src/lib/doorloop/client.ts` has the fetch/paging plumbing. A lease carries its
+`units[]` and its dates, so "which property, and when" is available without new
+integration work.
+
+### The join is the hard half, and it is a soft match
+
+**DoorLoop knows tenants; FUB knows leads; nothing carries an id across.** A
+signed lease would have to be attributed back to a lead by name, phone or email —
+the same soft-match class that has already caused real incidents here:
+
+- gotcha 17, where a malformed FUB lookup silently returned the wrong person and
+  an SMS went to whoever was most recently active;
+- gotcha 20, where DoorLoop's `/owners` list omitted records the single-resource
+  endpoint returned perfectly well, and an analysis built on the list concluded
+  "25 properties have no owner" when the true answer was zero.
+
+A wrong attribution here is quieter than either: it does not send anything, it
+just moves a number between two cohorts in a comparison someone will use to
+decide policy. **Wrong numbers still look like numbers.**
+
+### What it would take
+
+1. **Fetch leases** (not just ACTIVE — a lease that has since ended still counts
+   as a signing) with tenant contact details.
+2. **Resolve each lease to an `Identity`**, reusing `IdentityResolver` in
+   `src/lib/metrics/funnel.ts` rather than writing a fifth matcher. It already
+   merges on phone last-10, email and name, and already reports its merges.
+3. **Report unmatched leases loudly**, the way `dataQuality.bookingsUnmatchedToPerson`
+   does. A lease that cannot be attributed must be visible, never silently
+   dropped into neither cohort.
+4. **Add a `signed_lease` stage** to the funnel and a lease column to the
+   "ID check on vs off" panel.
+
+> **The property is a cheaper join than the person, and may be enough.** A lease
+> names its unit, and `doorloop_property_id` already links units to Properties
+> rows; Inquiries rows carry `property_key`. Lease-per-property against
+> inquiries-per-property sidesteps identity matching entirely. It cannot say
+> *which* lead signed, so it cannot split by cohort — but it would give a
+> reliable top-line "showings to leases" rate, which is most of the value for a
+> fraction of the risk. **Worth pricing both ways.**
+
+> **Expect the numbers to be small for a long time.** At ~4 leads/day and a
+> months-long inquiry-to-lease cycle, lease counts per cohort will be single
+> digits well past the point where booking rates are readable. This is a metric
+> to start recording now and read much later.
