@@ -341,7 +341,7 @@ returns `[]` with no address so Gmail is never called with an empty `to`.
 
 ```bash
 node scripts/n8n-add-cal-link-email.mjs [--apply] [--revert --apply]
-node scripts/cal-link-email-verify.mjs                     # 31 assertions
+node scripts/cal-link-email-verify.mjs                     # 37 assertions
 ```
 Backup `n8n/BEFORE-cal-link-email/`. The verifier asserts the connections graph as well
 as behaviour: the entire safety story is "parallel branch", and a rewire that routed
@@ -990,7 +990,7 @@ genuinely open.
 Test artifacts left in place deliberately: FUB persons 2607/2649/2650, notes
 2549/2653/2654, and the `Rental Applications` rows from those runs.
 
-## ID verification on/off switch — item 4 (2026-09-18, APPLIED; UI not deployed)
+## ID verification on/off switch — item 4 (2026-09-18, APPLIED; dashboard DEPLOYED 2026-09-19)
 
 One Settings key, `identity_verification_enabled`, decides whether a matched lead
 must pass Stripe Identity before getting their cal link. Created **`TRUE`**, which
@@ -1192,7 +1192,10 @@ already `false`, and the sweep marks them sent itself, so it is idempotent.
 > **Measured 2026-09-18: the VACANCY check alone holds back 32 leads.** Without the
 > Cheyla Zinck guard a flip texts them about houses that are now occupied. The sweep
 > has never checked availability and nothing downstream does. Of those that survive
-> it, grandfathering leaves 23 mid-flight leads alone, so a flip today releases **7**.
+> it, grandfathering leaves the mid-flight leads alone. **Do not trust any count
+> written here** — re-measured on the same day it was written, it moved from 7 to
+> 8 to 1 as the phone filter landed and new leads arrived. The dialog recomputes it,
+> and that is the only figure worth acting on.
 > The population moves daily — the dialog recomputes it, and so should you.
 
 > **The count must mean "messages that will be sent", not "candidates".** Measured
@@ -1261,7 +1264,7 @@ reads that line either.
 
 ```bash
 node scripts/n8n-add-verification-toggle.mjs [--setup-key --apply] [--apply] [--revert --apply]
-node scripts/verification-toggle-verify.mjs [--js <dir>]     # 35 assertions
+node scripts/verification-toggle-verify.mjs [--js <dir>]     # 49 assertions
 node scripts/verification-toggle-mutations.mjs               # 12 mutations
 node scripts/n8n-add-verification-policy-stamp.mjs [--setup-column --apply] [--apply]
 node scripts/n8n-fix-cal-link-email-copy.mjs [--apply] [--revert --apply]
@@ -3847,6 +3850,16 @@ write nothing, and touch no n8n state.
 | `cal-booking-notify-verify.mjs` | **48** — B routing, both defects, the connections graph |
 | `cal-link-email-verify.mjs` | **37** — the parallel email branch, its note logging, and that no copy claims the lead verified |
 | `verification-toggle-verify.mjs` | **49** — item 4: the inverted default, routing, grandfathering, the waiver and its ordering |
+> **`funnel-metrics-verify.mjs` A1 currently FAILS, and it is not a regression.**
+> It asserts that live `verified` equals a baseline documented on 2026-09-12; a 13th
+> lead has since verified, so it reports `expected 12, got 13`. Confirmed pre-existing
+> by stashing every change made on 2026-09-19. The assertion compares an unbounded
+> live window against a frozen number, so it drifts further every time someone
+> verifies — it needs a date-bounded window or a refreshed baseline. **Until then
+> `--offline` (59 assertions) is the clean run** and A1 going red means nothing.
+> Same trap already recorded for fixtures pinned to live CRM records: an assertion
+> that fails for reasons nobody acts on stops being read.
+
 | `funnel-metrics-verify.mjs` | **59 offline** — the four data rules, plus section G: the on/off cohort split |
 | `inquiry-alert-verify.mjs` | **36** — all three `Row Recorded?` wirings, fan-out |
 | `missed-code-sweep-verify.mjs` | **49** — the four finding kinds, both windows, dedupe, recipients, graph |
