@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ShieldCheck, ShieldOff, Loader2 } from "lucide-react";
 import {
   AlertDialog,
@@ -55,11 +55,26 @@ interface Plan {
  */
 export function VerificationToggle({ isAdmin }: { isAdmin: boolean }) {
   const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [dialog, setDialog] = useState<null | "on" | "off">(null);
+  const [dialog, setDialog] = useState<null | "on" | "off" | "release">(null);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [planning, setPlanning] = useState(false);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  /**
+   * The CURRENT release plan while the switch is off, re-read rather than
+   * remembered.
+   *
+   * The release only ever ran at the instant of a flip, and that misses the
+   * common case entirely: a lead with no phone is skipped at flip time, Nicole
+   * adds a number days later, and nothing re-runs — they sit unsent forever,
+   * silently, because the only other thing that replays the sweep is a
+   * successful verification that will now never happen. Seven of the eight
+   * candidates on 2026-09-19 were exactly that shape.
+   *
+   * So the prompt is driven by live state instead of by memory: whenever the
+   * switch is off and someone is releasable, the control appears.
+   */
+  const [stranded, setStranded] = useState<Plan | null>(null);
 
   /**
    * Read the switch position once on mount.
@@ -83,6 +98,46 @@ export function VerificationToggle({ isAdmin }: { isAdmin: boolean }) {
       cancelled = true;
     };
   }, []);
+
+  /**
+   * Re-read who is releasable right now. Cheap and read-only: the GET only plans,
+   * it never sends.
+   */
+  const refreshStranded = useCallback(async (): Promise<Plan | null> => {
+    try {
+      const p = await fetchJson<Plan>("/api/verification/release");
+      setStranded(p);
+      return p;
+    } catch (err) {
+      console.error("[verification-toggle] could not re-plan the release", err);
+      setStranded(null);
+      return null;
+    }
+  }, []);
+
+  /**
+   * Keep the standing prompt honest. Only while the switch is off and only for
+   * admins, because the planning endpoint is admin-only and there is nothing to
+   * offer anyone else.
+   */
+  useEffect(() => {
+    // No synchronous setState here: the prompt is already gated on
+    // `enabled === false`, so a stale plan cannot render while the switch is on,
+    // and clearing it belongs to the flip handler (an event) rather than here.
+    if (enabled !== false || !isAdmin) return;
+    let cancelled = false;
+    fetchJson<Plan>("/api/verification/release")
+      .then((p) => {
+        if (!cancelled) setStranded(p);
+      })
+      .catch((err) => {
+        console.error("[verification-toggle] could not re-plan the release", err);
+        if (!cancelled) setStranded(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, isAdmin]);
 
   /**
    * Opening the OFF dialog fetches the plan first, so the confirmation names the
@@ -120,6 +175,7 @@ export function VerificationToggle({ isAdmin }: { isAdmin: boolean }) {
 
       if (to) {
         toast.success("ID verification is ON. New leads must verify before getting a link.");
+        setStranded(null);
         setDialog(null);
         return;
       }
@@ -138,8 +194,31 @@ export function VerificationToggle({ isAdmin }: { isAdmin: boolean }) {
       }
 
       await runRelease(release);
+
+      // Hand straight over to the follow-up rather than relying on anyone
+      // remembering. It re-plans first, so what it shows is current rather than
+      // the list we just acted on.
+      await refreshStranded();
+      setDialog("release");
+      return;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "The flip failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Run the release outside a flip. Re-plans afterwards so the standing prompt
+   * reflects what is left rather than what was there when the dialog opened.
+   */
+  async function releaseNow() {
+    if (!stranded) return;
+    setBusy(true);
+    try {
+      await runRelease(stranded);
+      await refreshStranded();
+      setDialog(null);
     } finally {
       setBusy(false);
     }
@@ -153,13 +232,7 @@ export function VerificationToggle({ isAdmin }: { isAdmin: boolean }) {
    */
   async function runRelease(p: Plan) {
     const ids = p.eligible.map((l) => l.personId);
-    if (ids.length === 0) {
-      // Routine, not a failure: on 2026-09-19 every candidate was refused for an
-      // unrelated reason, so an honest plan is empty far more often than not.
-      toast.success("ID verification is off. Nobody needed a link sending.");
-      setDialog(null);
-      return;
-    }
+    if (ids.length === 0) return;
 
     setProgress({ done: 0, total: ids.length });
     let released = 0;
@@ -186,7 +259,6 @@ export function VerificationToggle({ isAdmin }: { isAdmin: boolean }) {
     }
 
     setProgress(null);
-    setDialog(null);
 
     if (failures.length === 0) {
       toast.success(`Released ${released} lead${released === 1 ? "" : "s"}.`);
@@ -238,20 +310,42 @@ export function VerificationToggle({ isAdmin }: { isAdmin: boolean }) {
             Turn {enabled ? "off" : "on"}
           </Button>
         )}
+
+        {/*
+          The standing prompt. It appears on its own whenever the switch is off
+          and someone is actually releasable — which is the case the flip-time
+          release cannot cover, because a lead who gains a phone number days
+          later was skipped at flip time and nothing re-runs for them.
+        */}
+        {isAdmin && enabled === false && (stranded?.eligible.length ?? 0) > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-300"
+            disabled={busy}
+            onClick={() => setDialog("release")}
+          >
+            Release {stranded?.eligible.length}
+          </Button>
+        )}
       </div>
 
       <AlertDialog open={dialog !== null} onOpenChange={(o) => !o && !busy && setDialog(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {dialog === "off"
-                ? "Turn ID verification off?"
-                : "Turn ID verification back on?"}
+              {dialog === "release"
+                ? "Release leads waiting for a link?"
+                : dialog === "off"
+                  ? "Turn ID verification off?"
+                  : "Turn ID verification back on?"}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {dialog === "on"
-                ? "New leads will have to pass Stripe Identity before they receive a booking link."
-                : "Leads will get their booking link immediately, without verifying their ID."}
+              {dialog === "release"
+                ? "While ID checks are off, anyone still waiting on one can be sent their booking link instead."
+                : dialog === "on"
+                  ? "New leads will have to pass Stripe Identity before they receive a booking link."
+                  : "Leads will get their booking link immediately, without verifying their ID."}
             </AlertDialogDescription>
           </AlertDialogHeader>
 
@@ -260,7 +354,44 @@ export function VerificationToggle({ isAdmin }: { isAdmin: boolean }) {
             <p>, and a paragraph cannot legally contain the block content below.
           */}
           <div className="space-y-3 text-sm">
-            {dialog === "on" ? (
+            {dialog === "release" ? (
+              <>
+                {(stranded?.eligible.length ?? 0) > 0 ? (
+                  <p>
+                    <strong>
+                      {stranded?.eligible.length} lead
+                      {stranded?.eligible.length === 1 ? "" : "s"}
+                    </strong>{" "}
+                    can be sent their booking link now — a real text and email each,
+                    about{" "}
+                    {Math.max(1, Math.round(((stranded?.eligible.length ?? 0) * 12) / 60))} minute
+                    {Math.round(((stranded?.eligible.length ?? 0) * 12) / 60) === 1 ? "" : "s"} in
+                    total.
+                  </p>
+                ) : (
+                  <p>
+                    <strong>Nobody is waiting right now.</strong> Nothing to send.
+                  </p>
+                )}
+                <p className="text-gray-500">
+                  This button reappears on its own whenever someone becomes releasable —
+                  most often when a phone number is added to a lead who did not have one.
+                  You do not need to remember to come back; re-running it is always safe,
+                  because anyone already sent their link is skipped.
+                </p>
+                {(stranded?.grandfathered.length ?? 0) > 0 && (
+                  <p className="text-gray-500">
+                    {stranded?.grandfathered.length} others are part-way through verifying and
+                    are deliberately left on that path.
+                  </p>
+                )}
+                {progress && (
+                  <p className="font-medium text-gray-700 dark:text-gray-300">
+                    Releasing {progress.done} of {progress.total}… keep this tab open.
+                  </p>
+                )}
+              </>
+            ) : dialog === "on" ? (
               <>
                 <p className="text-gray-500">
                       Anyone who already holds a link keeps it. Booking pages are public URLs and
@@ -333,18 +464,27 @@ export function VerificationToggle({ isAdmin }: { isAdmin: boolean }) {
           </div>
 
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={busy}>
+              {dialog === "release" ? "Not now" : "Cancel"}
+            </AlertDialogCancel>
             <Button
-              onClick={() => flip(dialog === "on")}
-              disabled={busy || planning || (dialog === "off" && !plan)}
+              onClick={() => (dialog === "release" ? releaseNow() : flip(dialog === "on"))}
+              disabled={
+                busy ||
+                planning ||
+                (dialog === "off" && !plan) ||
+                (dialog === "release" && (stranded?.eligible.length ?? 0) === 0)
+              }
             >
               {busy
                 ? progress
                   ? `Releasing ${progress.done}/${progress.total}…`
                   : "Working…"
-                : dialog === "off"
-                  ? "Turn off and release"
-                  : "Turn on"}
+                : dialog === "release"
+                  ? "Send their links"
+                  : dialog === "off"
+                    ? "Turn off and release"
+                    : "Turn on"}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

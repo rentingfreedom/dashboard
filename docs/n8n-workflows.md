@@ -1223,6 +1223,20 @@ already `false`, and the sweep marks them sent itself, so it is idempotent.
 > flip request; it runs in chunks of 3 via `/api/verification/release`, which re-plans
 > and re-checks every precondition on every chunk.
 
+> **The release is no longer flip-only, and that closed a real hole.** It used to
+> run once, at the instant of the flip. A lead skipped there for having no phone
+> — seven of the eight candidates on 2026-09-19 — who then gains a number days later
+> was never picked up again: their row stays `link_sent = false`, and the only
+> other thing that replays the sweep is a successful verification that will now
+> never happen. Silent, permanent, and the same "verify into silence" failure
+> arriving by a new route.
+>
+> So the dialog is reachable two ways. It opens automatically after a flip to OFF,
+> and a **standing prompt** appears beside the toggle whenever the switch is off
+> and someone is actually releasable, driven by a live re-plan rather than by
+> anyone remembering. Re-running is safe by construction: a lead already sent
+> their link is no longer `link_sent = false`.
+
 **Turning it back ON leaves existing link-holders alone** — served in good faith, and
 cal.com links are public URLs. **Do NOT add a dispatch-time verification check**; that
 is Proposal Three and is not approved.
