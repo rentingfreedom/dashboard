@@ -1,0 +1,229 @@
+{
+  "updatedAt": "2026-09-16T00:07:29.099Z",
+  "createdAt": "2026-09-15T00:20:34.971Z",
+  "id": "zvwMJSOZBwqVM8Lo",
+  "name": "RentingFreedom Production - Automation Failure Alerts",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "err-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "err-build",
+      "name": "Build Failure Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ERROR_ALERT_MARKER\n// Fans out ONE ITEM PER RECIPIENT. Never comma-separate a Twilio `To` —\n// Twilio rejects it with error 21211. This is the alert_cc_phones pattern.\n\nconst RECIPIENTS = ['+18434945244', '+18038047847'];  // Nicole, Andrew\nconst FROM_NUMBER = '+18548886242';                   // Settings from_number, hardcoded on purpose\n\nconst WINDOW_MS  = 60 * 60 * 1000;  // rolling hour\nconst MAX_ALERTS = 8;               // distinct failures alerted per window\nconst REPEAT_MS  = 60 * 60 * 1000;      // same signature at most once per window\nconst TRIGGER_REPEAT_MS = 6 * 60 * 60 * 1000;  // trigger failures: see below\n\nconst payload   = $input.first()?.json ?? {};\nconst workflow  = payload.workflow ?? {};\n\n// The Error Trigger has TWO payload shapes and they share no keys.\n//   execution failure: { execution: { id, url, error, lastNodeExecuted }, workflow }\n//   TRIGGER failure:   { trigger: { error, mode }, workflow }   <- no execution at all\n// Reading only the execution shape produced a real alert carrying\n// \"node: unknown node / no error message\" on 2026-09-16, which is worse than\n// useless: it wakes someone with no way to tell a DNS blip from a dead poller.\nconst isTriggerFailure = !payload.execution && !!payload.trigger;\nconst execution = payload.execution ?? {};\nconst trigger   = payload.trigger ?? {};\n\nconst wfId   = String(workflow.id ?? '');\nconst wfName = String(workflow.name ?? 'unknown workflow');\nconst node   = isTriggerFailure\n  ? 'TRIGGER (' + String(trigger.mode ?? 'poll') + ')'\n  : String(execution.lastNodeExecuted ?? 'unknown node');\nconst errObj = isTriggerFailure ? (trigger.error ?? {}) : (execution.error ?? {});\nconst rawMsg = String(errObj.message ?? errObj.name ?? 'no error message');\n// A trigger failure carries no execution id, so there is no execution deep\n// link. The workflow URL is derivable and is the page you actually want.\nconst url    = String(execution.url ?? '') ||\n               (wfId ? 'https://automation.rentingfreedom.com/workflow/' + wfId : '');\n\n// Never alert on our own failure — n8n would invoke this workflow again for\n// that failure, and the loop would be unbounded. The execution log is the\n// record instead.\nif (wfId && wfId === $workflow.id) {\n  console.log('[error-alert] suppressed: the failing workflow IS the alerter');\n  return [];\n}\n\nconst now = Date.now();\nconst sd  = $getWorkflowStaticData('global');\n\nsd.sentAt = (Array.isArray(sd.sentAt) ? sd.sentAt : []).filter((t) => Number.isFinite(t) && now - t < WINDOW_MS);\nsd.seen   = (sd.seen && typeof sd.seen === 'object') ? sd.seen : {};\nfor (const [k, t] of Object.entries(sd.seen)) {\n  if (!Number.isFinite(t) || now - t >= Math.max(REPEAT_MS, TRIGGER_REPEAT_MS)) delete sd.seen[k];\n}\nsd.suppressed = Number.isFinite(sd.suppressed) ? sd.suppressed : 0;\n\nconst signature = wfId + '::' + node + '::' + rawMsg.slice(0, 120);\n\n// Trigger failures get a LONGER repeat window than execution failures. The two\n// Properties pollers fail on transient DNS/quota blips and self-heal (the\n// trigger never consumed anything, so its position does not advance) — 7 such\n// failures in a fortnight are on record. At a 1-hour window that is a steady\n// drip of 00:01 texts about nothing, which is how an alarm gets ignored. At 6\n// hours a genuinely dead poller still reports ~4x a day.\nconst repeatWindow = isTriggerFailure ? TRIGGER_REPEAT_MS : REPEAT_MS;\n\nlet suppressReason = null;\nif (sd.seen[signature] && now - sd.seen[signature] < repeatWindow) {\n  suppressReason = 'duplicate signature within the window';\n} else if (sd.sentAt.length >= MAX_ALERTS) suppressReason = 'global cap ' + MAX_ALERTS + '/hour reached';\n\nif (suppressReason) {\n  sd.suppressed += 1;\n  console.log('[error-alert] SUPPRESSED (' + suppressReason + ') — ' + wfName + ' / ' + node +\n              ': ' + rawMsg.slice(0, 120) + ' | suppressed this window: ' + sd.suppressed);\n  return [];\n}\n\n// Everything suppressed since the last delivered alert rides along on this one,\n// so a storm reads as \"+N others\" rather than disappearing.\nconst alsoSuppressed = sd.suppressed;\nsd.suppressed = 0;\nsd.seen[signature] = now;\nsd.sentAt.push(now);\n\nconst msg = rawMsg.length > 180 ? rawMsg.slice(0, 177) + '...' : rawMsg;\nlet text = 'RF AUTOMATION FAILURE\\n' + wfName + '\\n' +\n           (isTriggerFailure ? 'trigger could not run' : 'node: ' + node) + '\\n' + msg;\nif (alsoSuppressed > 0) {\n  text += '\\n(+' + alsoSuppressed + ' other failure' + (alsoSuppressed === 1 ? '' : 's') + ' suppressed in the last hour)';\n}\nif (url) text += '\\n' + url;\n\nconst seen = new Set();\nconst out  = [];\nfor (const raw of RECIPIENTS) {\n  const digits = String(raw).replace(/\\D/g, '').slice(-10);   // dedupe on last 10\n  if (digits.length !== 10 || seen.has(digits)) continue;\n  seen.add(digits);\n  out.push({ json: {\n    phone: raw,\n    from_number: FROM_NUMBER,\n    message: text,\n    workflow_id: wfId,\n    workflow_name: wfName,\n    node,\n    failed_execution_url: url,\n  }});\n}\n\nif (out.length === 0) {\n  console.log('[error-alert] no valid recipients configured — nothing sent');\n  return [];\n}\nconsole.log('[error-alert] alerting ' + out.length + ' recipient(s): ' + wfName + ' / ' + node);\nreturn out;"
+      }
+    },
+    {
+      "id": "err-send",
+      "name": "Send Failure Alert",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        480,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "from": "={{ $json.from_number }}",
+        "to": "={{ $json.phone }}",
+        "message": "={{ $json.message }}",
+        "options": {}
+      },
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Build Failure Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Failure Alert": {
+      "main": [
+        [
+          {
+            "node": "Send Failure Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {
+    "global": {
+      "sentAt": [
+        1789767920046
+      ],
+      "seen": {
+        "TGGhSkTSZGYPrZo9::TRIGGER (trigger)::The DNS server returned an error, perhaps the server is offline": 1789767920046
+      },
+      "suppressed": 0
+    }
+  },
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "74e0fa51-3ce4-4c82-8169-70dca0ef0ee2",
+  "activeVersionId": "74e0fa51-3ce4-4c82-8169-70dca0ef0ee2",
+  "versionCounter": 2,
+  "triggerCount": 0,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-09-15T00:20:34.971Z",
+      "createdAt": "2026-09-15T00:20:34.971Z",
+      "role": "workflow:owner",
+      "workflowId": "zvwMJSOZBwqVM8Lo",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-09-16T00:07:29.100Z",
+    "createdAt": "2026-09-16T00:07:29.100Z",
+    "versionId": "74e0fa51-3ce4-4c82-8169-70dca0ef0ee2",
+    "workflowId": "zvwMJSOZBwqVM8Lo",
+    "nodes": [
+      {
+        "id": "err-trigger",
+        "name": "Error Trigger",
+        "type": "n8n-nodes-base.errorTrigger",
+        "typeVersion": 1,
+        "position": [
+          0,
+          0
+        ],
+        "parameters": {}
+      },
+      {
+        "id": "err-build",
+        "name": "Build Failure Alert",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          240,
+          0
+        ],
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "jsCode": "// ERROR_ALERT_MARKER\n// Fans out ONE ITEM PER RECIPIENT. Never comma-separate a Twilio `To` —\n// Twilio rejects it with error 21211. This is the alert_cc_phones pattern.\n\nconst RECIPIENTS = ['+18434945244', '+18038047847'];  // Nicole, Andrew\nconst FROM_NUMBER = '+18548886242';                   // Settings from_number, hardcoded on purpose\n\nconst WINDOW_MS  = 60 * 60 * 1000;  // rolling hour\nconst MAX_ALERTS = 8;               // distinct failures alerted per window\nconst REPEAT_MS  = 60 * 60 * 1000;      // same signature at most once per window\nconst TRIGGER_REPEAT_MS = 6 * 60 * 60 * 1000;  // trigger failures: see below\n\nconst payload   = $input.first()?.json ?? {};\nconst workflow  = payload.workflow ?? {};\n\n// The Error Trigger has TWO payload shapes and they share no keys.\n//   execution failure: { execution: { id, url, error, lastNodeExecuted }, workflow }\n//   TRIGGER failure:   { trigger: { error, mode }, workflow }   <- no execution at all\n// Reading only the execution shape produced a real alert carrying\n// \"node: unknown node / no error message\" on 2026-09-16, which is worse than\n// useless: it wakes someone with no way to tell a DNS blip from a dead poller.\nconst isTriggerFailure = !payload.execution && !!payload.trigger;\nconst execution = payload.execution ?? {};\nconst trigger   = payload.trigger ?? {};\n\nconst wfId   = String(workflow.id ?? '');\nconst wfName = String(workflow.name ?? 'unknown workflow');\nconst node   = isTriggerFailure\n  ? 'TRIGGER (' + String(trigger.mode ?? 'poll') + ')'\n  : String(execution.lastNodeExecuted ?? 'unknown node');\nconst errObj = isTriggerFailure ? (trigger.error ?? {}) : (execution.error ?? {});\nconst rawMsg = String(errObj.message ?? errObj.name ?? 'no error message');\n// A trigger failure carries no execution id, so there is no execution deep\n// link. The workflow URL is derivable and is the page you actually want.\nconst url    = String(execution.url ?? '') ||\n               (wfId ? 'https://automation.rentingfreedom.com/workflow/' + wfId : '');\n\n// Never alert on our own failure — n8n would invoke this workflow again for\n// that failure, and the loop would be unbounded. The execution log is the\n// record instead.\nif (wfId && wfId === $workflow.id) {\n  console.log('[error-alert] suppressed: the failing workflow IS the alerter');\n  return [];\n}\n\nconst now = Date.now();\nconst sd  = $getWorkflowStaticData('global');\n\nsd.sentAt = (Array.isArray(sd.sentAt) ? sd.sentAt : []).filter((t) => Number.isFinite(t) && now - t < WINDOW_MS);\nsd.seen   = (sd.seen && typeof sd.seen === 'object') ? sd.seen : {};\nfor (const [k, t] of Object.entries(sd.seen)) {\n  if (!Number.isFinite(t) || now - t >= Math.max(REPEAT_MS, TRIGGER_REPEAT_MS)) delete sd.seen[k];\n}\nsd.suppressed = Number.isFinite(sd.suppressed) ? sd.suppressed : 0;\n\nconst signature = wfId + '::' + node + '::' + rawMsg.slice(0, 120);\n\n// Trigger failures get a LONGER repeat window than execution failures. The two\n// Properties pollers fail on transient DNS/quota blips and self-heal (the\n// trigger never consumed anything, so its position does not advance) — 7 such\n// failures in a fortnight are on record. At a 1-hour window that is a steady\n// drip of 00:01 texts about nothing, which is how an alarm gets ignored. At 6\n// hours a genuinely dead poller still reports ~4x a day.\nconst repeatWindow = isTriggerFailure ? TRIGGER_REPEAT_MS : REPEAT_MS;\n\nlet suppressReason = null;\nif (sd.seen[signature] && now - sd.seen[signature] < repeatWindow) {\n  suppressReason = 'duplicate signature within the window';\n} else if (sd.sentAt.length >= MAX_ALERTS) suppressReason = 'global cap ' + MAX_ALERTS + '/hour reached';\n\nif (suppressReason) {\n  sd.suppressed += 1;\n  console.log('[error-alert] SUPPRESSED (' + suppressReason + ') — ' + wfName + ' / ' + node +\n              ': ' + rawMsg.slice(0, 120) + ' | suppressed this window: ' + sd.suppressed);\n  return [];\n}\n\n// Everything suppressed since the last delivered alert rides along on this one,\n// so a storm reads as \"+N others\" rather than disappearing.\nconst alsoSuppressed = sd.suppressed;\nsd.suppressed = 0;\nsd.seen[signature] = now;\nsd.sentAt.push(now);\n\nconst msg = rawMsg.length > 180 ? rawMsg.slice(0, 177) + '...' : rawMsg;\nlet text = 'RF AUTOMATION FAILURE\\n' + wfName + '\\n' +\n           (isTriggerFailure ? 'trigger could not run' : 'node: ' + node) + '\\n' + msg;\nif (alsoSuppressed > 0) {\n  text += '\\n(+' + alsoSuppressed + ' other failure' + (alsoSuppressed === 1 ? '' : 's') + ' suppressed in the last hour)';\n}\nif (url) text += '\\n' + url;\n\nconst seen = new Set();\nconst out  = [];\nfor (const raw of RECIPIENTS) {\n  const digits = String(raw).replace(/\\D/g, '').slice(-10);   // dedupe on last 10\n  if (digits.length !== 10 || seen.has(digits)) continue;\n  seen.add(digits);\n  out.push({ json: {\n    phone: raw,\n    from_number: FROM_NUMBER,\n    message: text,\n    workflow_id: wfId,\n    workflow_name: wfName,\n    node,\n    failed_execution_url: url,\n  }});\n}\n\nif (out.length === 0) {\n  console.log('[error-alert] no valid recipients configured — nothing sent');\n  return [];\n}\nconsole.log('[error-alert] alerting ' + out.length + ' recipient(s): ' + wfName + ' / ' + node);\nreturn out;"
+        }
+      },
+      {
+        "id": "err-send",
+        "name": "Send Failure Alert",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          480,
+          0
+        ],
+        "onError": "continueRegularOutput",
+        "parameters": {
+          "from": "={{ $json.from_number }}",
+          "to": "={{ $json.phone }}",
+          "message": "={{ $json.message }}",
+          "options": {}
+        },
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        }
+      }
+    ],
+    "connections": {
+      "Error Trigger": {
+        "main": [
+          [
+            {
+              "node": "Build Failure Alert",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Failure Alert": {
+        "main": [
+          [
+            {
+              "node": "Send Failure Alert",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Justin Artis",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-09-16T00:07:29.120Z",
+        "id": 538,
+        "workflowId": "zvwMJSOZBwqVM8Lo",
+        "versionId": "74e0fa51-3ce4-4c82-8169-70dca0ef0ee2",
+        "event": "deactivated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      },
+      {
+        "createdAt": "2026-09-16T00:07:29.131Z",
+        "id": 539,
+        "workflowId": "zvwMJSOZBwqVM8Lo",
+        "versionId": "74e0fa51-3ce4-4c82-8169-70dca0ef0ee2",
+        "event": "activated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    ]
+  }
+}

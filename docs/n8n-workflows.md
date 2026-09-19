@@ -2634,6 +2634,57 @@ build node falls back to the workflow URL, which is the page you want anyway.
 > Observed live 2026-09-16: `W6PoSadMxnoHwxhG`, "The DNS server returned an
 > error", benign, recovered on the next poll.
 
+### Confirm-before-alert — trigger failures only (2026-09-18)
+
+**The 6-hour window stopped the drip but still spent a real 21:45 SMS on
+nothing.** `TGGhSkTSZGYPrZo9`'s poll failed with the same DNS error (execution
+**43758**, `mode=trigger`, `items=0`) and texted Nicole and Andrew. Nothing was
+wrong: a failed poll **consumed nothing**, so its stored position never
+advanced. Confirmed at the time — the sibling poller on the **same tab and
+credential** (`W6PoSadMxnoHwxhG`) succeeded at 21:00 and 22:00 either side of
+it, and all 79 Properties rows were intact.
+
+So the **first** trigger failure for a workflow is now **held**, and an alert
+goes out only once it proves durable:
+
+| Confirmed by | Rule |
+|---|---|
+| recurrence | another trigger failure for the same workflow within `TRIGGER_CONFIRM_MS` (1h) |
+| volume | `TRIGGER_DAY_CONFIRM` (3) of them in a rolling day, however spaced |
+
+Both pollers tick every **5 minutes**, so a genuinely dead one confirms on its
+next tick — the alert is ~5 minutes later than before, not hours. A blip that
+never recurs is never sent.
+
+> **The volume arm is not redundant.** Without it, a poller failing every few
+> hours forever — intermittent but *not* self-healing — resets the recurrence
+> clock every time and is held **permanently**. Mutation M3 exists solely to
+> keep that door shut.
+
+> **EXECUTION failures are deliberately untouched and must stay that way.**
+> Those are the Rita-class crashes where a customer is already affected by the
+> time the alert fires; they still alert on the **first** occurrence. The gate
+> keys on `isTriggerFailure` and nothing else, and **mutation M2 — which makes
+> it swallow execution failures — is the most important assertion in the
+> suite.** This is the one change in the estate whose failure mode is an alarm
+> that has quietly stopped alarming.
+
+> **A held failure is COUNTED, not dropped** (`sd.suppressed`), so it rides the
+> next delivered alert as `(+N others)` — the same contract every other
+> suppression here has. Per-workflow history lives in `sd.trigFails`, keyed on
+> the **workflow** rather than the signature: a dying poller does not promise
+> to fail with the same error text twice.
+
+> **It rests on the same staticData persistence the throttle already proved
+> live** — the 2026-09-14 test showed a second identical failure returning 0
+> items with the Twilio node never running, i.e. state surviving an execution
+> that returned `[]`. The hold path is that mechanism and no new one.
+
+The SMS for a confirmed trigger failure now reads **`trigger failing repeatedly
+(N in 24h)`** rather than `trigger could not run` — the old wording read
+identically for a self-healing blip and a dead poller, which is exactly what
+made the 21:45 message impossible to action.
+
 ### The throttle is not optional
 
 A 593-person FUB backfill once produced **~330 failing executions in 3 minutes**.
@@ -2661,7 +2712,8 @@ alert, which is the correct direction for an alarm.
 ```bash
 node scripts/n8n-create-error-workflow.mjs [--apply] [--update-code --apply] [--delete <id>] [--emit-js <dir>]
 node scripts/n8n-attach-error-workflow.mjs [--apply] [--revert --apply] [--only <id>] [--include-inactive]
-node scripts/error-workflow-verify.mjs [--local] [--js <dir>]   # 46 assertions
+node scripts/error-workflow-verify.mjs [--local] [--js <dir>]   # 52 assertions
+node scripts/error-alert-mutations.mjs                          # 5 mutations, proves the above
 ```
 Backups `n8n/BEFORE-error-workflow-attach/` (full pre-change JSON per workflow).
 
@@ -3687,7 +3739,7 @@ write nothing, and touch no n8n state.
 | `verification-toggle-verify.mjs` | **35** — item 4: the inverted default, routing, grandfathering, and that the switch opens nothing else |
 | `inquiry-alert-verify.mjs` | **36** — all three `Row Recorded?` wirings, fan-out |
 | `missed-code-sweep-verify.mjs` | **49** — the four finding kinds, both windows, dedupe, recipients, graph |
-| `error-workflow-verify.mjs` | **46** — the alarm's structure, throttle, self-exclusion, and that all 16 are attached |
+| `error-workflow-verify.mjs` | **52** — the alarm's structure, throttle, confirm-before-alert, self-exclusion, and that every active workflow is attached |
 | `lockbox-park-verify.mjs` | **64** — item 1a: parking, the alert fan-out, the graph, and that a parked row is inert in the dispatch cron |
 | `non-showing-skip-verify.mjs` | **24** — consult/walkthrough skipped, showings untouched, classify() parity, no event-type collision |
 | `fub-status-verify.mjs` | **25** — the dashboard's FUB status column: rejected / progressed / active / out-of-scope, pinned to synthetic stages |

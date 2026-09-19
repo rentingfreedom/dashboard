@@ -59,6 +59,20 @@
  * undercount — which loses suppression, never an alert. Degrading toward noise
  * is the correct direction for an alarm.
  *
+ * ── Confirm-before-alert, TRIGGER failures only (2026-09-18) ─────────────
+ * A trigger failure consumed nothing — the poll never emitted, so its stored
+ * position never advanced — which is why a DNS blip on the Properties pollers
+ * is harmless and self-heals. The 6-hour dedupe stopped that being a drip but
+ * still spent a real 21:45 SMS on nothing. So the FIRST trigger failure for a
+ * workflow is held, and it alerts only once it recurs within the hour, or
+ * three times in a rolling day. The pollers tick every 5 minutes, so a
+ * genuinely dead one confirms on its next tick.
+ *
+ * EXECUTION failures are deliberately untouched: those are the Rita-class
+ * crashes where a customer is already affected, and they still alert on the
+ * first one. Holding those would be the exact failure this workflow exists to
+ * prevent. The gate keys on `isTriggerFailure` and nothing else.
+ *
  * ── No Sheets node, deliberately ─────────────────────────────────────────
  * Recipients and the sender are HARDCODED rather than read from Settings. The
  * most common way this estate breaks is Google Sheets quota exhaustion, so a
@@ -136,6 +150,13 @@ const MAX_ALERTS = 8;               // distinct failures alerted per window
 const REPEAT_MS  = 60 * 60 * 1000;      // same signature at most once per window
 const TRIGGER_REPEAT_MS = 6 * 60 * 60 * 1000;  // trigger failures: see below
 
+// Confirm-before-alert, for TRIGGER failures only. See the long note at the
+// gate below — the short version is that a transient blip fails ONCE and a
+// dead poller fails every 5 minutes, so "did it happen again?" separates them.
+const TRIGGER_CONFIRM_MS  = 60 * 60 * 1000;       // a 2nd failure within this confirms
+const TRIGGER_DAY_MS      = 24 * 60 * 60 * 1000;  // rolling day for the count-based escape hatch
+const TRIGGER_DAY_CONFIRM = 3;                    // ...or this many in a day, however spaced
+
 const payload   = $input.first()?.json ?? {};
 const workflow  = payload.workflow ?? {};
 
@@ -179,14 +200,70 @@ for (const [k, t] of Object.entries(sd.seen)) {
 }
 sd.suppressed = Number.isFinite(sd.suppressed) ? sd.suppressed : 0;
 
+// Per-workflow history of TRIGGER failures, keyed on the workflow rather than
+// on the signature: a failing poller does not promise to fail with the same
+// error text twice, and "this poller keeps dying" is the thing worth knowing.
+sd.trigFails = (sd.trigFails && typeof sd.trigFails === 'object') ? sd.trigFails : {};
+for (const [k, list] of Object.entries(sd.trigFails)) {
+  const kept = (Array.isArray(list) ? list : []).filter((t) => Number.isFinite(t) && now - t < TRIGGER_DAY_MS);
+  if (kept.length) sd.trigFails[k] = kept; else delete sd.trigFails[k];
+}
+
 const signature = wfId + '::' + node + '::' + rawMsg.slice(0, 120);
 
-// Trigger failures get a LONGER repeat window than execution failures. The two
-// Properties pollers fail on transient DNS/quota blips and self-heal (the
-// trigger never consumed anything, so its position does not advance) — 7 such
-// failures in a fortnight are on record. At a 1-hour window that is a steady
-// drip of 00:01 texts about nothing, which is how an alarm gets ignored. At 6
-// hours a genuinely dead poller still reports ~4x a day.
+// ── Confirm-before-alert, TRIGGER failures only ─────────────────────────
+// A trigger failure consumed nothing: the poll never emitted, so its stored
+// position never advanced and the next poll re-reads the same rows. That is
+// why a DNS blip here is genuinely harmless and self-heals — verified again on
+// 2026-09-18, when TGGhSkTSZGYPrZo9's poll failed at 21:45 and the sibling
+// poller on the SAME tab and credential succeeded at 22:00, with all 79
+// Properties rows intact.
+//
+// The 6-hour dedupe below already stopped that becoming a drip, but it still
+// spent a real 21:45 SMS on nothing. So the first trigger failure for a
+// workflow is now HELD rather than sent, and an alert goes out only once the
+// failure proves itself durable:
+//   · another trigger failure for the same workflow within TRIGGER_CONFIRM_MS
+//   · or TRIGGER_DAY_CONFIRM of them in a rolling day, however spaced
+//
+// The pollers tick every 5 minutes, so a genuinely dead one confirms on its
+// next tick — the alert is ~5 minutes later than before, not hours. A blip
+// that never recurs is never sent, which is the entire point.
+//
+// This CANNOT silence an execution failure: those are the Rita-class crashes
+// where a real customer is already affected, and they alert on the first one,
+// exactly as before. The gate is keyed on isTriggerFailure and nothing else.
+let triggerCount = 0;
+if (isTriggerFailure) {
+  const wfKey = wfId || wfName;
+  const hist = Array.isArray(sd.trigFails[wfKey]) ? sd.trigFails[wfKey] : [];
+  hist.push(now);
+  sd.trigFails[wfKey] = hist;
+  triggerCount = hist.length;
+
+  // hist includes THIS failure, so a prior one exists iff length >= 2.
+  const prior = hist.length >= 2 ? hist[hist.length - 2] : null;
+  const confirmedByRecurrence = prior !== null && now - prior < TRIGGER_CONFIRM_MS;
+  const confirmedByVolume = hist.length >= TRIGGER_DAY_CONFIRM;
+
+  if (!confirmedByRecurrence && !confirmedByVolume) {
+    // Counted, not silently dropped: it rides along on the next delivered
+    // alert as "+N others", the same contract every other suppression here has.
+    sd.suppressed += 1;
+    console.log('[error-alert] HELD (first trigger failure for ' + wfName +
+                ' — awaiting confirmation) — ' + rawMsg.slice(0, 120) +
+                ' | failures for this workflow in 24h: ' + hist.length +
+                ' | suppressed this window: ' + sd.suppressed);
+    return [];
+  }
+  console.log('[error-alert] trigger failure CONFIRMED for ' + wfName +
+              ' (' + hist.length + ' in 24h, ' +
+              (confirmedByRecurrence ? 'recurred within the hour' : 'volume threshold') + ')');
+}
+
+// Trigger failures get a LONGER repeat window than execution failures, so that
+// a confirmed-but-ongoing poller failure reports ~4x a day rather than every
+// hour. The confirm gate above decides WHETHER to speak; this decides how often.
 const repeatWindow = isTriggerFailure ? TRIGGER_REPEAT_MS : REPEAT_MS;
 
 let suppressReason = null;
@@ -209,8 +286,12 @@ sd.seen[signature] = now;
 sd.sentAt.push(now);
 
 const msg = rawMsg.length > 180 ? rawMsg.slice(0, 177) + '...' : rawMsg;
+// A confirmed trigger failure says so, and says how many. "trigger could not
+// run" read identically for a self-healing blip and a dead poller, which is
+// the ambiguity that made the alert hard to action at 21:45.
+const triggerLine = 'trigger failing repeatedly (' + triggerCount + ' in 24h)';
 let text = 'RF AUTOMATION FAILURE\\n' + wfName + '\\n' +
-           (isTriggerFailure ? 'trigger could not run' : 'node: ' + node) + '\\n' + msg;
+           (isTriggerFailure ? triggerLine : 'node: ' + node) + '\\n' + msg;
 if (alsoSuppressed > 0) {
   text += '\\n(+' + alsoSuppressed + ' other failure' + (alsoSuppressed === 1 ? '' : 's') + ' suppressed in the last hour)';
 }

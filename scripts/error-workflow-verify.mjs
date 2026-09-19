@@ -180,15 +180,55 @@ async function main() {
       },
       workflow: { id: "W6PoSadMxnoHwxhG", name: "RentingFreedom - Delete Property" },
     };
-    const out = makeRunner(jsCode, {})(triggerPayload);
+    // Confirm-before-alert (2026-09-18): the FIRST trigger failure is held,
+    // because a poll that failed consumed nothing and the overwhelmingly
+    // common case is a DNS blip that self-heals on the next 5-minute tick.
+    // The diagnosis assertions below still matter — they just now apply to the
+    // alert that goes out once the failure proves durable.
+    const sd = {};
+    const run = makeRunner(jsCode, sd);
+    const held = run(triggerPayload).out;
+    ok("B20 the FIRST trigger failure is HELD, not sent (a blip self-heals)",
+       (held ?? []).length === 0, `${held?.length} item(s)`);
+    const out = run(triggerPayload);   // recurs within the hour -> confirmed
     const m = out.out?.[0]?.json?.message ?? "";
-    ok("B20 a TRIGGER failure still alerts", (out.out ?? []).length === 2, `${out.out?.length} item(s)`);
+    ok("B20a a CONFIRMED trigger failure alerts", (out.out ?? []).length === 2, `${out.out?.length} item(s)`);
     ok("B21 …and carries the real error text, not 'no error message'",
        m.includes("DNS server returned an error"), m);
     ok("B22 …and does not claim 'unknown node'", !m.includes("unknown node"), m);
     ok("B23 …and names the failing workflow", m.includes("Delete Property"), m);
     ok("B24 …and links somewhere useful despite having no execution id",
        m.includes("/workflow/W6PoSadMxnoHwxhG"), m);
+    ok("B24a …and says it is REPEATING, so a blip and a dead poller do not read alike",
+       /failing repeatedly \(\d+ in 24h\)/.test(m), m);
+  }
+
+  // B28 — the confirm gate must NEVER touch execution failures. Holding one of
+  // those is precisely the Rita-class outcome this whole workflow exists to
+  // prevent: a customer is already affected by the time it fires.
+  {
+    const run = makeRunner(jsCode, {});
+    const first = run(payloadFor({ node: "Find Property" })).out;
+    ok("B28 an EXECUTION failure still alerts on the FIRST occurrence (never held)",
+       first.length === 2, `${first.length} item(s)`);
+  }
+
+  // B29 — the volume escape hatch: failures too far apart to confirm each
+  // other must still surface. A poller failing every few hours forever is not
+  // self-healing, and without this it would be held forever, one at a time.
+  {
+    const sd = {};
+    const run = makeRunner(jsCode, sd);
+    const mk = () => ({
+      trigger: { error: { message: "intermittent DNS", name: "NodeApiError" }, mode: "trigger" },
+      workflow: { id: "TGGhSkTSZGYPrZo9", name: "New Property -> Provision" },
+    });
+    const age = (...offsetsMs) => { sd.trigFails["TGGhSkTSZGYPrZo9"] = offsetsMs.map((o) => Date.now() - o); };
+    ok("B29 widely-spaced trigger failure 1 is held", run(mk()).out.length === 0);
+    age(3 * 60 * 60 * 1000);                       // push #1 back 3h
+    ok("B30 …failure 2, three hours later, is still held (no recurrence)", run(mk()).out.length === 0);
+    age(5 * 60 * 60 * 1000, 3 * 60 * 60 * 1000);   // push #1 and #2 back
+    ok("B31 …failure 3 in the same day ALERTS on the volume threshold", run(mk()).out.length === 2);
   }
 
   // B25 — trigger failures dedupe harder than execution failures
@@ -199,7 +239,8 @@ async function main() {
     });
     const sd = {};
     const run = makeRunner(jsCode, sd);
-    ok("B25 first trigger failure alerts", run(mk()).out.length === 2);
+    run(mk());                                  // held — awaiting confirmation
+    ok("B25 the trigger failure alerts once CONFIRMED by recurrence", run(mk()).out.length === 2);
     // 2 hours later: an execution failure would be free to alert again, a
     // trigger failure must not — the pollers blip and self-heal.
     for (const k of Object.keys(sd.seen ?? {})) sd.seen[k] = Date.now() - 2 * 60 * 60 * 1000;
