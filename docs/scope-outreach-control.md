@@ -519,7 +519,9 @@ v1 has Stop and Restart. The client wants a single **Actions** menu per row:
   server-side beyond passing the date.
 - **Stop** — as built.
 - **Insert into a loop** — put a lead into a *different* sequence than the one
-  they are in.
+  they are in. **SUPERSEDED 2026-09-23 — see Part 6, 6d.** The one case the
+  client actually had (Nicole verifies an ID by hand) is served by the existing
+  verification waiver plus one column flip, with no n8n work and no send button.
 
 > **"Insert into a loop" is a send button and is the most dangerous item in
 > Part 4.** It is not the inverse of Stop: it starts a sequence the lead was
@@ -618,6 +620,206 @@ tag and move the lead to `Cold Rental Lead 1 month Hold`.
 | Two follow-up tasks (ID + booking) or one? | A lead can reach nudge 2 in both ladders. |
 | Is `[no response]` the existing `No Response Trash` tag? | A new tag name is invisible to every gate; the existing one blocks for 90 days. |
 | ~~Does a post-showing lead get the "property leased" message?~~ | **ANSWERED 2026-09-22: yes** — see Part 3, 3b. |
+
+## Part 6 — Disposition, cancellation and re-entry (requested 2026-09-23)
+
+Decided in conversation 2026-09-23. **4e's "insert into a loop" is superseded
+by 6d**, which serves the case the client actually named at a fraction of the
+cost.
+
+### The menu, settled
+
+| Item | Who | Notes |
+|---|---|---|
+| **Pause outreach…** | admin + user | **BUILT 2026-09-23.** A suppression with `expires_at`. |
+| **Stop outreach…** | admin + user | **BUILT.** Gains the FUB disposition section, 6b. |
+| **Cancel showing…** | admin + user | Only when a future `scheduled` booking exists. 6c. |
+| **Restart** | admin only | As built. Can cause a send. |
+
+> **Per-sequence scopes are a TRAP, and the dropdown may want deleting.**
+> "ID verification only" is close to meaningless: `Check Guards` already
+> refuses anyone holding a verification row (`already_sent`), so for a lead
+> mid-ladder it stops something that was never going to happen — while
+> `identity_reminders`, enforced in a *different workflow*
+> (`R3rhuCYEGoBFArBa`), keeps texting them daily. Every scope has a version of
+> this. A checkbox grid would make six traps visible instead of one, which is
+> why the client's own instinct — keep Stop blunt, put granularity behind a
+> different door — was taken. **Open: does Nicole use the scopes at all?** If
+> not, delete the dropdown.
+
+The list was reordered 2026-09-23 into the order a lead **meets** them
+(identity → identity reminders → cal link → booking nudges → visit reminders),
+matching the table columns and the chart, rather than the arbitrary order of
+`SEQUENCE_KEYS`.
+
+### 6b. Stop carries an optional FUB disposition
+
+Nicole's rejection process is a trash tag **plus** a move to
+`Cold Rental Lead 1 month Hold` (confirmed 2026-09-23). Today she does both by
+hand in FUB.
+
+**Folded into Stop rather than given its own button, deliberately.** A trash
+tag already suppresses every send path, so tag-and-stage *is* a stop. Two
+buttons that both stop outreach — one of which also tells the CRM — invites
+pressing the wrong one.
+
+**This is the first time the system will WRITE a trash tag.** It has only ever
+read them. `Denied Credit` blocks that lead for **365 days** across every send
+path; `No Response Trash` for **90**. The confirm text must name the window in
+days, not the tag name alone.
+
+**One PUT, carrying `tags`, `stage` and `customTrashDate` together** — the
+shape the reapply-reroute already uses.
+
+> **Why write the date ourselves when the watcher would do it.** A `tags` write
+> *does* fire `peopleUpdated` (a custom-field-only write does not — that
+> asymmetry is recorded under the trash-tag gate), so the watcher would wake
+> and stamp `customTrashDate` on seeing the tag. But that depends on FUB
+> delivering the webhook and n8n being up, and it leaves a window in which the
+> lead holds a **dateless** tag. Writing it in the same call is deterministic,
+> and the watcher never overwrites an existing date, so ours wins cleanly.
+
+> **FUB's PUT REPLACES the whole tags array.** Existing tags must be re-sent
+> verbatim alongside the new one, exactly as `TAG_EXPIRY_CLEANUP_MARKER` does.
+> Dropping this silently deletes the client's own tags.
+
+> **The dashboard has never written to FUB.** `src/lib/fub/client.ts` is
+> read-only — one function, `fetchLeadStatuses`. This is a new capability and
+> needs **`FUB_API_KEY` set in the Vercel project** (confirmed with the client
+> 2026-09-23). Nothing in the app called FUB at all before the stage column.
+
+**A stop WITHOUT a disposition leaves the lead in a valid stage**, suppressed
+but otherwise untouched. The table should mark where they stopped — a 🛑 in the
+ladder cell at their pipeline position — so the row reads as "halted here"
+rather than merely going quiet. They already count as `suppressed` for
+filtering; this is presentation only.
+
+### 6c. Cancel showing
+
+Only offered when a future booking is still `scheduled`.
+
+**Also belongs on `/showings`**, which is where someone goes when thinking
+about a showing. Same route, two entry points; `/showings` is arguably the
+primary one.
+
+**The cancel goes through the Cal.com API** — `POST /v2/bookings/{uid}/cancel`,
+header `cal-api-version: 2024-08-13`, proven live under A-2. **Never a sheet
+write:** `status = cancelled` in the sheet leaves the real booking alive, so
+the slot stays blocked and Cal.com keeps sending its own reminders.
+
+Everything downstream then self-heals with no new wiring: Immediate Sends flips
+the row and emails the invitee, the Booking Handler texts them,
+`Find Due Notifications` skips cancelled rows, and `Find Ready Showings`
+requires `status === 'scheduled'` so no code is minted.
+
+> **An already-dispatched code still opens the door.** Populife cancellation on
+> these Bluetooth-only lockboxes deletes the *cloud* record only — the lock
+> derives codes algorithmically from time and serial (gotcha 8). The dialog
+> must say so plainly: the applicant will be *told* it is cancelled, and the
+> lockbox will still open. Staff need to know which of those is true.
+
+**The rebook toggle — default OFF.**
+
+- **ON** — our cancellation message gains an appended "book another time" line
+  carrying the rebook link, and the lead re-enters the scheduling loop. Client
+  decision 2026-09-23: **append to the existing cancellation message**, not a
+  separate send. A cancellation already produces Cal.com's own email, our
+  cancellation email and our cancellation SMS; a fourth message about one event
+  is too many.
+- **OFF** — offer the 6b disposition. Without it the lead goes **silent
+  permanently and invisibly**: the Cal Bookings row is cancelled so no
+  reminders, `link_sent` stays `true` so the sweep never resends, and
+  `booked_at` is stamped so no nudges. Nothing records why.
+
+> **The rebook link MUST carry `metadata[fub_person_id]` and
+> `metadata[phone]`.** A bare link yields a booking with no person id and no
+> phone, so `Build Showing Row` writes blanks and Access Dispatch mints a code
+> it cannot text — Twilio 21604, silently. That is exactly
+> `NUDGE_CAL_LINK_METADATA_MARKER`, fixed 2026-09-20. **Reuse that builder; do
+> not re-render the link.**
+
+> **Availability still needs checking here.** "House got leased → cancel the
+> other applicants" is being handled on `/properties` (Part 3), but that is
+> **not built yet**, and a manual cancellation with rebook ON would otherwise
+> invite someone to tour a home that is no longer available. The Cheyla Zinck
+> guard, in a new place.
+
+Suppression is checked **first**: a lead who has been stopped gets no rebook
+message. The appended line is lead-facing, so it is assembled in the build node
+and carries the `sms_footer` (`SMS_FOOTER_MARKER`).
+
+### The scheduling loop does NOT simply resume — it is a state reset
+
+Verified against the deployed `Find Due Nudges` 2026-09-23. Three independent
+gates stop a lead who has booked, checked in this order:
+
+| Gate | Why it blocks |
+|---|---|
+| `booked_at` non-empty → `already_booked` | Checked **first**. `Mark Booked` only ever stamps; nothing clears it. |
+| anchor is `link_sent_at`, window days 1–4 | A lead who booked on day 2 and cancels on day 20 is `window_over` regardless. |
+| `booking_reminder_count >= 4` | `max_reached`. |
+
+So rebooking means **rewriting the Inquiries row**: clear `booked_at`,
+re-anchor `link_sent_at` to now, reset `booking_reminder_count` to 0 and clear
+`booking_reminder_last_at`. `link_sent` stays `"true"`. Client chose
+re-anchoring over a new `rebook_anchor_at` column 2026-09-23 — cheaper, at the
+cost of rewriting "when did we send them their link" for the funnel and the
+ladder.
+
+> **Inquiries is the ONLY tab that needs touching.** Pre-visit, door-code and
+> post-visit flags all live per-booking on the **Cal Bookings** row: the
+> cancelled row is skipped, and a new booking writes a fresh row with fresh
+> flags. The instinct to reset them would be work for nothing.
+
+> **A latent inconsistency, found while verifying the above and NOT yet fixed.**
+> `hasBooked()` skips bookings whose status is `cancelled`, but `booked_at` is
+> checked *before* it and is never cleared — and the stamping only runs inside
+> the 10am ET send hour. So cancelling **before** the next 10am leaves the lead
+> nudgeable, and cancelling **after** silences them forever. Same action,
+> different outcome depending on the hour. `docs/n8n-workflows.md` claims "A
+> cancelled booking does not count as booked — the lead is nudged again", which
+> is true only in the first case.
+
+### 6d. Re-entry — the waiver already does this
+
+The client asked for a way to restart at a loop point or skip a loop, naming
+one case: **Nicole verifies someone's ID by hand** (Stripe Identity failed
+them) and they should move straight to the booking link.
+
+**That mechanism exists and shipped 2026-09-19.** Set
+`verification_required = FALSE` on their Inquiries row and `Check Guards` bails
+`verification_waived` (`VERIFICATION_WAIVER_MARKER`, matched on person_id **or**
+phone last-10). Pair it with flipping `link_sent` back to `"false"` and the
+sweep delivers their booking link on its next run.
+
+Two column writes on a tab the dashboard already writes, reusing tested logic —
+no n8n work at all. **Blank is not a waiver; it must be written `FALSE`
+explicitly.**
+
+> This is why 4e's general "insert into a loop" is not being built. A
+> sequence-insertion engine is a send button in search of a use case; the use
+> case the client actually has is one flag on one row.
+
+### 6e. Also noted — manual booking entry on `/showings`
+
+Requested 2026-09-23, **not yet scoped**. A way to add a booking by hand from
+the `/showings` page, for a showing arranged off-platform.
+
+> Anything created here must produce the same row shape a Cal.com booking does,
+> including `fub_person_id` and `person_phone`, or it inherits the no-metadata
+> failure above: a `Showings` row whose code cannot be texted. Whether it should
+> also create a real Cal.com booking — so the slot is held and reminders fire —
+> is the first question to answer; a sheet-only row gets neither.
+
+### Open after this round
+
+| Question | Why it matters |
+|---|---|
+| Does Nicole use the per-sequence scopes? | If not, delete the dropdown and remove the trap. |
+| Which tags does the Stop disposition offer — all three, or a shortlist? | `Denied Credit` blocks 365 days, `No Response Trash` 90. The window belongs in the confirm text. |
+| Should a manual booking create a real Cal.com booking? | Decides whether 6e is a sheet write or an API integration. |
+
+---
 
 ## Delivery note
 

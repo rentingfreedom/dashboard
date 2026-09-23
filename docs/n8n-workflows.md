@@ -3412,6 +3412,16 @@ can attribute a booking to the wrong test person. Harmless by construction.
 
 **A cancelled booking does not count as booked** — the lead is nudged again.
 
+> **True only if the cancellation beats the stamp, corrected 2026-09-23.**
+> `hasBooked()` does skip a `cancelled` booking, but `Find Due Nudges` checks
+> **`booked_at` first** and `Mark Booked` only ever stamps — nothing clears it.
+> The stamping also sits behind the 10am ET send-hour gate. So cancelling
+> **before** the next 10am leaves the lead nudgeable, while cancelling
+> **after** silences them permanently. Same action, opposite outcome depending
+> on the hour. Not fixed: the repair belongs with the cancel-showing work
+> (`docs/scope-outreach-control.md` Part 6), which has to rewrite that row
+> anyway.
+
 ### `fub_person_id` on Cal Bookings — `CAL_BOOKINGS_PERSON_ID_MARKER`
 
 New column, populated on every new booking by `Append Booking Row`. The value was

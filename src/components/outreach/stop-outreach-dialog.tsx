@@ -35,11 +35,20 @@ export interface StopTarget {
   liveSequences: { key: string; label: string; note: string }[];
 }
 
+/**
+ * In the order a lead actually meets them, matching the table's columns and
+ * the pipeline chart — NOT the order of `SEQUENCE_KEYS`, which is arbitrary.
+ *
+ * Under the ON regime a lead verifies before they are sent a booking link, so
+ * identity comes first. With `identity_verification_enabled` OFF they skip
+ * straight to the link; the two identity rows are then simply never reached,
+ * which is the harmless direction for a menu to be wrong in.
+ */
 const SCOPES = [
   { value: "all", label: "All outreach" },
-  { value: "cal_link", label: "Booking link only" },
   { value: "identity", label: "ID verification only" },
   { value: "identity_reminders", label: "ID verification reminders only" },
+  { value: "cal_link", label: "Booking link only" },
   { value: "booking_nudges", label: "Booking nudges only" },
   { value: "cal_reminders", label: "Visit reminders & follow-ups only" },
 ];
