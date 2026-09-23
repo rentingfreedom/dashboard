@@ -7,6 +7,61 @@ doc keeps the summary and points here.
 
 Incident post-mortems for this subsystem are in `docs/n8n-history.md`.
 
+## Who is the tenant on a lease? — verified live 2026-09-22
+
+Needed by Item 07 ("property leased" → message everyone EXCEPT the people who
+just signed). Scope and the dialog design: `docs/scope-outreach-control.md`.
+
+**`GET /tenants?filter_lease=<leaseId>` is the join.** 15 ACTIVE leases sampled,
+**15/15 resolved, 0 misses.**
+
+> **Neither lease endpoint carries tenants.** `/leases` has no `tenants[]`, and
+> `GET /leases/{id}` adds **no keys at all** over the list version — checked,
+> because gotcha 20 says the single-resource endpoint often returns more. Here
+> it does not. Resolve through `filter_lease`.
+
+> **`lease.name` is a display string, not an answer.**
+> `"Jaquanna King & Quentin Bonneau"` — no ids, no contact details. Useful for
+> showing a human, useless for matching.
+
+**Most leases have several tenants.** 10 of 15 had 2; one had 3. "The signer" is
+a SET. Code that assumes one person will message somebody's partner.
+
+### Matching a DoorLoop tenant to FUB — by email or phone, NEVER by name
+
+`/tenants` carries `emails[]`, `phones[]`, `firstName`, `lastName`. Matched
+against FUB: **21 of 21 — 17 by email, 4 by phone.**
+
+Three of those 21 would have failed a name match:
+
+| DoorLoop | FUB | |
+|---|---|---|
+| Jazznia Carpen**er** | Jazznia Carpen**ter** | one letter |
+| Ameerah **Spellman** | Ameerah **Russell** | married name |
+| Quentin Bonneau | record is "Jaquanna King" | couple shares one FUB record |
+
+The shared-record case is not a defect — that record is the one to act on.
+
+> **FUB stage is corroboration, not the test.** Three tenants on ACTIVE leases
+> sit in ordinary pipeline stages (`A - Hot 1-3 Months`, `B - Warm 3-6 Months`,
+> `C - Cold 6+ Months`). A stage-only rule would have treated all three as
+> ordinary leads. **DoorLoop is the authority**; `Tenants Awaiting Move In` /
+> `Current Tenants` are a second signal and a fallback when DoorLoop is down.
+
+### The filter trap — a wrong parameter name returns EVERYTHING
+
+```
+/tenants?filter_lease=<id>     -> total 1     correct
+/tenants?filter_leaseId=<id>   -> total 408   200 OK, silently UNFILTERED
+```
+
+**`filter_leaseId` is not rejected.** It returns the entire tenant list with a
+200, which downstream looks like "this lease has 408 tenants" — and for a
+feature that decides who NOT to message, that fails in the safe direction only
+by luck. Same family as gotcha 17 (FUB's `/people/undefined` falling back to the
+list) and gotcha 20. **Assert the returned set is plausible before acting on
+it**, and never trust a filtered DoorLoop call you have not seen narrow.
+
 ## DoorLoop Occupancy Sync
 
 DoorLoop is the source of truth for vacant/occupied. Workflow `4bMsEAi18j4CPK8k`
