@@ -181,3 +181,261 @@ export async function restartOutreach(
   invalidateInFlightCache();
   return { expired, inquiriesReset };
 }
+
+const PROPERTIES = "Properties";
+const BOOKINGS = "Cal Bookings";
+
+/** Sheets coerces on write, so every comparison normalises (gotcha 14). */
+const norm = (v: unknown): string => String(v ?? "").trim().toLowerCase();
+
+export interface RestartNudgesInput {
+  personId: string;
+  /** Limit to one property. Omit to cover every eligible row for this person. */
+  propertyKey?: string;
+}
+
+export interface RestartNudgesResult {
+  restarted: number;
+  /** `property_key: reason` for every row that was NOT restarted. */
+  skipped: Record<string, string>;
+}
+
+/**
+ * Restart the booking-nudge loop — **restart, not resume**.
+ *
+ * Resuming mid-ladder (they had 2 of 4, send 3 and 4) would need new columns to
+ * remember the position, and is not what a lead coming back after a silence
+ * needs. This puts them at day 0 with the full runway.
+ *
+ * ── Why it is a state RESET and not a flag ───────────────────────────────
+ * `Find Due Nudges` stops a booked lead at three independent gates, checked in
+ * this order, and clearing only the first changes nothing:
+ *
+ *   1. `booked_at` non-empty        -> already_booked   (checked FIRST, never cleared)
+ *   2. day count anchored on `link_sent_at`, window days 1-4 -> window_over
+ *   3. `booking_reminder_count >= 4` -> max_reached
+ *
+ * So all four fields move together or the restart is a silent no-op.
+ *
+ * ── The anchor, and the column that exists only for humans ───────────────
+ * `link_sent_at` is RE-ANCHORED rather than shadowed by a second column.
+ * `in-flight.ts` reads `link_sent_at` in three places for the next-send
+ * projection, so re-anchoring keeps the dashboard correct for free, while a
+ * separate anchor column would have to be taught to every one of those readers
+ * or the page would quietly show wrong next-send dates. (`funnel.ts` declares
+ * the field but never computes with it, so nothing downstream is distorted.)
+ *
+ * The original is preserved once in `original_link_sent_at`, which **nothing
+ * reads** — not this function, not n8n, not the funnel. A column no logic
+ * consults cannot break anything, which is the entire point of it.
+ *
+ * ── Guards ───────────────────────────────────────────────────────────────
+ * Every one is a refusal to nudge, never a forced send: n8n re-applies the
+ * trash tags, the stage gate and the phone check at send time regardless.
+ */
+export async function restartBookingNudges(
+  input: RestartNudgesInput,
+  actor: string
+): Promise<RestartNudgesResult> {
+  const now = new Date().toISOString();
+  const personId = String(input.personId ?? "").trim();
+  if (!personId) throw new Error("A booking-nudge restart needs a person_id.");
+
+  const [inqRows, propRows, bookRows] = await Promise.all([
+    readSheet(INQUIRIES),
+    readSheet(PROPERTIES),
+    readSheet(BOOKINGS),
+  ]);
+  const { headers: inqHeaders, objects: inqObjects } = rowsToObjects(inqRows);
+  const { objects: propObjects } = rowsToObjects(propRows);
+  const { objects: bookObjects } = rowsToObjects(bookRows);
+
+  if (!inqHeaders.includes("original_link_sent_at")) {
+    throw new Error(
+      "Inquiries has no original_link_sent_at column — run scripts/inquiries-setup.mjs --apply"
+    );
+  }
+
+  /**
+   * Availability. The Cheyla Zinck guard: she was verified, held an unsent
+   * row, and had since moved into the property — a bulk release would have
+   * texted her about a house she already lived in.
+   *
+   * `status` is already the effective value (the DoorLoop sync writes
+   * `status_override` into it when one is set), so this reads one column.
+   */
+  const available = new Map<string, boolean>();
+  for (const p of propObjects) {
+    const key = norm(p.property_key);
+    if (!key) continue;
+    const occupied = norm(p.status) === "occupied";
+    const showAnyway = norm(p.show_while_occupied) === "true";
+    available.set(key, !occupied || showAnyway);
+  }
+
+  /** Property keys this person currently holds a LIVE future booking for. */
+  const eventTypeToKey = new Map<string, string>();
+  for (const p of propObjects) {
+    const id = String(p.cal_event_type_id ?? "").trim();
+    if (id) eventTypeToKey.set(id, norm(p.property_key));
+  }
+  const nowMs = Date.now();
+  const liveBooking = new Set<string>();
+  for (const b of bookObjects) {
+    if (norm(b.status) !== "scheduled") continue;
+    if (String(b.fub_person_id ?? "").trim() !== personId) continue;
+    const startMs = new Date(String(b.start_time ?? "")).getTime();
+    if (!Number.isFinite(startMs) || startMs <= nowMs) continue;
+    const key = eventTypeToKey.get(String(b.cal_event_type_id ?? "").trim());
+    if (key) liveBooking.add(key);
+  }
+
+  let restarted = 0;
+  const skipped: Record<string, string> = {};
+
+  for (const row of inqObjects) {
+    if (String(row.person_id ?? "").trim() !== personId) continue;
+    const key = norm(row.property_key);
+    if (input.propertyKey && key !== norm(input.propertyKey)) continue;
+    const label = key || `row ${row._rowIndex}`;
+
+    // Only rows the sweep actually delivered. Every `skipped_*` value is a
+    // recorded NON-send: there is no link in that lead's hands to nudge them
+    // about, and flipping one here would forge a delivery that never happened.
+    if (norm(row.link_sent) !== "true") {
+      skipped[label] = `no link delivered (link_sent = ${row.link_sent || "empty"})`;
+      continue;
+    }
+    if (!String(row.cal_link ?? "").trim()) {
+      skipped[label] = "no cal_link on the row";
+      continue;
+    }
+    if (available.get(key) === false) {
+      skipped[label] = "property is occupied";
+      continue;
+    }
+    if (liveBooking.has(key)) {
+      skipped[label] = "they already hold a future booking";
+      continue;
+    }
+
+    const updates: Record<string, string> = {
+      booked_at: "",
+      link_sent_at: now,
+      booking_reminder_count: "0",
+      booking_reminder_last_at: "",
+    };
+    // Write-once. A second restart must not overwrite the true first send.
+    if (!String(row.original_link_sent_at ?? "").trim()) {
+      updates.original_link_sent_at = String(row.link_sent_at ?? "");
+    }
+
+    await updateSpecificColumns(INQUIRIES, parseInt(row._rowIndex!), updates, inqHeaders);
+    restarted++;
+  }
+
+  await writeAuditLog({
+    timestamp: now,
+    actor,
+    action: "outreach.nudges_restarted",
+    entity_type: "lead",
+    entity_id: personId,
+    property_key: input.propertyKey ?? "",
+    before_json: "",
+    after_json: JSON.stringify({ restarted, skipped }),
+    source: "dashboard",
+    notes: "",
+  });
+
+  invalidateInFlightCache();
+  return { restarted, skipped };
+}
+
+export interface MarkVerifiedInput {
+  personId: string;
+  /** Limit to one property. Omit to cover every row for this person. */
+  propertyKey?: string;
+  reason?: string;
+}
+
+export interface MarkVerifiedResult {
+  waived: number;
+  released: number;
+}
+
+/**
+ * Record that a human verified this lead's ID, and release their booking link.
+ *
+ * ── Why this is not "stop the ID reminders" ──────────────────────────────
+ * Suppressing `identity_reminders` silences the nagging and leaves the lead
+ * with NO booking link — they verified, in Nicole's hand, and then nothing
+ * happens. That is the "verify into silence" failure this estate has already
+ * paid for more than once, arriving by a new route. Waiving and releasing are
+ * one action because doing either alone leaves the lead worse off.
+ *
+ * ── It reuses the shipped waiver rather than forging a verification ──────
+ * `verification_required = FALSE` on an Inquiries row makes `Check Guards`
+ * bail `verification_waived` (VERIFICATION_WAIVER_MARKER, matched on person_id
+ * OR phone last-10). The alternative — writing a `verified` row into
+ * Identity_Verifications — would fabricate a Stripe result that no Stripe
+ * session backs, and `Find Verification Row` matches the webhook on
+ * `session_id` alone.
+ *
+ * **Blank is NOT a waiver.** The string "FALSE" is written explicitly.
+ *
+ * Flipping `link_sent` back to `"false"` hands the row to the sweep, which
+ * re-applies every guard before it sends anything.
+ */
+export async function markVerifiedManually(
+  input: MarkVerifiedInput,
+  actor: string
+): Promise<MarkVerifiedResult> {
+  const now = new Date().toISOString();
+  const personId = String(input.personId ?? "").trim();
+  if (!personId) throw new Error("A manual verification needs a person_id.");
+
+  const rows = await readSheet(INQUIRIES);
+  const { headers, objects } = rowsToObjects(rows);
+  if (!headers.includes("verification_required")) {
+    throw new Error(
+      "Inquiries has no verification_required column — run scripts/n8n-add-verification-policy-stamp.mjs --setup-column --apply"
+    );
+  }
+
+  let waived = 0;
+  let released = 0;
+  for (const row of objects) {
+    if (String(row.person_id ?? "").trim() !== personId) continue;
+    if (input.propertyKey && norm(row.property_key) !== norm(input.propertyKey)) continue;
+
+    const updates: Record<string, string> = { verification_required: "FALSE" };
+
+    // Release ONLY a row the identity gate is holding. `skipped_test_gate` and
+    // the trash stamps are different decisions with different owners, and 45
+    // live rows depend on the first staying inert.
+    const sent = norm(row.link_sent);
+    if (sent === "false" || sent === "skipped_outreach_suppressed") {
+      updates.link_sent = "false";
+      released++;
+    }
+
+    await updateSpecificColumns(INQUIRIES, parseInt(row._rowIndex!), updates, headers);
+    waived++;
+  }
+
+  await writeAuditLog({
+    timestamp: now,
+    actor,
+    action: "outreach.verified_manually",
+    entity_type: "lead",
+    entity_id: personId,
+    property_key: input.propertyKey ?? "",
+    before_json: "",
+    after_json: JSON.stringify({ waived, released }),
+    source: "dashboard",
+    notes: input.reason ?? "",
+  });
+
+  invalidateInFlightCache();
+  return { waived, released };
+}

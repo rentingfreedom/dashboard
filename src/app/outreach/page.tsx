@@ -18,6 +18,11 @@ import { RestartOutreachDialog, type RestartTarget } from "@/components/outreach
 import { OutreachTable } from "@/components/outreach/outreach-table";
 import { OutreachChart } from "@/components/outreach/outreach-chart";
 import {
+  LeadActionDialog,
+  type LeadActionTarget,
+  type LeadActionKind,
+} from "@/components/outreach/lead-action-dialog";
+import {
   PIPELINE_ZONES,
   pipelineBars,
   pipelinePositionOf,
@@ -39,6 +44,7 @@ export default function OutreachPage() {
   const [chartOpen, setChartOpen] = useState(true);
   const [stopTarget, setStopTarget] = useState<StopTarget | null>(null);
   const [restartTarget, setRestartTarget] = useState<RestartTarget | null>(null);
+  const [leadAction, setLeadAction] = useState<LeadActionTarget | null>(null);
   const { isAdmin } = useRole();
 
   const load = useCallback(async (refresh = false) => {
@@ -276,6 +282,15 @@ export default function OutreachPage() {
                 .map((q) => ({ key: q.key, label: q.label, note: q.note })),
             })
           }
+          onLeadAction={(lead: InFlightLead, kind: LeadActionKind) =>
+            setLeadAction({
+              kind,
+              personId: lead.personId,
+              personName: lead.personName,
+              propertyKey: lead.propertyKey,
+              propertyAddress: lead.propertyAddress,
+            })
+          }
           onRestart={(lead: InFlightLead) =>
             setRestartTarget({
               personId: lead.personId,
@@ -292,6 +307,11 @@ export default function OutreachPage() {
       <StopOutreachDialog
         target={stopTarget}
         onOpenChange={(open) => { if (!open) setStopTarget(null); }}
+        onDone={() => load(true)}
+      />
+      <LeadActionDialog
+        target={leadAction}
+        onOpenChange={(open) => { if (!open) setLeadAction(null); }}
         onDone={() => load(true)}
       />
       <RestartOutreachDialog

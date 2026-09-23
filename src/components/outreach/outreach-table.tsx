@@ -21,6 +21,8 @@ import {
   BellOff,
   PauseCircle,
   MoreHorizontal,
+  BadgeCheck,
+  RotateCcw,
   ChevronRight,
   ChevronDown,
 } from "lucide-react";
@@ -28,6 +30,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -48,6 +51,7 @@ import type {
   SuppressionState,
 } from "@/lib/metrics/in-flight";
 import type { StopMode } from "./stop-outreach-dialog";
+import type { LeadActionKind } from "./lead-action-dialog";
 
 const col = createColumnHelper<InFlightLead>();
 
@@ -283,9 +287,10 @@ export interface OutreachTableProps {
   isAdmin: boolean;
   onStop: (lead: InFlightLead, mode: StopMode) => void;
   onRestart: (lead: InFlightLead) => void;
+  onLeadAction: (lead: InFlightLead, kind: LeadActionKind) => void;
 }
 
-export function OutreachTable({ leads, isAdmin, onStop, onRestart }: OutreachTableProps) {
+export function OutreachTable({ leads, isAdmin, onStop, onRestart, onLeadAction }: OutreachTableProps) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -454,6 +459,10 @@ export function OutreachTable({ leads, isAdmin, onStop, onRestart }: OutreachTab
             );
           }
 
+          // "Do they hold a booking link?" decides which forward action is
+          // offered. Every `skipped_*` value is a recorded NON-send.
+          const linkDelivered = l.linkSent.trim().toLowerCase() === "true";
+
           return (
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -462,7 +471,27 @@ export function OutreachTable({ leads, isAdmin, onStop, onRestart }: OutreachTab
               >
                 <MoreHorizontal className="h-4 w-4" />
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuContent align="end" className="w-56">
+                {/* Forward actions first: the menu should not read as a list of
+                    ways to shut someone down. Each is offered only where it
+                    does something — a link-holder cannot be "verified by hand"
+                    into anything, and a lead with no link has no nudges to
+                    restart. */}
+                {!linkDelivered && (
+                  <DropdownMenuItem onClick={() => onLeadAction(l, "mark_verified")}>
+                    <BadgeCheck className="h-4 w-4 mr-2 text-emerald-500" />
+                    Mark ID verified by hand…
+                  </DropdownMenuItem>
+                )}
+                {/* Admin only: this schedules up to four more sends, the same
+                    reason Restart is admin only. */}
+                {linkDelivered && isAdmin && (
+                  <DropdownMenuItem onClick={() => onLeadAction(l, "restart_nudges")}>
+                    <RotateCcw className="h-4 w-4 mr-2 text-sky-500" />
+                    Restart booking nudges…
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => onStop(l, "pause")}>
                   <PauseCircle className="h-4 w-4 mr-2 text-amber-500" />
                   Pause outreach…
@@ -477,7 +506,7 @@ export function OutreachTable({ leads, isAdmin, onStop, onRestart }: OutreachTab
         },
       }),
     ],
-    [isAdmin, onStop, onRestart, expanded]
+    [isAdmin, onStop, onRestart, onLeadAction, expanded]
   );
 
   const table = useReactTable({

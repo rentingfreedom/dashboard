@@ -54,6 +54,13 @@ const COLUMNS = [
   ["phone", "person phone at record time; blank means catch-up sweep owes them"],
   ["email", "person email at record time; lets a later FUB merge be detected"],
   ["alert_sent", "TRUE once an unmatched-address alert went out for this address"],
+  // --- added by later features; this list was STALE until 2026-09-23 and a
+  //     "repair" run would have rebuilt the tab without them ---
+  ["booking_reminder_count", "booking nudges sent (cal-booking-reminders-setup.mjs)"],
+  ["booking_reminder_last_at", "ISO of the last booking nudge"],
+  ["booked_at", "ISO stamped once the lead books; checked FIRST by Find Due Nudges"],
+  ["verification_required", "policy in force when the row was recorded; BLANK means required (n8n-add-verification-policy-stamp.mjs)"],
+  ["original_link_sent_at", "write-once: the FIRST link_sent_at, kept when a nudge restart re-anchors it. NOTHING reads this — it exists so the audit answer survives."],
 ];
 
 const SETTINGS = [
