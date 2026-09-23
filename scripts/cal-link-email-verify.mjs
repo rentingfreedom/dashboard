@@ -141,6 +141,34 @@ if (!buildNode) {
 
   const fallbackLink = run([{ person_id: "2704", person_name: "A B", email: "x@y.com", property_address: "z", cal_link: "https://raw.link" }]);
   ok("falls back to cal_link when enrichedCalLink absent", fallbackLink[0].json.cal_link, "https://raw.link");
+
+  // ── SMS_FOOTER_MARKER (2026-09-21) ───────────────────────────────────────
+  // The body is STILL the SMS — that is what CAL_LINK_EMAIL_COPY_MARKER exists
+  // for and these assertions still protect it. What changed is that the SMS now
+  // carries a do-not-reply footer, and "do not reply to this number" is false in
+  // an email: an email has no number. So the contract tightened from
+  // "body == SMS" to "body == SMS minus the footer", rather than being loosened.
+  //
+  // Check & Build Message emits the footer-free copy as `email_body`; the suffix
+  // strip is only a backstop for a half-applied patch.
+  const FOOTER = "Please do not reply to this number - this mailbox is not monitored.";
+  const clean = "Hello Jane, book 130 Sandtrap Rd here: https://cal.com/rf/a";
+  const footered = run([{
+    person_id: "2705", person_name: "Jane Smith", email: "jane@example.com",
+    property_address: "130 Sandtrap Rd", enrichedCalLink: "https://cal.com/rf/a", event_id: "f1",
+    message: `${clean}\n\n${FOOTER}`, email_body: clean, sms_footer: FOOTER,
+  }]);
+  ok("email body does NOT carry the SMS do-not-reply footer", footered[0].json.message.includes(FOOTER), false);
+  okTrue("email body is still the SMS copy", footered[0].json.message.startsWith(clean));
+  ok("sign-off still last", footered[0].json.message.trim().split("\n").pop(), "— Renting Freedom");
+  // Backstop: email_body missing (only half the footer patch in place) must
+  // still not put the footer in front of a reader.
+  const stripped = run([{
+    person_id: "2706", person_name: "Jane Smith", email: "jane@example.com",
+    property_address: "130 Sandtrap Rd", enrichedCalLink: "https://cal.com/rf/a", event_id: "f2",
+    message: `${clean}\n\n${FOOTER}`, sms_footer: FOOTER,
+  }]);
+  ok("backstop strips the footer when email_body is absent", stripped[0].json.message.includes(FOOTER), false);
 }
 
 // ── 2. Check & Build Message emits `email` ─────────────────────────────────
