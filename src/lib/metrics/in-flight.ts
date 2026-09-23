@@ -878,6 +878,16 @@ export function computeInFlight(input: InFlightInput): InFlightResult {
    * in Follow Up Boss.
    */
   const displayName = (who: { personId: string; phone: string; email: string }): string => {
+    // FUB first, because it is the CRM: the sheet tabs only learn a name once
+    // a lead verifies or books, so a lead who has done neither — an inquiry
+    // that arrived overnight, exactly when knowing who it is matters most —
+    // had nothing but `FUB #2870`. It also means a name corrected in FUB shows
+    // through instead of a snapshot taken months ago.
+    //
+    // When FUB is unreachable `stageScope` is null and this simply falls back
+    // to the sheet, as before.
+    const fromFub = who.personId ? input.stageScope?.get(who.personId)?.name : undefined;
+    if (fromFub) return fromFub;
     const byId = who.personId ? nameById.get(who.personId) : undefined;
     if (byId) return byId;
     const ph = last10(who.phone);

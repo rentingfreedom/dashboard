@@ -122,6 +122,15 @@ export interface FubLeadStatus {
    * so a lead without one provably cannot be texted.
    */
   hasPhone: boolean;
+  /**
+   * The lead's name as FUB holds it.
+   *
+   * Free: this request already asks for `fields=allFields`, so the name was
+   * always in the response and simply never read. It matters because the sheet
+   * tabs only learn a name once a lead verifies or books — so an overnight
+   * inquiry, the case where knowing who it is matters most, had none.
+   */
+  name: string;
 }
 
 export function isConfigured(): boolean {
@@ -182,6 +191,9 @@ async function fetchPerson(id: string, allowedStages: string[]): Promise<FubLead
       stage?: string;
       tags?: string[];
       phones?: { value?: string }[];
+      name?: string;
+      firstName?: string;
+      lastName?: string;
     };
 
     // Gotcha 17: a malformed id can make FUB fall back to a LIST response
@@ -198,7 +210,12 @@ async function fetchPerson(id: string, allowedStages: string[]): Promise<FubLead
 
     const category = categorise(stage, trashTag, allowedStages);
     const hasPhone = Array.isArray(p.phones) && p.phones.some((x) => String(x?.value ?? "").trim() !== "");
-    return { id: String(id), stage, tags, trashTag, rejected: category === "rejected", category, hasPhone };
+    // `name` is FUB's own composed field; the parts are the fallback for a
+    // record that carries only one of them.
+    const name =
+      String(p.name ?? "").trim() ||
+      [p.firstName, p.lastName].map((x) => String(x ?? "").trim()).filter(Boolean).join(" ");
+    return { id: String(id), stage, tags, trashTag, rejected: category === "rejected", category, hasPhone, name };
   } catch (err) {
     console.warn(`[fub] GET /people/${id} failed:`, err instanceof Error ? err.message : err);
     return null;

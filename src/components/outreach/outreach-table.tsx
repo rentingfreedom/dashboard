@@ -97,12 +97,12 @@ function ExpandedRow({ lead, columnCount }: { lead: InFlightLead; columnCount: n
   return (
     <TableRow className="border-gray-100 dark:border-gray-800 bg-gray-50/60 dark:bg-gray-800/30 hover:bg-gray-50/60 dark:hover:bg-gray-800/30">
       <TableCell colSpan={columnCount} className="px-4 py-3">
-        <div className="grid gap-4 lg:grid-cols-3 text-xs">
-          <div className="space-y-1.5">
+        <div className="grid gap-4 text-xs lg:grid-cols-3">
+          <div className="min-w-0 space-y-1.5">
             <p className="font-medium text-gray-700 dark:text-gray-300">Sequences</p>
             {lead.sequences.map((s: SequenceState) => (
               <div key={s.key} className="flex items-baseline justify-between gap-2">
-                <span className="text-gray-600 dark:text-gray-400">
+                <span className="min-w-0 break-words text-gray-600 dark:text-gray-400">
                   {s.label}
                   <span className="text-gray-400 dark:text-gray-500"> · {s.note}</span>
                 </span>
@@ -123,7 +123,7 @@ function ExpandedRow({ lead, columnCount }: { lead: InFlightLead; columnCount: n
             </p>
           </div>
 
-          <div className="space-y-1.5">
+          <div className="min-w-0 space-y-1.5">
             <p className="font-medium text-gray-700 dark:text-gray-300">Messages</p>
             {d.booking ? (
               <>
@@ -135,7 +135,7 @@ function ExpandedRow({ lead, columnCount }: { lead: InFlightLead; columnCount: n
             )}
           </div>
 
-          <div className="space-y-1.5">
+          <div className="min-w-0 space-y-1.5">
             <p className="font-medium text-gray-700 dark:text-gray-300">Detail</p>
             <Line k="FUB stage" v={lead.stage || "(not looked up)"} />
             <Line k="Category" v={lead.stageCategory} />
@@ -209,7 +209,9 @@ function Line({ k, v }: { k: string; v: string }) {
   return (
     <div className="flex justify-between gap-3">
       <span className="text-gray-500 dark:text-gray-400 shrink-0">{k}</span>
-      <span className="text-gray-700 dark:text-gray-300 truncate text-right">{v}</span>
+      <span className="min-w-0 truncate text-right text-gray-700 dark:text-gray-300" title={v}>
+        {v}
+      </span>
     </div>
   );
 }
