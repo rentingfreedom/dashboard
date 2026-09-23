@@ -1,0 +1,23 @@
+{
+  "cell": "Inquiries!P170",
+  "row": {
+    "_row": 170,
+    "person_id": "2847",
+    "property_key": "109-larkspur-drive",
+    "cal_link": "cal.com/rentingfreedom/109-larkspur-drive",
+    "inquired_at": "2026-09-18T17:37:21Z",
+    "link_sent": "TRUE",
+    "link_sent_at": "2026-09-18T18:27:03.527Z",
+    "source": "Zillow Rentals",
+    "event_id": "2013",
+    "property_address": "109 Larkspur Dr",
+    "match_status": "matched",
+    "phone": "",
+    "email": "hxg41s22qpmai189k52hj50mn0@convo.zillow.com",
+    "alert_sent": "",
+    "booking_reminder_count": "2",
+    "booking_reminder_last_at": "2026-09-20T14:00:46.057Z",
+    "booked_at": "",
+    "verification_required": "TRUE"
+  }
+}
