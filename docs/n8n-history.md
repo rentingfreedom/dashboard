@@ -865,3 +865,75 @@ suppressing a lead who books mid-window.
    > There is no path that does so today: `/doorloop/link` recomputes matching
    > server-side and skips it, and `doorloop-match.mjs` is address-based.
 
+
+---
+
+### The nudge link had no metadata — a customer at a door that would not open (2026-09-20)
+
+**Nardiaa Rivers (FUB 2847) stood at 109 Larkspur Drive with no door code**, and every
+individual component behaved exactly as designed.
+
+Her path, reconstructed from the sheet, the n8n executions and the Cal.com API:
+
+| When | What |
+|---|---|
+| 09-18 18:24Z | Identity Gate sends the verify SMS to `18436421103` |
+| 09-18 18:27Z | Stripe returns `verified`; Result Handler replays the sweep |
+| 09-18 18:27Z | Sweep sends the **enriched** cal link, `Inquiries` row 170 → `link_sent TRUE` |
+| 09-19, 09-20 14:00Z | Two booking nudges — carrying the **bare** link |
+| 09-20 19:11Z | She books, ~5h after nudge #2. Cal.com records `metadata: {}` |
+| 09-20 19:45–20:40Z | Dispatch runs **12 times**, mints Populife `511915` each time, Twilio rejects every send |
+| 09-20 20:45Z | Showing time. Nothing was ever sent to her |
+| 09-20 ~21:00Z | Missed Access Code Sweep alerts: *"showing passed with no code (status scheduled)"* |
+
+**Every guard worked. The link was the hole.** `Build Nudge` rendered `{{cal_link}}`
+from the raw `Inquiries.cal_link` column while the sweep rendered an enriched link —
+so the identity survived the *first* message to her and was dropped by the *reminder*.
+Fixed under `NUDGE_CAL_LINK_METADATA_MARKER`; see the main doc.
+
+> **What made this invisible for three weeks.** The nudge workflow went live
+> 2026-09-01 and is go-forward-only, so almost nobody reached day 1–4 unbooked with a
+> link in hand. She is the first lead known to have booked from a nudge. The only
+> other showing booking with an empty `fub_person_id` is Erick Lagares, which predates
+> `CAL_BOOKINGS_PERSON_ID_MARKER` and is a different cause.
+
+> **Two diagnoses were wrong before the right one, and both were wrong in the same
+> way — reasoning from a plausible mechanism instead of reading the record.**
+>
+> 1. *"Add a lockbox to 109 Larkspur."* The alert says "no code", and the estate's
+>    loudest prior incidents (Rita Lewis, Kameaka Garvin) were missing lockboxes. But
+>    Properties row 69 has carried `populife_lock_id 32462340` since 08-08 and **that
+>    same lock delivered four codes that week**. The executions show Populife
+>    returning `keyboardPwd 511915` successfully — the lock was never the problem.
+> 2. *"She never came through the funnel."* Searching the `Inquiries` tab for her name
+>    returned nothing, and the conclusion drawn was that she booked off a public link
+>    having never verified. **That tab has no name column** — only `person_id` and,
+>    for a Zillow lead, a relay email. She had verified two days earlier. The search
+>    was wrong; the confidence was not adjusted for it.
+>
+> The correction came from the user pushing back with two specific claims — "she
+> validated ID" and "the form requires a phone" — the first of which was right and
+> overturned the diagnosis. **The first was verifiable in the `Identity_Verifications`
+> tab in one lookup and had simply not been looked up.**
+
+> **The second claim was wrong, and checking it is what found the cause.** Event type
+> `6594774` has **no phone booking field at all** — so the phone could only ever have
+> come from the link's metadata, which made "where did the link come from" the only
+> remaining question. A wrong hypothesis, checked properly, was worth more than the
+> right one asserted.
+
+**Her identity matched none of the join arms, which has consequences beyond the code.**
+Her booking carries `rnardiaa@gmail.com`; FUB holds only the Zillow relay
+`hxg41s22qpmai189k52hj50mn0@convo.zillow.com`, and neither the booking nor the
+`Inquiries` row carries a phone. So `fub_person_id`, phone and email **all** fail to
+match, `booked_at` was never stamped, and **the system does not know she booked** —
+she stayed eligible for further nudges.
+
+> **Adding her real email to FUB would silently stop those nudges**, via the
+> `BOOKING_JOIN_LIVE_IDENTITY_MARKER` backstop matching her booking. That is correct
+> behaviour and worth knowing before anyone tidies the record mid-window.
+
+**Left open at the time of writing:** her 09-20 booking still reads `scheduled` in the
+past, and Populife code `511915` was genuinely written to lock `32462340` for a window
+that has since closed (**gotcha 8** — deleting the cloud record does not revoke it on a
+Bluetooth-only lockbox).

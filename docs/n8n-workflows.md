@@ -341,7 +341,7 @@ returns `[]` with no address so Gmail is never called with an empty `to`.
 
 ```bash
 node scripts/n8n-add-cal-link-email.mjs [--apply] [--revert --apply]
-node scripts/cal-link-email-verify.mjs                     # 37 assertions
+node scripts/cal-link-email-verify.mjs                     # 41 assertions
 ```
 Backup `n8n/BEFORE-cal-link-email/`. The verifier asserts the connections graph as well
 as behaviour: the entire safety story is "parallel branch", and a rewire that routed
@@ -1268,7 +1268,7 @@ node scripts/verification-toggle-verify.mjs [--js <dir>]     # 49 assertions
 node scripts/verification-toggle-mutations.mjs               # 12 mutations
 node scripts/n8n-add-verification-policy-stamp.mjs [--setup-column --apply] [--apply]
 node scripts/n8n-fix-cal-link-email-copy.mjs [--apply] [--revert --apply]
-node scripts/cal-link-email-verify.mjs                       # 37 assertions
+node scripts/cal-link-email-verify.mjs                       # 41 assertions
 ```
 Backups `n8n/BEFORE-verification-toggle/`, `n8n/BEFORE-verification-policy-stamp/`,
 `n8n/BEFORE-cal-link-email-copy/`. The stamp builder **refuses to apply** without
@@ -2961,7 +2961,9 @@ Backups `n8n/BEFORE-sheets-retry/`. All 13 PUTs preserved `active`.
 
 Full reference: **`docs/doorloop-sync.md`** — the workflow, the reconciliation report on
 the dashboard's "Sync now" button, the panel's Link/Add/Remove actions, the multi-row
-provisioning fix, and the `owner_label` convention.
+provisioning fix, and the `owner_label` convention, and **who the tenant on a
+lease is** (`/tenants?filter_lease=<id>`, matched to FUB by email/phone, never by name —
+needed by Item 07).
 
 DoorLoop is the source of truth for vacant/occupied. Workflow `4bMsEAi18j4CPK8k` writes
 the `status` column on Properties directly — it does **not** go through the Next.js app's
@@ -3479,7 +3481,7 @@ node scripts/n8n-add-cal-bookings-person-id.mjs [--apply] [--revert --apply]
 node scripts/n8n-create-cal-booking-reminders.mjs [--apply]   # creates it INACTIVE
 node scripts/n8n-create-cal-booking-reminders.mjs --emit-js <dir>
 node scripts/cal-booking-reminders-preview.mjs [--verbose] [--start-at <iso>] [--with-guards]
-node scripts/cal-booking-reminders-verify.mjs                 # 108 synthetic assertions
+node scripts/cal-booking-reminders-verify.mjs                 # 115 synthetic assertions
 node scripts/n8n-fix-booking-join-live-identity.mjs [--apply] [--revert --apply]
 ```
 
@@ -3525,6 +3527,73 @@ person, at no extra cost — re-tests them against the live phone/email and skip
 
 Verified live: the deployed guard returns `already_booked_live:phone` for 2738 while
 the two genuinely-unbooked leads still pass.
+
+### The nudge link had NO metadata — `NUDGE_CAL_LINK_METADATA_MARKER` (2026-09-20)
+
+**The nudge sent a cal link that stripped the lead's identity, so a lead who booked
+through it could never be sent a door code.** `Build Nudge` rendered `{{cal_link}}`
+from `d.cal_link`, the **raw Inquiries column**. The sweep's `Check & Build Message`
+has always rendered an **enriched** link carrying `metadata[fub_person_id]` and
+`metadata[phone]`. Two senders, one token, two different links.
+
+```
+Parse Created Booking   metadata:{}  ->  personId='' attendeePhone=''
+Build Showing Row       ->  person_id='' person_phone=''
+Access Code Dispatch    ->  Populife minted the code 12x, Twilio 21604 every time
+```
+
+> **The booking form cannot save it, and that is the load-bearing fact.** Event type
+> `6594774`'s `bookingFields` are name, email, location, title, notes, guests,
+> rescheduleReason — **the per-property showing event types have NO phone field**, so
+> `Parse Created Booking`'s `attendeePhoneNumber` / `phone` fallback has nothing to
+> read. **The link metadata is the only carrier of identity for a self-guided
+> showing.** Do not "fix" a future instance of this by relying on the form.
+
+**The fix costs nothing**: both values were already in hand — `d.person_id` from
+`Find Due Nudges` and `d.phone`, read **live from FUB** by `Check Nudge Guards`. No new
+lookup, no API call, no Sheets read. One `calLink` feeds both channels, since the SMS
+and the email share `{{cal_link}}`.
+
+| Case | Behaviour |
+|---|---|
+| id + phone | `?metadata%5Bfub_person_id%5D=…&metadata%5Bphone%5D=%2B1…`, byte-identical to the sweep's |
+| email-only lead | `fub_person_id` only — the booking JOINS, but still no phone for the code |
+| neither | falls back to the raw column and logs `WARNING bare cal link` |
+| column already enriched | `baseOf` strips the query and **rebuilds** — never two `?` |
+
+> **Phone normalisation is copied from the sweep** (`+1` + 10 digits, else `+` +
+> digits) specifically so the two senders emit an identical link for one lead. If one
+> side changes, change both.
+
+> **`d.person_id` is used, not the live `person.id`** — `Check Nudge Guards` does not
+> emit the latter, and `d.person_id` is by definition the owner of the Inquiries row
+> being nudged, which is what the booking must join back to. Noted in passing: that
+> guard reads `resp.people[0]`, i.e. it already tolerates FUB's list-shaped fallback —
+> the **gotcha 17** hazard, untouched here and worth its own look.
+
+```bash
+node scripts/n8n-fix-nudge-cal-link-metadata.mjs [--apply] [--revert --apply] [--emit-js <dir>]
+node scripts/cal-booking-reminders-verify.mjs              # 115 assertions
+```
+Backup `n8n/BEFORE-nudge-cal-link-metadata/`. The builder **refuses to apply** if
+`Check Nudge Guards` stops emitting the live `phone`, or `Find Due Nudges` stops
+emitting `person_id` / `cal_link` — without either the patch is a silent no-op that
+ships a link missing half its identity, which is the bug it exists to fix.
+
+> **`cal-booking-reminders-verify.mjs` was updated in the same change.** Two assertions
+> pinned the **bare** link as expected output and went red. They were written to prove
+> token substitution and still do — only the expected value now carries the metadata —
+> rather than being deleted or loosened. Seven new assertions cover the enrichment, and
+> all five that could be were **confirmed non-vacuous against the pre-fix code in the
+> backup**. One of them initially was not: "cannot produce two `?`" stayed green,
+> because passing the column through verbatim also yields exactly one `?`. It now
+> asserts the link is **rebuilt**, and goes red. *A `?`-count is a mechanism test; the
+> property is "the stale value is replaced".*
+
+**NOT live-verified.** The workflow sends only in the 10am ET hour, so **the next
+10am ET tick is the live test** — expect a nudge SMS whose link carries `?metadata…`,
+and then a booking made through one landing in `Showings` with a non-empty
+`person_phone`. Full incident in `docs/n8n-history.md`.
 
 ### The backfill question — answered 2026-08-31, mostly "there is nobody"
 
@@ -3605,12 +3674,322 @@ shape was cross-checked against the deployed `Send Failed?` node (`typeVersion: 
 `rightValue: true` as a raw boolean, no `singleValue`) after an initial version got it
 wrong; watch the next real send to confirm the note lands in FUB.
 
+## Do-not-reply SMS footer — `SMS_FOOTER_MARKER` (2026-09-21, APPLIED)
+
+One `sms_footer` Settings key, appended at **render time** to every lead-facing
+SMS by the ten build nodes that assemble one. Approved 2026-09-21 alongside
+Option C and Item 07; scope in `docs/scope-outreach-control.md`.
+
+> **The footer and the DECLINED Option B are one decision, not two.** Nobody
+> reads replies to the Twilio number because inbound reply monitoring was
+> declined. If it is ever built, **the footer comes out in the same change**, or
+> the system invites replies it has just told people not to send.
+
+### One key, not seven edited templates
+
+The obvious move is to type the sentence onto the end of the seven
+`*_sms_template` Settings values. Wrong twice over: the next person to edit a
+template will not know to re-add it, and seven copies of one sentence drift.
+**Emptying the key switches the footer off everywhere** — it is its own switch,
+and no workflow has to be touched to use it.
+
+Appended in the **build** node, never in the Twilio node — the same place every
+other message in this estate is assembled.
+
+### Lead-facing vs staff-facing IS the design
+
+**22 Twilio nodes: TEN go to a lead, TWELVE are alerts to Nicole, Andrew and
+Justin.** Appending "this mailbox is not monitored" to an alert addressed to the
+people who monitor it is nonsense, and pushes several alerts into a second
+segment for nothing.
+
+The builder holds the full census and **asserts it against the live estate on
+every run**. A Twilio node it cannot classify is a **refusal**, not a guess — a
+new send node is either a lead-facing one silently missing the footer, or a
+staff alert about to get one, and nothing in the node itself says which.
+
+| Build node | Workflow | |
+|---|---|---|
+| `Build Verification SMS` | `L13GUyrWbjSJwn8p` | |
+| `Build Failed SMS` | `PHSdCWhovdbFDHlX` | |
+| `Build Reminder SMS` | `R3rhuCYEGoBFArBa` | |
+| `Build Nudge` | `5UvuzQwLjCB4D25A` | SMS only — `subject`/`body` are the nudge EMAIL |
+| `Build SMS (Cron)` | `ztUEx7Htu620SLbj` | |
+| `Build SMS (Created)` | `gR6FWXMcc08ps8LT` | |
+| `Build Cancel SMS` | `gR6FWXMcc08ps8LT` | |
+| `Check & Build Message` | `UbO0l29GtILMm1sP` | also emits the footer-free `email_body` |
+| `Build Message` | `3hGnl6mPnu2AMbZ1` | **invitee SMS only**, see below |
+| `Resolve Inquiry` | `JDsKrVRHf9TEVj7j` | `alert_message` (staff) stays bare |
+
+### The gotcha it had to design around
+
+> **`Build Cal Link Email` renders the SMS text AS the email body**
+> (`CAL_LINK_EMAIL_COPY_MARKER`, deliberately, so the two channels cannot
+> drift). A footer on `sms_template` would therefore have emailed *"do not reply
+> to this number"* to a reader who has no number to reply to.
+
+`Check & Build Message` emits **both**: `message` with the footer and
+`email_body` without it. `Build Cal Link Email` prefers `email_body` and falls
+back to **stripping a trailing footer** off `message`, so a half-applied or
+half-reverted patch still cannot put the footer in an email. Doubt resolves to
+no footer.
+
+> The strip is a **backstop, not the mechanism** — and the two are
+> indistinguishable on ordinary input. Mutation **M3** proved exactly that: with
+> the node reading the footered `message`, the "email has no footer" assertion
+> stayed **green** because the strip caught it. The verifier now also feeds a
+> case where the footer is *not* a suffix, so the strip cannot help and the
+> preference is the only thing standing between the reader and a footer.
+
+### The Cal.com Cron Poll is conditional, not blanket
+
+`Build Message` renders **both channels and all ~19 `(category, step)` rules**
+from one node. The footer rides only when `channel === 'sms'` **and**
+`recipient === 'invitee'`:
+
+- **`host_sms_1h` goes to Justin's own phone** and `nicole_2h` to Nicole. Keying
+  on `channel` alone would have texted the host a do-not-reply notice about his
+  own number. **Mutation M1 exists solely to keep that door shut.**
+- **Email is never footered**; it has no number to reply to (M2).
+
+`recipient` already defaults to `'invitee'` on every rule
+(`NO_PHONE_SKIP_MARKER`), so a future rule inherits the **safe** classification
+by omission rather than the bare one.
+
+### Segment cost — measured, and one character decides it
+
+The footer uses an **ASCII hyphen, not an em dash**. An em dash is not in the
+GSM-7 alphabet, so that one character re-encodes **every** lead-facing SMS as
+UCS-2 and halves the segment size from 160 to 70:
+
+| Template | today | + hyphen | + em dash |
+|---|---|---|---|
+| `sms_template` | 3 | 4 | **7** |
+| `access_code_sms_template` | 1 | 2 | 3 |
+| `cancellation_sms_template` | 1 | 2 | 4 |
+| `identity_verification_sms_template` | 2 | 3 | 5 |
+| `identity_failed_sms_template` | 1 | 2 | 3 |
+| `identity_reminder_sms_template` | 2 | 2 | 4 |
+| `cal_booking_reminder_sms_template` | 2 | 2 | 4 |
+| **total** | **12** | **17** | **30** |
+
+> **Do not "improve" the punctuation.** If the wording is ever changed, keep it
+> inside GSM-7 or accept roughly double the segments on every send. The same
+> applies to a curly apostrophe.
+
+### It costs nothing in Sheets requests
+
+Every patched node already has a Settings read as an **ancestor on its own
+path** — verified per node and recorded in `EDITS` — so the footer is read from
+a node that has already executed. No new node, no new read, nothing added to the
+60-per-minute bucket (gotcha 4). The builder **refuses to apply** if that
+ancestor is missing, because the injected `$('Read Settings')` would then throw
+at runtime on the workflow that sends verification SMS.
+
+### The helper is one implementation, ten times
+
+n8n Code nodes cannot import, so `withFooter` is duplicated in all ten nodes and
+`sms-footer-verify.mjs` asserts the ten are **byte-identical** (M8). It never
+footers an **empty** body — on a failed render the footer would be the entire
+message the lead receives (M6) — and never appends twice, so a retry cannot
+stack it.
+
+```bash
+node scripts/n8n-add-sms-footer.mjs [--setup-key --apply] [--apply] [--revert --apply] [--emit-js <dir>]
+node scripts/sms-footer-verify.mjs [--js <dir>]            # 123 assertions
+node scripts/sms-footer-mutations.mjs <emit-js dir>        # 10 mutations, proves the above
+```
+Backup `n8n/BEFORE-sms-footer/`. **Two verifiers had to be updated in the same
+change**, both tightened rather than loosened: `cal-link-email-verify.mjs`
+pinned "email body == SMS" and now pins "== SMS minus the footer" (its two new
+assertions were confirmed red against the pre-apply code), and
+`cal-booking-reminders-verify.mjs`'s `$` stub **threw** on `Read Settings`,
+which `Build Nudge` now reads — the stub serves it and still throws on anything
+unaccounted for.
+
+> **Applied in two deliberate steps.** The eleven node patches went in **first**
+> and were inert: with no `sms_footer` row, `withFooter` returns the body
+> unchanged. Creating the Settings key is the single moment behaviour changes,
+> and blanking that one cell reverses it without touching a workflow.
+
+## Outreach suppression — the stop button — `OUTREACH_SUPPRESSION_MARKER` (2026-09-21, APPLIED)
+
+A new `Outreach_Suppression` tab that every lead-facing **outreach** path reads.
+The dashboard writes it; n8n only ever reads it. Scope Part 2 in
+`docs/scope-outreach-control.md`; this is its foundation, built before the page.
+
+> **Why it exists.** Nardiaa Rivers booked, drove to 109 Larkspur Drive and
+> could not get in. Nicole sorted it out by phone — and nothing recorded that,
+> so the nudges would have carried on. **Once a lead entered a sequence there
+> was no way to stop it.** Option A (a FUB pause tag) was declined, so there is
+> no CRM-side fallback: this check is the entire stop capability.
+
+### It must NEVER block a door code
+
+`scope = all` means all **outreach**. A suppressed lead with a confirmed
+showing still gets their access code — suppressing one strands a customer at a
+locked door, which is the exact failure this project started from.
+
+`Build SMS (Cron)` and `Build SMS (Created)` are therefore **not patched**, and
+neither workflow even reads the tab. **Mutation M1 exists solely to keep that
+door shut**, and verifier section C re-checks it every run.
+
+Two more exclusions, for the same family of reason:
+
+- **Booking cancellations.** Telling someone their showing is off is not
+  outreach, and silence sends them to a property no longer expecting them.
+- **Staff alerts.** They are how Nicole finds out anything happened at all.
+
+### Six enforcement points, one per sequence
+
+The check sits **inside** each node, where the guards already are — never as a
+new node in front of an existing one (gotcha 19).
+
+| scope | workflow | node |
+|---|---|---|
+| `identity` | `L13GUyrWbjSJwn8p` | `Check Guards` |
+| `identity_reminders` | `R3rhuCYEGoBFArBa` | `Find Due Reminders` |
+| `cal_link` | `UbO0l29GtILMm1sP` | `Check & Build Message` (sweep) |
+| `cal_link` | `JDsKrVRHf9TEVj7j` | `Resolve Inquiry` (immediate send) |
+| `booking_nudges` | `5UvuzQwLjCB4D25A` | `Find Due Nudges` |
+| `cal_reminders` | `3hGnl6mPnu2AMbZ1` | `Find Due Notifications` |
+
+`scope = all` covers all six. An **unrecognised** scope suppresses **nothing**
+and is logged loudly — a typo must not silently mean "all" (muting a lead
+nobody meant to mute), and must not vanish without trace either (M5).
+
+### Gotcha 19 decided where the READ nodes go, and it is not uniform
+
+Each workflow gets one `Read Outreach Suppression` node with `executeOnce`.
+Five are spliced directly in front of their target, safe **because every one of
+those targets reads its inputs by named reference** — checked node by node, not
+assumed.
+
+> **`Find Due Notifications` is the exception and would have broken.** It reads
+> `$input.all()`, so a node spliced in front would hand it suppression rows
+> where it expects Cal Bookings rows. Its read goes one step further upstream,
+> between `Read Showings` and `Read Cal Bookings`. **The builder refuses to
+> apply if any of the other five ever starts reading `$json`/`$input`.**
+
+### The Cron Poll needed a sentinel, and that is not optional
+
+Post-visit follow-ups are end-anchored and **unbounded**. Merely skipping a
+suppressed step would re-queue it every 5 minutes forever and then fire the
+whole backlog the instant the suppression expired — a silent bulk send to a
+customer nobody chose to message, with no preview and no confirm.
+
+So a suppressed invitee step is stamped `skipped_outreach_suppressed`, and that
+value is added to `Find Due Notifications`' **explicit** `alreadySent` allowlist
+in the same change. A sentinel missing from that allowlist is **inert** — the
+identical trap already recorded for `NO_PHONE_SKIP_MARKER` and
+`SHOWING_CODE_GATE_MARKER`, and mutation **M3** keeps it shut.
+
+```
+Build Message -> Outreach Suppressed? [true]  -> Mark Step Skipped (Suppressed) -> Loop Back
+                                      [false] -> No Code Delivered?   (unchanged)
+```
+
+> **Invitee steps ONLY.** `host_sms_1h` goes to Justin's own phone and
+> `nicole_2h` to Nicole — staff, who still need to know the appointment exists.
+> `recipient` already defaults to `'invitee'` on every rule, so a future rule
+> inherits the suppressible classification rather than escaping it. **M2** turns
+> the blanket version red.
+
+### Fail CLOSED, except where closed means "defer"
+
+An unreadable tab means *"I cannot prove this lead is not suppressed"*.
+Messaging them anyway is the harm the feature exists to prevent, so nothing is
+sent. Where the path re-runs on a schedule that is a **deferral** and self-heals.
+
+The one non-idempotent path is `Resolve Inquiry`, and it is handled separately:
+an unreadable tab leaves `link_sent = "false"` so the **sweep** — which
+re-checks suppression itself — delivers it on a later run. A genuine
+suppression there is stamped `skipped_outreach_suppressed` instead.
+
+### Lifting a suppression does NOT resume a sequence by itself
+
+A `skipped_outreach_suppressed` Inquiries row is **inert** to the sweep, whose
+recovery list is `false` and `skipped_stage_gate` only. A
+`skipped_outreach_suppressed` Cal Bookings step is resolved forever.
+
+> **That is deliberate, and it is the whole reason the sentinel exists.**
+> Restarting is an explicit action with a preview and a confirm (scope Part 2),
+> not a side effect of a date passing. Whoever builds the restart button must
+> flip those values on purpose — and **`expires_at` rolling over will NOT do
+> it**, which is the correct direction.
+
+### Expiry and identity matching
+
+Blank `expires_at` = permanent. A past date = no longer suppressed. An
+**unparseable** value = permanent, never expired: *"we cannot tell when this
+ends"* must not resolve to *"resume messaging them"* (**M4**).
+
+Identity is matched permissively — `person_id` **OR** phone last-10 **OR**
+email — because a FUB merge changes `person_id`, and Cal Bookings rows created
+before `CAL_BOOKINGS_PERSON_ID_MARKER` carry **no person id at all**.
+Over-matching costs a message nobody sends; under-matching messages someone we
+promised to leave alone (**M8**). The tab therefore carries `phone` and `email`
+columns beyond the seven originally scoped, recorded at stop time — the same
+precedent as the Inquiries tab.
+
+### Cost
+
+Six new Sheets nodes, all `executeOnce`, all `onError: continueRegularOutput`
+with `alwaysOutputData` so a failure arrives as data rather than aborting.
+Measured after applying: **worst single execution 11 requests, 18% of the
+bucket** (Identity Verification Reminders, unchanged), against a warn threshold
+of 30. `sheets-fanout-audit.mjs` finds no fan-out.
+
+> The Identity Gate's read is on the **Project 2** credential, copied from
+> `Read Inquiries (Waiver)` rather than from the first Sheets node in the
+> workflow — that workflow contains **both** credential types and a mismatched
+> pair fails to publish (gotcha 22).
+
+```bash
+node scripts/outreach-suppression-setup.mjs [--apply]            # the tab
+node scripts/n8n-add-outreach-suppression.mjs [--apply] [--revert --apply] [--emit-js <dir>]
+node scripts/outreach-suppression-verify.mjs [--js <dir>]        # 210 assertions
+node scripts/outreach-suppression-mutations.mjs                  # 11 mutations
+node scripts/outreach-suppression-livecheck.mjs [--write]        # real tab -> real code
+```
+Backup `n8n/BEFORE-outreach-suppression/`.
+
+> **`outreach-suppression-livecheck.mjs` covers the one thing the verifier
+> cannot.** The verifier feeds the deployed code synthetic rows with
+> hand-written keys, so it can never catch a HEADER typo — `person id`,
+> `Scope`, `expires` — which would leave all 210 assertions green and the stop
+> button silently doing nothing. `--write` appends a row for a deliberately
+> non-existent FUB id, proves the deployed sweep suppresses it, proves a
+> different person is still served, and deletes the row again. Run 2026-09-21:
+> 11 assertions, all pass.
+
+> **Six verifiers had to be updated in the same change**, every one tightened
+> rather than loosened. `stage-gate-verify`, `trash-tag-gate-verify`,
+> `stage-gate-race-verify`, `identity-reminders-verify`,
+> `cal-booking-reminders-verify` and `sms-footer-verify` all **threw** on the
+> new `$('Read Outreach Suppression')` reference; their stubs now serve it as an
+> EMPTY tab — nobody suppressed, which is the baseline every existing assertion
+> describes — and `showing-code-gate-verify` keeps its throw on any node nobody
+> has accounted for. Three graph assertions moved because the splices are real:
+> `verification-toggle-verify` F14, `showing-code-gate-verify` C2/C5 and
+> `no-phone-skip-verify`'s `Build Message` edge are now pinned as **chains**
+> through the new nodes, so what they were written to protect — forced execution
+> order, and `Missing Recipient?` still receiving `Build Message`'s items
+> unchanged — is still proved.
+
+### Outreach_Suppression tab
+
+`person_id`, `scope`, `reason`, `set_by`, `set_at`, `expires_at`, `notes`,
+`phone`, `email`.
+
+Create/repair: `node scripts/outreach-suppression-setup.mjs --apply`.
+
 ## Backing Google Sheet
 
 - Spreadsheet ID: `1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw`
 - Tabs: Properties, Settings, Text Log, Showings, Inquiries, Identity_Verifications,
   Lockboxes, Logs, Test_State, Source_Layout, Owners_Portfolios, Dashboard_Audit_Log,
-  Rental Applications, Cal Bookings, Funnel_Snapshots
+  Rental Applications, Cal Bookings, Funnel_Snapshots, Outreach_Suppression
 - `Funnel_Snapshots` (added 2026-09-16) is one row per day behind the dashboard's
   Lead funnel trend chart. It is written by `scripts/funnel-snapshots-setup.mjs`
   (`--snapshot --apply`, one row per calendar day, idempotent) and read by nothing in
@@ -3798,6 +4177,19 @@ body = {"name": w["name"], "nodes": w["nodes"], "connections": w["connections"],
     until traffic changes. Worse, `rowAdded` never re-emits an existing row, so the
     dropped property does **not** self-heal.
 
+23. **A wrong filter-parameter name can return the WHOLE collection with a 200.**
+    DoorLoop's `/tenants?filter_lease=<id>` correctly returns 1; misspell it as
+    `filter_leaseId` and you get all **408** tenants, 200 OK, no error and no
+    warning. A caller reads that as "this lease has 408 tenants". This is
+    gotcha 17 on a different vendor (FUB's `/people/undefined` silently falling
+    back to the people list) and a sibling of gotcha 20 — **an unrecognised
+    filter is not guaranteed to be rejected just because it looks specific.**
+    When a filtered lookup decides something consequential, assert the result
+    actually narrowed before acting on it. Found 2026-09-22 while building the
+    "who signed the lease" exclusion for Item 07, where trusting it would have
+    meant excluding every tenant in the portfolio from a mailing — safe by luck,
+    not by design.
+
 ## Test cadence
 
 After any change, PUT the workflow, then trigger it and read the latest execution's
@@ -3840,16 +4232,18 @@ write nothing, and touch no n8n state.
 | `application-alert-cc-verify.mjs` | **63** — message byte-identity, recipient fan-out |
 | `doorloop-recon-verify.mjs` / `doorloop-recon-cases.mjs` | the report; `--live` diffs deployed jsCode |
 | `sheets-retry-verify.mjs` | **62** — the retry cap, the served-filter, the wiring |
-| `no-phone-skip-verify.mjs` | **56** — the sentinel allowlist, recipient keying, and the 1c gate's position in the chain |
+| `no-phone-skip-verify.mjs` | **57** — the sentinel allowlist, recipient keying, and the 1c gate's position in the chain |
 | `application-inquiry-row-verify.mjs` | **64** — cal_link resolution, both dedup rules, fail-closed |
 | `application-review-task-verify.mjs` | **86** — the stage gate both ways, both branches, ET due date, wiring |
 | `stage-gate-race-verify.mjs` | **36** — race recovery, recency guard, both nodes |
-| `cal-booking-reminders-verify.mjs` | **108** — day arithmetic, booking join, guards, wiring |
+| `cal-booking-reminders-verify.mjs` | **115** — day arithmetic, booking join, the nudge link metadata, guards, wiring |
 | `identity-reminders-verify.mjs` | **41** — day arithmetic, cap, guards |
 | `rejection-cancel-verify.mjs` | **73** — A-2 both layers, now applied; `--js <dir>` predates that |
 | `cal-booking-notify-verify.mjs` | **48** — B routing, both defects, the connections graph |
-| `cal-link-email-verify.mjs` | **37** — the parallel email branch, its note logging, and that no copy claims the lead verified |
-| `verification-toggle-verify.mjs` | **49** — item 4: the inverted default, routing, grandfathering, the waiver and its ordering |
+| `cal-link-email-verify.mjs` | **41** — the parallel email branch, its note logging, that no copy claims the lead verified, and that the email does NOT carry the SMS footer |
+| `sms-footer-verify.mjs` | **123** — the do-not-reply footer: ten lead-facing nodes carry it, twelve staff alerts and every email do not, and the key is its own off switch |
+| `outreach-suppression-verify.mjs` | **210** — the stop button: six enforcement points, the scope/expiry/identity rules, invitee-only in the cron poll, and that the door code is never suppressed |
+| `verification-toggle-verify.mjs` | **50** — item 4: the inverted default, routing, grandfathering, the waiver and its ordering |
 > **`funnel-metrics-verify.mjs` A1 currently FAILS, and it is not a regression.**
 > It asserts that live `verified` equals a baseline documented on 2026-09-12; a 13th
 > lead has since verified, so it reports `expected 12, got 13`. Confirmed pre-existing
@@ -3867,7 +4261,7 @@ write nothing, and touch no n8n state.
 | `lockbox-park-verify.mjs` | **64** — item 1a: parking, the alert fan-out, the graph, and that a parked row is inert in the dispatch cron |
 | `non-showing-skip-verify.mjs` | **24** — consult/walkthrough skipped, showings untouched, classify() parity, no event-type collision |
 | `fub-status-verify.mjs` | **25** — the dashboard's FUB status column: rejected / progressed / active / out-of-scope, pinned to synthetic stages |
-| `showing-code-gate-verify.mjs` | **55** — item 1c: the 7 gated rules, the category clause, the sentinel allowlist, defer-don't-decide |
+| `showing-code-gate-verify.mjs` | **58** — item 1c: the 7 gated rules, the category clause, the sentinel allowlist, defer-don't-decide |
 | `delete-multirow-verify.mjs` | **36** — Delete Property multi-row: simulated deleteDimension, fail-closed guards, the `.item` rewrites |
 | `launch-audit.mjs` | all 12 workflows, 16 hard gates, 3 alert phones |
 
