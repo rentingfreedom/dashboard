@@ -49,7 +49,7 @@ import {
  */
 const W = 1200;
 const H = 180;
-const PAD_L = 40;
+const PAD_L = 52;
 const PAD_R = 14;
 const PAD_T = 20;
 /** Room for the value row, the bar label and the zone heading beneath it. */
@@ -184,9 +184,19 @@ export function OutreachChart({ leads, nudgeMax, selected, onSelect }: OutreachC
           );
         })}
 
-        {/* Recessive gridlines, and the y-axis caption as text rather than a
-            rotated label — rotated axis titles are hard to read at this size. */}
-        <text x={4} y={BAND_TOP + 1} fontSize={9} className="pointer-events-none fill-gray-400">
+        {/* The y-axis title, rotated into the left gutter.
+            Horizontally above the plot it sat on the band's top rule and the
+            topmost gridline number, whichever padding it was given — there is
+            no clear horizontal band to put it in once the chart is this
+            short. The gutter is the only space that is genuinely free. */}
+        <text
+          x={12}
+          y={PAD_T + TOP_GAP + plotH / 2}
+          fontSize={9}
+          textAnchor="middle"
+          transform={`rotate(-90 12 ${PAD_T + TOP_GAP + plotH / 2})`}
+          className="pointer-events-none fill-gray-400"
+        >
           # of people
         </text>
         {[0, 0.5, 1].map((f) => {
