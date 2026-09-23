@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { toast } from "sonner";
 import { fetchJson } from "@/lib/fetch-json";
+import { TRASH_TAGS, TRASH_TAG_WINDOWS } from "@/lib/fub/client";
 
 /**
  * `pause` and `stop` are the SAME suppression row — the only difference is
@@ -65,6 +66,13 @@ const DURATIONS = [
   { value: "custom", label: "Pick a date…" },
 ];
 
+/**
+ * Where Nicole's process moves a rejected lead. Confirmed by the client
+ * 2026-09-23. Every cold stage is outside `allowed_stages`, so the move is
+ * itself a block — the tag and the stage are belt and braces.
+ */
+const COLD_STAGE = "Cold Rental Lead 1 month Hold";
+
 /** Local YYYY-MM-DD, for the <input type="date"> floor. */
 function todayLocal(): string {
   const d = new Date();
@@ -85,6 +93,8 @@ export function StopOutreachDialog({
   const [saving, setSaving] = useState(false);
   const [duration, setDuration] = useState("7");
   const [customDate, setCustomDate] = useState("");
+  const [dispositionTag, setDispositionTag] = useState("");
+  const [moveToCold, setMoveToCold] = useState(false);
 
   const mode = target?.mode ?? "stop";
   const isPause = mode === "pause";
@@ -128,7 +138,7 @@ export function StopOutreachDialog({
     if (!target || blocked) return;
     setSaving(true);
     try {
-      await fetchJson("/api/outreach/stop", {
+      const res = await fetchJson("/api/outreach/stop", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -140,17 +150,28 @@ export function StopOutreachDialog({
           // Omitted entirely for a stop. The route treats an absent or empty
           // value as permanent, which is exactly what a stop means.
           ...(expiry ? { expiresAt: expiry.iso } : {}),
+          // Only ever sent on a permanent stop — see the dialog body.
+          ...(!isPause && dispositionTag ? { dispositionTag } : {}),
+          ...(!isPause && moveToCold ? { dispositionStage: COLD_STAGE } : {}),
         }),
-      });
+      }) as { dispositionError?: string | null };
       const who = target.personName || target.personId;
       toast.success(
         expiry ? `Outreach paused for ${who} until ${expiry.label}` : `Outreach stopped for ${who}`
       );
+      // The stop succeeded even when the CRM write did not, so this is a
+      // separate warning rather than an error — saying "failed" over a lead
+      // who IS now stopped would send someone to re-do a done thing.
+      if (res?.dispositionError) {
+        toast.warning(`Outreach stopped, but FUB was not updated: ${res.dispositionError}`);
+      }
       onOpenChange(false);
       setReason("");
       setScope("all");
       setDuration("7");
       setCustomDate("");
+      setDispositionTag("");
+      setMoveToCold(false);
       onDone();
     } catch (err) {
       toast.error(
@@ -257,6 +278,55 @@ export function StopOutreachDialog({
                 Their door code is not affected. A lead with a confirmed showing still receives
                 their access code.
               </p>
+
+              {/* The CRM half. Offered only on a permanent stop: a trash tag
+                  has its own blocking window that has nothing to do with the
+                  pause date, so a lead could come back from the pause and
+                  still be blocked by the tag — two clocks, one of them
+                  invisible. */}
+              {!isPause && (
+                <div className="rounded border border-gray-200 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-800/50">
+                  <div className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                    Also record it in FUB (optional)
+                  </div>
+                  <NativeSelect
+                    value={dispositionTag}
+                    onChange={(e) => setDispositionTag(e.target.value)}
+                    className="mt-1.5 w-full"
+                  >
+                    <option value="">No tag — leave the CRM alone</option>
+                    {TRASH_TAGS.map((t) => (
+                      <option key={t} value={t}>
+                        {t} — {TRASH_TAG_WINDOWS[t].label}
+                      </option>
+                    ))}
+                  </NativeSelect>
+
+                  <label className="mt-2 flex items-start gap-2 text-xs text-gray-700 dark:text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={moveToCold}
+                      onChange={(e) => setMoveToCold(e.target.checked)}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      Move them to <span className="font-medium">{COLD_STAGE}</span>
+                    </span>
+                  </label>
+
+                  {/* The consequence, in days, on screen. "Denied Credit" does
+                      not announce that it blocks someone for a year. */}
+                  {dispositionTag && (
+                    <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+                      {TRASH_TAG_WINDOWS[dispositionTag as keyof typeof TRASH_TAG_WINDOWS].days === null
+                        ? "This tag never expires. Nothing will remove it automatically."
+                        : `This blocks every automated message to them for ${
+                            TRASH_TAG_WINDOWS[dispositionTag as keyof typeof TRASH_TAG_WINDOWS].days
+                          } days, across every sequence.`}
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div>
                 <label className="text-xs font-medium text-gray-600 dark:text-gray-400">

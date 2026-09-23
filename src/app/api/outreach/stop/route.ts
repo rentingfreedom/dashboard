@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth/roles";
 import { stopOutreach, SUPPRESSION_SCOPES, type SuppressionScope } from "@/lib/google/outreach-repository";
+import { applyDisposition, TRASH_TAGS, type TrashTag } from "@/lib/fub/client";
 
 const schema = z.object({
   personId: z.string().trim().min(1, "personId is required"),
@@ -12,6 +13,13 @@ const schema = z.object({
   /** ISO. Omit or empty for a permanent stop. */
   expiresAt: z.string().trim().optional(),
   notes: z.string().trim().max(1000).optional(),
+  /**
+   * Optional FUB disposition. A trash tag already suppresses every send path,
+   * so tag-and-stage IS a stop — folding it in here rather than giving it its
+   * own button stops two controls both meaning "stop" from competing.
+   */
+  dispositionTag: z.enum(TRASH_TAGS as unknown as [TrashTag, ...TrashTag[]]).optional(),
+  dispositionStage: z.string().trim().max(120).optional(),
 });
 
 /**
@@ -62,7 +70,34 @@ export async function POST(req: Request) {
       auth.user.actorLabel
     );
 
-    return NextResponse.json({ ok: true });
+    /**
+     * The CRM write comes SECOND, deliberately.
+     *
+     * The suppression is the reversible half and the one that actually stops
+     * messages; the FUB write is the record. If FUB is unreachable the lead is
+     * still stopped, which is the safe direction — whereas tagging someone in
+     * the CRM and then failing to suppress them would look handled while the
+     * texts kept going.
+     *
+     * A failure here is REPORTED, not thrown: the stop has already happened
+     * and telling the operator it failed would be false.
+     */
+    let disposition: Awaited<ReturnType<typeof applyDisposition>> | null = null;
+    let dispositionError: string | null = null;
+    if (parsed.data.dispositionTag || parsed.data.dispositionStage) {
+      try {
+        disposition = await applyDisposition({
+          personId: parsed.data.personId,
+          tag: parsed.data.dispositionTag,
+          stage: parsed.data.dispositionStage,
+        });
+      } catch (err) {
+        dispositionError = err instanceof Error ? err.message : "FUB update failed";
+        console.error("[POST /api/outreach/stop] disposition", err);
+      }
+    }
+
+    return NextResponse.json({ ok: true, disposition, dispositionError });
   } catch (err) {
     console.error("[POST /api/outreach/stop]", err);
     return NextResponse.json(

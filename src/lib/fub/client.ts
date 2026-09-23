@@ -1,5 +1,5 @@
 /**
- * Minimal READ-ONLY Follow Up Boss client.
+ * Minimal Follow Up Boss client — READ-ONLY except for one deliberate write.
  *
  * Exists for one job: the funnel page's "Waiting on verification" panel cannot
  * tell a lead who is genuinely waiting from one Nicole has already rejected,
@@ -11,9 +11,23 @@
  * Until it is set, `isConfigured()` is false and every caller degrades to
  * showing no stage rather than failing.
  *
- * This module NEVER writes. FUB is a live CRM Nicole works in by hand, and a
- * write from here would race her and fire `peopleUpdated`, which is a live
- * webhook feeding the Identity Gate. Keep it read-only.
+ * ── The one write, added 2026-09-23 ────────────────────────────────────────
+ * This module was read-only on the reasoning that a write would race Nicole
+ * and fire `peopleUpdated`, a live webhook feeding the Identity Gate. That
+ * reasoning still holds for anything automatic. `applyDisposition` is the
+ * deliberate exception, and it is safe for reasons that do NOT generalise:
+ *
+ *   · It only ever runs because a human pressed a button, so it cannot race
+ *     Nicole at machine speed — it IS Nicole.
+ *   · Firing `peopleUpdated` is WANTED here. The trash-transition watcher
+ *     wakes, sees the tag and keeps its own cache honest; without the webhook
+ *     the CRM and the gate would disagree until something else woke it.
+ *   · It writes exactly three fields in ONE call and reads the person first,
+ *     so it cannot clobber a field it has not seen.
+ *
+ * **Do not add a second writer on the strength of this one.** Anything that
+ * writes without a human behind it reintroduces the race this module was
+ * built to avoid.
  *
  * ── Why one request per person, which looks wasteful ────────────────────────
  * Measured live 2026-09-16, not assumed:
@@ -258,4 +272,165 @@ export async function fetchLeadStatuses(
 
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, unique.length) }, worker));
   return out;
+}
+
+/**
+ * How long each trash tag blocks a lead for.
+ *
+ * The windows are enforced in n8n (`Check Guards` and four sibling nodes), not
+ * here — they are carried so the confirm dialog can say "blocks for 365 days"
+ * rather than only naming a tag whose consequence is invisible to the reader.
+ *
+ * Keyed off the existing `TRASH_TAGS` rather than redeclaring the names, so
+ * the two lists cannot drift.
+ */
+export type TrashTag = (typeof TRASH_TAGS)[number];
+
+export const TRASH_TAG_WINDOWS: Record<TrashTag, { days: number | null; label: string }> = {
+  "Permanent Trash": { days: null, label: "never expires" },
+  "Denied Credit": { days: 365, label: "blocks for 365 days" },
+  "No Response Trash": { days: 90, label: "blocks for 90 days" },
+};
+
+export function isTrashTag(v: string): v is TrashTag {
+  return (TRASH_TAGS as readonly string[]).includes(v);
+}
+
+export interface DispositionInput {
+  personId: string;
+  /** Omit to change only the stage. */
+  tag?: TrashTag;
+  /** Omit to change only the tag. */
+  stage?: string;
+}
+
+export interface DispositionResult {
+  personId: string;
+  tagsBefore: string[];
+  tagsAfter: string[];
+  stageBefore: string;
+  stageAfter: string;
+  trashDateWritten: string;
+}
+
+/**
+ * Record a rejection in FUB: apply a trash tag, move the stage, and stamp the
+ * date the two of them depend on.
+ *
+ * ── One PUT, three fields ────────────────────────────────────────────────
+ * The same shape the n8n reapply-reroute uses. Writing the tag and the stage
+ * separately would leave a window in which the lead holds a trash tag with no
+ * `customTrashDate` — and a dateless tag used to read as EXPIRED, which is the
+ * bug that let seven real leads through in one burst on 2026-08-26.
+ *
+ * ── Why we write the date rather than letting the watcher do it ──────────
+ * A `tags` write fires `peopleUpdated`, so the trash-transition watcher would
+ * wake and stamp `customTrashDate` itself. But that depends on FUB delivering
+ * the webhook and n8n being up, and it starts the blocking clock at whatever
+ * moment that happens rather than at the moment the operator acted. The
+ * watcher never overwrites an existing date, so ours wins cleanly.
+ *
+ * ── FUB's PUT REPLACES the whole tags array ──────────────────────────────
+ * Every existing tag is re-sent verbatim alongside the new one, exactly as the
+ * n8n tag-expiry cleanup does. Sending only the new tag would silently delete
+ * the client's own tags, which are applied by hand and are not recoverable.
+ *
+ * Not theoretical: person 2545 carries SEVEN tags — `Charleston`,
+ * `Goose Creek`, `Summerville`, three postcodes and one trash tag (read live
+ * 2026-09-23). A naive write drops six of them and nothing reports it.
+ *
+ * `id` comes back from FUB as a NUMBER, which is why the identity check
+ * compares stringified values rather than using `===` on the raw field.
+ *
+ * Throws rather than returning null: unlike the read path this is an action a
+ * human is waiting on, and a silent failure would leave them believing a lead
+ * was rejected when nothing happened.
+ */
+export async function applyDisposition(input: DispositionInput): Promise<DispositionResult> {
+  if (!isConfigured()) {
+    throw new Error(
+      "FUB_API_KEY is not set in this environment, so the CRM cannot be updated."
+    );
+  }
+  const id = String(input.personId ?? "").trim();
+  if (!id) throw new Error("A disposition needs a person id.");
+  if (!input.tag && !input.stage) {
+    throw new Error("A disposition needs at least a tag or a stage.");
+  }
+
+  const headers = {
+    Authorization: authHeader(),
+    "X-System": SYSTEM,
+    "X-System-Key": SYSTEM_KEY,
+    Accept: "application/json",
+  };
+
+  // Read first. The tags array has to be re-sent in full, so it has to be
+  // known in full — and `fields=allFields` is required or custom fields and
+  // tags come back absent rather than empty.
+  const getRes = await fetch(`${BASE}/people/${encodeURIComponent(id)}?fields=allFields`, {
+    headers,
+    cache: "no-store",
+  });
+  if (!getRes.ok) {
+    throw new Error(`Could not read person ${id} from FUB (${getRes.status} ${getRes.statusText}).`);
+  }
+  const person = (await getRes.json()) as {
+    id?: number | string;
+    stage?: string;
+    tags?: string[];
+    people?: unknown[];
+  };
+
+  // Gotcha 17: a malformed id makes FUB fall back to a LIST response instead
+  // of erroring. Writing to whoever happened to be first would tag the wrong
+  // customer — refuse unless the record we got back is the one we asked for.
+  if (Array.isArray(person.people)) {
+    throw new Error(`FUB returned a list for person ${id} — refusing to write.`);
+  }
+  if (String(person.id ?? "") !== id) {
+    throw new Error(
+      `FUB returned person ${person.id ?? "(none)"} when asked for ${id} — refusing to write.`
+    );
+  }
+
+  const tagsBefore = Array.isArray(person.tags) ? person.tags.map(String) : [];
+  const stageBefore = String(person.stage ?? "");
+
+  const tagsAfter = input.tag && !tagsBefore.includes(input.tag)
+    ? [...tagsBefore, input.tag]
+    : tagsBefore;
+
+  const now = new Date().toISOString();
+  const body: Record<string, unknown> = {};
+  if (input.tag) {
+    body.tags = tagsAfter;
+    body.customTrashDate = now;
+  }
+  if (input.stage) body.stage = input.stage;
+
+  // The id belongs in the URL only — including it in the body is a 400 that
+  // crashed a live n8n run when the watcher was first built.
+  const putRes = await fetch(`${BASE}/people/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!putRes.ok) {
+    const text = await putRes.text().catch(() => "");
+    throw new Error(
+      `FUB rejected the update for person ${id} (${putRes.status} ${putRes.statusText})${
+        text ? `: ${text.slice(0, 200)}` : ""
+      }`
+    );
+  }
+
+  return {
+    personId: id,
+    tagsBefore,
+    tagsAfter,
+    stageBefore,
+    stageAfter: input.stage ?? stageBefore,
+    trashDateWritten: input.tag ? now : "",
+  };
 }
