@@ -814,9 +814,17 @@ node scripts/application-inquiry-row-verify.mjs [--js <dir>]   # 64 assertions
 Backup `n8n/BEFORE-application-inquiry-row/`. The default mode reads the live deployed
 code and also asserts the `connections` graph, the onError/executeOnce config, an explicit
 `columns.schema` on the append (gotcha 13), and that neither new node sits on the Project-2
-credential. **NOT yet live-verified** — a Gmail Trigger can't be fired via the API, so
-**the next real application is the live test** (expect an `Inquiries` row alongside the
-`Rental Applications` row, `link_sent = FALSE`).
+credential. **LIVE-VERIFIED 2026-09-23** — three real applications overnight, each
+producing its `Inquiries` row alongside the `Rental Applications` row with
+`link_sent = FALSE` and a resolved `cal_link`: Tristian Davis (2869), Owain Hughes
+(2870), Eva Davis (2873). The "verify into silence" route that cost Cassandra Ferra
+and Quantez Guest a hand repair is closed.
+
+> **Both dedup rules fired too, and the second one is the interesting half.** Eva
+> Davis applied to **two** properties, so two applications. The 109-larkspur one
+> created her row; the 5815-hume one did **not**, because she already held a hume row
+> from inquiry event `2034` — the person+property rule, doing exactly its job. She is
+> the first live multi-property applicant.
 
 > `application-alert-cc-verify.mjs` asserts the **exact** sibling set on both note
 > connectors. If you add a fourth, update it there too.
@@ -916,11 +924,30 @@ without it. **`zillow-flow-verify.mjs` and `application-alert-cc-verify.mjs` bot
 be updated in the same change** (the rerouted create edge, and the exact sibling set on
 both note connectors); all five relevant verifiers pass.
 
-**Not live-verified** — a Gmail Trigger cannot be fired via the API, so **the next real
-Zillow application is the live test**. Expect the person created already on Nicole, plus
-an open FUB task due that day. `POST /tasks` is a **new API surface for this estate**: it
-was proved by hand (201, then deleted) but has never run from n8n. **Watch the first
-execution.**
+**LIVE-VERIFIED 2026-09-23.** Five real applications: every person is on Nicole
+(`assignedUserId = 2`) and every one carries an open `Review Zillow rental application`
+task assigned to her, `createdBy` Brenda as accepted. `POST /tasks` from n8n works.
+
+> **The ET due date earned its keep on the first night.** 2869 and 2870 were created
+> at 01:41 and 01:42 **UTC**, which is 21:41 ET the *previous* day — and both tasks
+> are due **2026-09-22**, the ET date. An instance-default date would have filed them
+> on the 23rd, a day late in Nicole's list, which is the whole reason it is computed
+> in code.
+
+> **KNOWN DEFECT, found by that same verification: a second Zillow email for the SAME
+> property creates a SECOND identical task.** Idempotency here is inherited from
+> `Parse & Resolve Application`, which dedups on the Gmail `message_id` — that stops a
+> redelivery, not a genuinely new email about the same application. Jacob Altman
+> (2871) has **two** identical open tasks for `109-larkspur-drive`, from applications
+> six minutes apart (`1a0cbf3cb208f9ce` then `1a0cbf8e1f3b4195`, the second on the
+> existing-match branch). Eva Davis also has two, but hers are **correct** — two
+> different properties.
+>
+> So the fix is a person+property check, **not** a person-only one, which would
+> suppress a real second application. The `Inquiries` branch already has exactly that
+> rule and is unaffected. Not fixed here: it creates duplicate work for Nicole rather
+> than contacting a customer wrongly, and the right dedup window wants the client's
+> view on whether a re-application months later should raise a fresh task.
 
 ### Rental Applications tab
 
@@ -2625,8 +2652,9 @@ retyped from n8n expression syntax into JS concatenation, exactly the transcript
 silently drops an em-dash or the conditional `Review:` suffix, so it renders the
 originals with a small `{{ }}` evaluator and compares character for character.
 
-**Not live-verified** — a Gmail Trigger can't be fired via the API. **The next real
-Zillow application is the live test.**
+**LIVE-VERIFIED 2026-09-23** — the overnight applications alerted both
+`rental_application_alert_phone` and `alert_cc_phones`, confirmed by the operator
+receiving them. The coverage gap that caused the 2026-08-30 confusion is closed.
 ### Bulk writes: pace them, don't deactivate the consumer
 
 **Learned the hard way.** The 593-person backfill was run with the Identity Gate

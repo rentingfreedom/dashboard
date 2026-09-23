@@ -937,3 +937,64 @@ she stayed eligible for further nudges.
 past, and Populife code `511915` was genuinely written to lock `32462340` for a window
 that has since closed (**gotcha 8** — deleting the cloud record does not revoke it on a
 Bluetooth-only lockbox).
+
+## The Zillow application branches went live, five at once — 2026-09-23
+
+Three features had shipped with the same caveat: *a Gmail Trigger cannot be fired via
+the API, so the next real application is the live test.* Five real applications arrived
+across 2026-09-22/23 and exercised all three at once. They are recorded here with the
+evidence, so `docs/n8n-workflows.md` can carry the verdict alone.
+
+| applicant | person | rows | note |
+|---|---|---|---|
+| Ashley Brooks | 2867 | new person | `1a0c71dfc18a5316` |
+| Tristian Davis | 2869 | new person | `1a0cbec543526e12` |
+| Owain Hughes | 2870 | new person | `1a0cbed519011265` |
+| Jacob Altman | 2871 | new, then existing-match | `1a0cbf3cb208f9ce`, `1a0cbf8e1f3b4195` |
+| Angela Healey | 2855 | existing-match | `1a0cc4f2a8e88f6d` |
+| Eva Davis | 2873 | existing-match ×2 | `1a0cdba588a62c93` (hume), `1a0cdd0c7cc90be7` (larkspur) |
+
+**`APPLICATION_INQUIRY_ROW_MARKER` works**, including the half nobody could test
+synthetically: Eva Davis applied to two properties, and only the larkspur application
+appended an `Inquiries` row. The hume one was correctly suppressed by the
+person+property dedup, because she already held a hume row from inquiry event `2034`.
+She is also the estate's first live multi-property applicant, and both her rows sit
+`matched`, `link_sent = FALSE`, each with its own `cal_link` — so when a phone reaches
+FUB she gets **one** verification SMS (`alreadySent` is keyed on person id alone) and
+**two** cal links, one per property, from the sweep's `for (const row of pending)` loop.
+
+**`APPLICATION_REVIEW_TASK_MARKER` works**, and the ET due date was not academic. 2869
+and 2870 were created 01:41 and 01:42 **UTC** — 21:41 ET on the previous day — and both
+tasks are due **2026-09-22**. An instance-default date would have filed them a day late.
+
+### The defect it surfaced: duplicate review tasks for one property
+
+**Jacob Altman (2871) holds two identical open `Review Zillow rental application`
+tasks** for `109-larkspur-drive`, from two Zillow emails six minutes apart. The second
+ran the existing-match branch, which also creates a task — correct for a genuinely new
+application, wrong for Zillow emailing twice about one.
+
+> **The idempotency claim in the docs was true and still insufficient.** Dedup is
+> inherited from `Parse & Resolve Application`'s Gmail `message_id` check, which stops
+> a *redelivery*. Two distinct emails have two distinct ids, so nothing upstream
+> catches it and the task branch has no check of its own.
+
+> **A person-only fix would be wrong.** Eva Davis also has two tasks and hers are
+> correct — two properties, two applications, two things for Nicole to review.
+> Person+property is the rule, which is exactly what the `Inquiries` branch already
+> does and why that branch produced the right answer for both leads on the same night.
+
+Unfixed by choice: the cost is duplicate work in Nicole's list, not a customer
+contacted wrongly, and the dedup window is a client question — a re-application months
+later probably *should* raise a fresh task.
+
+### Observed in passing: FUB makes its own task for some of these
+
+Eva Davis and Angela Healey also carry *"Get Number form zillow, review application if
+applicable"* with `createdById: -1` — a FUB-side automation, not ours. Both arrived
+with `source: "Zillow Rentals"`; 2869/2870/2871 came in as `"Zillow Rental Manager"`
+and have no such task. So on one of the two Zillow sources Nicole now receives **two**
+tasks per applicant, ours and FUB's. That is a FUB lead-flow setting in the FUB UI, not
+code — the same class as the assignment routing recorded under
+`APPLICATION_REVIEW_TASK_MARKER`. Worth putting to the client before anyone "fixes" it
+here.
