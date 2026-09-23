@@ -668,6 +668,9 @@ read them. `Denied Credit` blocks that lead for **365 days** across every send
 path; `No Response Trash` for **90**. The confirm text must name the window in
 days, not the tag name alone.
 
+**All three tags are offered** (client decision 2026-09-23), `Permanent Trash`
+included — which never expires and no cleanup will ever remove.
+
 **One PUT, carrying `tags`, `stage` and `customTrashDate` together** — the
 shape the reapply-reroute already uses.
 
@@ -805,19 +808,65 @@ explicitly.**
 Requested 2026-09-23, **not yet scoped**. A way to add a booking by hand from
 the `/showings` page, for a showing arranged off-platform.
 
-> Anything created here must produce the same row shape a Cal.com booking does,
-> including `fub_person_id` and `person_phone`, or it inherits the no-metadata
-> failure above: a `Showings` row whose code cannot be texted. Whether it should
-> also create a real Cal.com booking — so the slot is held and reminders fire —
-> is the first question to answer; a sheet-only row gets neither.
+**It creates a REAL Cal.com booking** (client decision 2026-09-23), not a sheet
+row. The slot is held, Cal.com sends its own confirmation, and every existing
+webhook path runs exactly as it does for a self-booked showing — so the
+`Showings` row, the door code and the reminder chain all arrive with no new
+wiring.
+
+> **This also solves the identity problem rather than inheriting it.** Creating
+> the booking through the API means passing `metadata[fub_person_id]` and
+> `metadata[phone]` at creation — the one carrier of identity for a self-guided
+> showing, since the per-property event types have **no phone field** on the
+> booking form (`NUDGE_CAL_LINK_METADATA_MARKER`). A sheet-only row would have
+> had to fake what the API can simply be told.
+
+> New capability: nothing in this estate has ever CREATED a Cal.com booking.
+> Cancellation is proven (`POST /v2/bookings/{uid}/cancel`); creation is not.
+> Prove it against a throwaway event type first, as A-2 did for the cancel.
+
+### 6f. Restart the booking loop — its own action, not only a side effect
+
+**Restart, not resume** — the client's word, and the right one. Resuming
+mid-ladder (they had 2 of 4 nudges, send 3 and 4) would need new columns to
+remember the position, and is not what a lead returning after a cancellation
+needs. Restarting puts them at day 0 with the full runway, which is the same
+three-field write 6c performs.
+
+Requested 2026-09-23 as a standalone menu item, because **the common case has
+nothing to do with cancellations**: a lead was sent a link three weeks ago,
+never booked, went `window_over`, and Nicole wants another run at them. Nothing
+today can do that.
+
+Preconditions, all checkable from data already on the page:
+
+| Guard | Why |
+|---|---|
+| `link_sent === "true"` and a non-empty `cal_link` | Every `skipped_*` value is a recorded non-send — there is no link in their hands to nudge them about. |
+| Property still available | The Cheyla Zinck guard. Do not nudge someone toward a home that is let. |
+| Not suppressed | A stopped lead is not quietly restarted. |
+| No live future booking | They have already booked; nudging them is the bug the join exists to prevent. |
+
+The n8n guards (trash tags, stage, phone) re-apply at send time as always, so
+this can only ever schedule a nudge, never force one.
+
+> **This is the argument for `rebook_anchor_at` after all, and it postdates the
+> decision to re-anchor.** Re-anchoring `link_sent_at` is defensible for a
+> one-off. A button Nicole can press repeatedly moves that timestamp **every
+> time** — and it is the funnel's "when did we send their link". After two or
+> three restarts the original date is gone and time-to-book is measured from
+> the most recent restart. A separate column costs one `appendDimension` and
+> one n8n change to prefer it. **Raised with the client 2026-09-23; decision
+> pending.**
 
 ### Open after this round
 
 | Question | Why it matters |
 |---|---|
-| Does Nicole use the per-sequence scopes? | If not, delete the dropdown and remove the trap. |
-| Which tags does the Stop disposition offer — all three, or a shortlist? | `Denied Credit` blocks 365 days, `No Response Trash` 90. The window belongs in the confirm text. |
-| Should a manual booking create a real Cal.com booking? | Decides whether 6e is a sheet write or an API integration. |
+| Does Nicole use the per-sequence scopes (the "What to stop" dropdown)? | If not, delete it and remove the trap. Asked 2026-09-23; the term confused, re-asked in plainer words. |
+| Re-anchor `link_sent_at`, or add `rebook_anchor_at` after all? | 6f makes the restart repeatable, so re-anchoring now erases the funnel's link date a little more each press. |
+| ~~Which tags does the Stop disposition offer?~~ | **ANSWERED 2026-09-23: all three.** |
+| ~~Should a manual booking create a real Cal.com booking?~~ | **ANSWERED 2026-09-23: yes.** See 6e. |
 
 ---
 
