@@ -212,7 +212,12 @@ const outs = (src, br = 0) => ((C[src]?.main ?? [])[br] ?? []).map((c) => c.node
 // still receives Build Message's items unchanged, so it is pinned as the chain
 // rather than as a direct edge — an IF passes items through untouched, and the
 // gate's own false branch is the path every non-suppressed step takes.
-ok("Build Message -> No Code Delivered?", outs("Build Message"), ["No Code Delivered?"]);
+// OUTREACH_SUPPRESSION_MARKER (2026-09-21) inserted `Outreach Suppressed?` in
+// front of the no-code gate, for the same reason and with the same safety
+// argument. Pinned as the chain so Missing Recipient? is still provably reached
+// with Build Message's items unchanged.
+ok("Build Message -> Outreach Suppressed?", outs("Build Message"), ["Outreach Suppressed?"]);
+ok("Outreach Suppressed? [false] -> No Code Delivered?", outs("Outreach Suppressed?", 1), ["No Code Delivered?"]);
 ok("No Code Delivered? [false] -> Missing Recipient?", outs("No Code Delivered?", 1), ["Missing Recipient?"]);
 ok("No Code Delivered? [true] -> Mark Step Skipped (No Code)", outs("No Code Delivered?"), ["Mark Step Skipped (No Code)"]);
 ok("Mark Step Skipped (No Code) -> Loop Back", outs("Mark Step Skipped (No Code)"), ["Loop Back"]);

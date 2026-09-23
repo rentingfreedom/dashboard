@@ -70,10 +70,17 @@ function codeOf(wf, nodeName) {
 /** Execute a code node's jsCode with stubbed n8n globals. */
 function run(code, itemsMap, { webhookBody = {}, json = {} } = {}) {
   const $items = (name) => (itemsMap[name] ?? []).map((j) => ({ json: j }));
+  // OUTREACH_SUPPRESSION_MARKER (2026-09-21): the patched nodes now also read
+  // `Read Outreach Suppression`. The stub serves it as an EMPTY tab — nobody
+  // suppressed — which is exactly the baseline every assertion here describes.
   const $ = (name) => {
     if (name === "Webhook") return { first: () => ({ json: { body: webhookBody } }) };
     const arr = itemsMap[name] ?? [];
-    return { item: { json: arr[0] ?? {} }, first: () => ({ json: arr[0] ?? {} }) };
+    return {
+      item: { json: arr[0] ?? {} },
+      first: () => ({ json: arr[0] ?? {} }),
+      all: () => arr.map((j) => ({ json: j })),
+    };
   };
   const fn = new Function("$items", "$", "$json", "$input", code);
   return fn($items, $, json, { first: () => ({ json }), all: () => [{ json }] });

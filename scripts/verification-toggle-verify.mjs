@@ -302,8 +302,14 @@ async function main() {
       ok("F11 it carries executeOnce (gotcha 4)", rn?.executeOnce === true);
       ok("F12 it declares serviceAccount auth (gotcha 22)", rn?.parameters?.authentication === "serviceAccount");
       ok("F13 it reads the Inquiries tab", rn?.parameters?.sheetName?.value === "Inquiries");
+      // OUTREACH_SUPPRESSION_MARKER (2026-09-21) spliced `Read Outreach
+      // Suppression` between these two. What F14 protects is that the waiver
+      // read still REACHES Check Guards on a single forced-order chain, so it
+      // is pinned as the chain rather than as a direct edge — not loosened.
       const feeds = (gw.connections["Read Inquiries (Waiver)"]?.main?.[0] ?? []).map((x) => x.node);
-      eq("F14 it feeds Check Guards", feeds.join(","), "Check Guards");
+      eq("F14 it feeds Read Outreach Suppression", feeds.join(","), "Read Outreach Suppression");
+      const supFeeds = (gw.connections["Read Outreach Suppression"]?.main?.[0] ?? []).map((x) => x.node);
+      eq("F14b ...which feeds Check Guards", supFeeds.join(","), "Check Guards");
     }
   }
 

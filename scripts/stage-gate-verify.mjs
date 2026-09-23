@@ -161,8 +161,14 @@ function settingsWith(allowedValue, overrides = {}) {
 
 function run(code, itemsMap) {
   const $items = (name) => (itemsMap[name] ?? []).map((json) => ({ json }));
+  // OUTREACH_SUPPRESSION_MARKER (2026-09-21): the gated nodes also read
+  // `Read Outreach Suppression`. Served from the same itemsMap, so an absent
+  // entry is an EMPTY tab — nobody suppressed, the baseline asserted here.
   const fn = new Function("$items", "$", "$json", code);
-  return fn($items, () => ({ first: () => ({ json: {} }) }), {});
+  return fn($items, (name) => ({
+    first: () => ({ json: (itemsMap[name] ?? [])[0] ?? {} }),
+    all: () => (itemsMap[name] ?? []).map((json) => ({ json })),
+  }), {});
 }
 
 let failures = 0;

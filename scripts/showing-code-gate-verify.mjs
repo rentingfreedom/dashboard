@@ -61,7 +61,15 @@ const SETTINGS_ROWS = [
 
 const run = (code, { bookings, showings }) => {
   const mk = (arr) => arr.map((json) => ({ json }));
-  const named = { "Read Settings (Cron)": mk(SETTINGS_ROWS), "Read Showings": mk(showings) };
+  // OUTREACH_SUPPRESSION_MARKER (2026-09-21): Find Due Notifications also reads
+  // the suppression tab now. Stubbed EMPTY — nobody suppressed — which is the
+  // baseline these assertions describe. The throw below is deliberately kept,
+  // so a node acquiring a NEW dependency still fails loudly here.
+  const named = {
+    "Read Settings (Cron)": mk(SETTINGS_ROWS),
+    "Read Showings": mk(showings),
+    "Read Outreach Suppression": [],
+  };
   const $ = (name) => {
     if (!(name in named)) throw new Error(`node "${name}" not stubbed`);
     return { all: () => named[name], first: () => named[name][0], item: named[name][0] };
@@ -235,10 +243,21 @@ async function main() {
     const outs = (n) => (w.connections[n]?.main ?? []).map((br) => (br ?? []).map((c) => c.node));
 
     eq("C1  Read Settings (Cron) -> Read Showings", (outs("Read Settings (Cron)")[0] ?? [])[0], "Read Showings");
-    eq("C2  Read Showings -> Read Cal Bookings (CHAINED, not parallel)", (outs("Read Showings")[0] ?? [])[0], "Read Cal Bookings");
+    // OUTREACH_SUPPRESSION_MARKER (2026-09-21) spliced `Read Outreach
+    // Suppression` in here. C2 exists to prove the reads are CHAINED rather than
+    // parallel — n8n needs a real edge to force the order Find Due Notifications
+    // depends on — and a longer chain still proves it. Both links are pinned.
+    eq("C2  Read Showings -> Read Outreach Suppression (CHAINED, not parallel)", (outs("Read Showings")[0] ?? [])[0], "Read Outreach Suppression");
+    eq("C2b ...-> Read Cal Bookings (still chained)", (outs("Read Outreach Suppression")[0] ?? [])[0], "Read Cal Bookings");
     ok("C3  Read Cal Bookings still feeds Find Due Notifications", (outs("Read Cal Bookings")[0] ?? []).includes("Find Due Notifications"));
     ok("C4  ...and still feeds Find Rejection Candidates (A-2 untouched)", (outs("Read Cal Bookings")[0] ?? []).includes("Find Rejection Candidates"));
-    eq("C5  Build Message -> No Code Delivered?", (outs("Build Message")[0] ?? [])[0], "No Code Delivered?");
+    // OUTREACH_SUPPRESSION_MARKER (2026-09-21) inserted `Outreach Suppressed?`
+    // ahead of the no-code gate. Safe because an IF passes items through
+    // unchanged and every mark node reaches back via $('Build Message').item.
+    // Pinned as the chain, so the no-code gate is still provably reached.
+    eq("C5  Build Message -> Outreach Suppressed?", (outs("Build Message")[0] ?? [])[0], "Outreach Suppressed?");
+    eq("C5b IF[false] -> No Code Delivered? (the gate is still reached)", (outs("Outreach Suppressed?")[1] ?? [])[0], "No Code Delivered?");
+    eq("C5c IF[true]  -> Mark Step Skipped (Suppressed)", (outs("Outreach Suppressed?")[0] ?? [])[0], "Mark Step Skipped (Suppressed)");
     eq("C6  IF[true]  -> Mark Step Skipped (No Code)", (outs("No Code Delivered?")[0] ?? [])[0], "Mark Step Skipped (No Code)");
     eq("C7  IF[false] -> Missing Recipient? (unchanged path)", (outs("No Code Delivered?")[1] ?? [])[0], "Missing Recipient?");
     eq("C8  the skip path rejoins Loop Back (SplitInBatches must advance)", (outs("Mark Step Skipped (No Code)")[0] ?? [])[0], "Loop Back");

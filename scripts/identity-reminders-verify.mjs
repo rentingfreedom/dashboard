@@ -79,10 +79,18 @@ const baseSettings = (over = {}) =>
     ...over,
   }).map(([key, value]) => ({ key, value }));
 
-const runFindDue = (ivRows, settingsOver = {}) => {
-  const fn = new Function("$items", "console", findDueJs);
-  const map = { "Read Settings": baseSettings(settingsOver), "Read Identity Verifications": ivRows };
-  return fn((n) => (map[n] ?? []).map((json) => ({ json })), { log: () => {} });
+const runFindDue = (ivRows, settingsOver = {}, supRows = []) => {
+  // OUTREACH_SUPPRESSION_MARKER (2026-09-21): Find Due Reminders also reads
+  // `Read Outreach Suppression` via $(...). Defaults to an EMPTY tab — nobody
+  // suppressed — which is the baseline every assertion below describes.
+  const fn = new Function("$items", "$", "console", findDueJs);
+  const map = {
+    "Read Settings": baseSettings(settingsOver),
+    "Read Identity Verifications": ivRows,
+    "Read Outreach Suppression": supRows,
+  };
+  const items = (n) => (map[n] ?? []).map((json) => ({ json }));
+  return fn(items, (n) => ({ all: () => items(n), first: () => items(n)[0] ?? { json: {} } }), { log: () => {} });
 };
 const dueFor = (res, leadId) => res.find((r) => r.json.due === true && String(r.json.lead_id) === String(leadId));
 

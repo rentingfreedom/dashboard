@@ -85,8 +85,13 @@ const runBuild = (rows, p = person(), settingsOver = {}) => {
     "Read Settings": settingsRows(settingsOver),
     "Read Inquiries": rows,
   };
-  return new Function("$items", "console", buildJs)(
-    (n) => (map[n] ?? []).map((json) => ({ json })), { log: () => {} });
+  // OUTREACH_SUPPRESSION_MARKER (2026-09-21): Check & Build Message also reads
+  // `Read Outreach Suppression` via $(...). Served from the same map, so an
+  // absent entry is an EMPTY tab — nobody suppressed, the baseline here.
+  const items = (n) => (map[n] ?? []).map((json) => ({ json }));
+  return new Function("$items", "$", "console", buildJs)(
+    items, (n) => ({ all: () => items(n), first: () => items(n)[0] ?? { json: {} } }),
+    { log: () => {} });
 };
 const sentFor = (out) => out.filter((i) => i.json.skipped === false).map((i) => i.json.event_id);
 const bailOf = (out) => (out[0]?.json?.skipped ? out[0].json.reason : null);

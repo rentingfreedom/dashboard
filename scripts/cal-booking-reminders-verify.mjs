@@ -128,14 +128,20 @@ const booking = (o = {}) => ({
 });
 
 const runFindDue = (rows, bookings = [], settingsOver = {}, props = PROPS) => {
-  const fn = new Function("$items", "console", findDueJs);
+  // OUTREACH_SUPPRESSION_MARKER (2026-09-21): this node also reads
+  // `Read Outreach Suppression` via $(...). Empty = nobody suppressed.
+  const fn = new Function("$items", "$", "console", findDueJs);
   const map = { "Read Settings": baseSettings(settingsOver), "Read Inquiries": rows, "Read Cal Bookings": bookings, "Read Properties": props };
-  return fn((n) => (map[n] ?? []).map((json) => ({ json })), { log: () => {} });
+  const items = (n) => (map[n] ?? []).map((json) => ({ json }));
+  return fn(items, (n) => ({ all: () => items(n), first: () => items(n)[0] ?? { json: {} } }), { log: () => {} });
 };
 const runFindBooked = (rows, bookings = [], props = PROPS) => {
-  const fn = new Function("$items", "console", findBookedJs);
+  // OUTREACH_SUPPRESSION_MARKER (2026-09-21): this node also reads
+  // `Read Outreach Suppression` via $(...). Empty = nobody suppressed.
+  const fn = new Function("$items", "$", "console", findBookedJs);
   const map = { "Read Settings": baseSettings(), "Read Inquiries": rows, "Read Cal Bookings": bookings, "Read Properties": props };
-  return fn((n) => (map[n] ?? []).map((json) => ({ json })), { log: () => {} });
+  const items = (n) => (map[n] ?? []).map((json) => ({ json }));
+  return fn(items, (n) => ({ all: () => items(n), first: () => items(n)[0] ?? { json: {} } }), { log: () => {} });
 };
 const dueFor = (res, eventId) => res.find((r) => r.json.due === true && r.json.event_id === eventId);
 
@@ -361,24 +367,69 @@ console.log("\n7b. Check Nudge Guards · live-identity booking backstop");
 }
 
 console.log("\n8. Build Nudge · copy rendering");
-const runBuild = (d) => {
+// SMS_FOOTER_MARKER (2026-09-21): Build Nudge now also reads `Read Settings`
+// by name, for the do-not-reply footer. The stub serves it rather than being
+// loosened — it still THROWS on any node reference nobody has accounted for,
+// which is what catches a build node quietly acquiring a new dependency.
+const NUDGE_SETTINGS = [
+  { json: { key: "sms_footer", value: "" } },
+  { json: { key: "from_number", value: "+18548886242" } },
+];
+const runBuild = (d, settingsRows = NUDGE_SETTINGS) => {
   const fn = new Function("$", "console", buildJs);
-  const $ = (n) => { if (n !== "Check Nudge Guards") throw new Error("unexpected node ref " + n); return { first: () => ({ json: d }) }; };
+  const $ = (n) => {
+    if (n === "Check Nudge Guards") return { first: () => ({ json: d }) };
+    if (n === "Read Settings") return { all: () => settingsRows };
+    // OUTREACH_SUPPRESSION_MARKER (2026-09-21): empty tab = nobody suppressed.
+    if (n === "Read Outreach Suppression") return { all: () => [] };
+    throw new Error("unexpected node ref " + n);
+  };
   return fn($, { log: () => {} })[0].json;
 };
 {
+  // NUDGE_CAL_LINK_METADATA_MARKER — {{cal_link}} renders the ENRICHED link,
+  // not the raw Inquiries column. These two assertions were written to prove
+  // token substitution and still do; the expected value now carries the
+  // metadata, because a nudge link without it produces a booking with no phone
+  // and no door code (Nardiaa Rivers, 2026-09-20).
+  const ENRICHED = "https://cal.com/x/130?metadata%5Bfub_person_id%5D=2700&metadata%5Bphone%5D=%2B18435551212";
   const b = runBuild({
     event_id: "ev1", person_id: "2700", first_name: "Case", property_address: "130 Sandtrap Rd",
     cal_link: "https://cal.com/x/130", reminder_number: 1, days_since_anchor: 1,
-    has_phone: true, has_email: true,
+    has_phone: true, has_email: true, phone: "8435551212",
     sms_template: "Hi {{first_name}}, book {{property_address}}: {{cal_link}}",
     email_subject_template: "{{property_address}} isn't booked",
     email_body_template: "Hi {{first_name}}, {{property_address}} -> {{cal_link}}",
   });
-  ok("SMS substitutes all three tokens", b.message, "Hi Case, book 130 Sandtrap Rd: https://cal.com/x/130");
+  ok("SMS substitutes all three tokens", b.message, "Hi Case, book 130 Sandtrap Rd: " + ENRICHED);
   ok("subject substitutes", b.subject, "130 Sandtrap Rd isn't booked");
-  ok("body substitutes", b.body, "Hi Case, 130 Sandtrap Rd -> https://cal.com/x/130");
+  ok("body substitutes", b.body, "Hi Case, 130 Sandtrap Rd -> " + ENRICHED);
   ok("stamps sent_at", typeof b.sent_at === "string" && b.sent_at.endsWith("Z"), true);
+}
+{
+  // The link is the only carrier of identity for a self-guided showing: the
+  // per-property cal.com event types have NO phone booking field, so a nudge
+  // link without metadata yields person_id='' and person_phone='' on the
+  // Showings row and the access code can never be sent (Twilio 21604).
+  const ENRICHED_ALT = "https://cal.com/x/130?metadata%5Bfub_person_id%5D=2700&metadata%5Bphone%5D=%2B18435551212";
+  const build = (over) => runBuild(Object.assign({
+    event_id: "ev1", person_id: "2700", first_name: "Case", property_address: "130 Sandtrap Rd",
+    cal_link: "https://cal.com/x/130", phone: "8435551212", has_phone: true, has_email: true,
+    sms_template: "{{cal_link}}", email_subject_template: "s", email_body_template: "{{cal_link}}",
+  }, over));
+  ok("nudge link carries fub_person_id", build({}).message.includes("metadata%5Bfub_person_id%5D=2700"), true);
+  ok("nudge link carries the phone, E.164", build({}).message.includes("metadata%5Bphone%5D=%2B18435551212"), true);
+  ok("FUB-formatted phone is normalised", build({ phone: "(843) 555-1212" }).message.includes("%2B18435551212"), true);
+  ok("email and SMS carry the SAME link", build({}).message === build({}).body, true);
+  ok("no phone -> person_id still rides, no empty phone param",
+    build({ phone: "", has_phone: false }).message, "https://cal.com/x/130?metadata%5Bfub_person_id%5D=2700");
+  // Checks the REBUILD, not just the '?' count: passing the column through
+  // verbatim also yields one '?', so a count-only assertion would stay green
+  // against the very bug this section exists for.
+  ok("an already-enriched column is rebuilt, not appended to",
+    build({ cal_link: "https://cal.com/x/130?metadata%5Bfub_person_id%5D=999" }).message, ENRICHED_ALT);
+  ok("neither id nor phone -> falls back to the raw link, never 'https://'",
+    build({ person_id: "", phone: "", has_phone: false }).message, "https://cal.com/x/130");
 }
 {
   const b = runBuild({ first_name: "", property_address: "X", cal_link: "L", sms_template: "", email_subject_template: "", email_body_template: "" });
@@ -403,7 +454,15 @@ const conn = wf.connections;
 const targets = (name, branch) => (conn[name]?.main?.[branch] ?? []).map((l) => l.node);
 const node = (name) => wf.nodes.find((n) => n.name === name);
 
-ok("Read Properties fans out to BOTH finders", targets("Read Properties", 0).sort(), ["Find Due Nudges", "Find Newly Booked"]);
+// OUTREACH_SUPPRESSION_MARKER (2026-09-21): `Read Outreach Suppression` is
+// spliced into the Find Due Nudges branch only. This assertion was written to
+// prove BOTH finders are still reached from one Properties read, and it still
+// does — via the new node on one side. It is NOT loosened: the suppression read
+// must be on the nudge path and must NOT be on the Find Newly Booked path,
+// which only stamps `booked_at` and sends nothing.
+ok("Read Properties still reaches both finders (one via the suppression read)",
+   targets("Read Properties", 0).sort(), ["Find Newly Booked", "Read Outreach Suppression"]);
+ok("  the suppression read feeds Find Due Nudges", targets("Read Outreach Suppression", 0), ["Find Due Nudges"]);
 ok("SplitInBatches loop is on branch[1], not [0] (gotcha 3)", targets("Process One at a Time", 1), ["FUB - Get Person"]);
 ok("  branch[0] (done) is terminal", targets("Process One at a Time", 0), []);
 ok("guard rejection still advances the batch", targets("Send Needed?", 1), ["Loop Back"]);
