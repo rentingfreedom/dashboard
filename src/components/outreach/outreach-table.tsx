@@ -101,19 +101,27 @@ function ExpandedRow({ lead, columnCount }: { lead: InFlightLead; columnCount: n
           <div className="min-w-0 space-y-1.5">
             <p className="font-medium text-gray-700 dark:text-gray-300">Sequences</p>
             {lead.sequences.map((s: SequenceState) => (
-              <div key={s.key} className="flex items-baseline justify-between gap-2">
-                <span className="min-w-0 break-words text-gray-600 dark:text-gray-400">
-                  {s.label}
-                  <span className="text-gray-400 dark:text-gray-500"> · {s.note}</span>
-                </span>
-                <span className="shrink-0 tabular-nums text-gray-500 dark:text-gray-400">
-                  {s.max !== null && `${s.sent}/${s.max}`}
-                  {s.nextSendAt && (
-                    <span className="ml-2 text-emerald-700 dark:text-emerald-400">
-                      next {whenLabel(s.nextSendAt)}
-                    </span>
-                  )}
-                </span>
+              /* The note is on its OWN line with a character cap, rather than
+                 sharing one with the counts.
+
+                 `min-w-0` alone did not hold it: this panel lives in a cell of
+                 an auto-layout table inside `overflow-x-auto`, so a long note
+                 widens the TABLE, and a column that is 1fr of a too-wide table
+                 has no reason to wrap. Capping the text itself is the only
+                 constraint the table layout cannot argue with. */
+              <div key={s.key} className="space-y-0.5">
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="text-gray-600 dark:text-gray-400">{s.label}</span>
+                  <span className="shrink-0 tabular-nums text-gray-500 dark:text-gray-400">
+                    {s.max !== null && `${s.sent}/${s.max}`}
+                    {s.nextSendAt && (
+                      <span className="ml-2 text-emerald-700 dark:text-emerald-400">
+                        next {whenLabel(s.nextSendAt)}
+                      </span>
+                    )}
+                  </span>
+                </div>
+                <p className="max-w-[52ch] break-words text-gray-400 dark:text-gray-500">{s.note}</p>
               </div>
             ))}
             {/* The projection caveat travels with the projection, rather than
