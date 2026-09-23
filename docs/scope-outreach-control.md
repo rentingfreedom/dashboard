@@ -636,7 +636,24 @@ cost.
 | **Cancel showing…** | admin + user | Only when a future `scheduled` booking exists. 6c. |
 | **Restart** | admin only | As built. Can cause a send. |
 
-> **Per-sequence scopes are a TRAP, and the dropdown may want deleting.**
+> **KEPT as checkboxes, decided 2026-09-23.** Nicole has real uses: stop the ID
+> nudges when she has validated an ID herself, stop the booking nudges when she
+> has scheduled someone by hand, stop the review messages. **Anything already
+> completed is greyed out and unselectable** — the dialog already knows which
+> sequences are live for that lead, so this is free. A multi-select writes one
+> suppression row per checked scope.
+>
+> **Two of those three examples have a BETTER action than Stop, and the third
+> is not expressible:**
+>
+> | Case | Reality |
+> |---|---|
+> | Manually validated ID → stop ID nudges | Silences the nudges and leaves them **with no booking link** — "verify into silence" in a new costume. The right action is 6d: waive *and* release the link. Offer it as **"Mark ID verified manually"**. |
+> | Manually scheduled → stop booking nudges | Solved for free by 6e: a **real** Cal.com booking is seen by `hasBooked()` and the nudges stop by themselves. |
+> | Stop just the review messages | **Not expressible.** `cal_reminders` is one scope covering pre-visit reminders (24h/2h/reconfirm) **and** every post-visit follow-up. Stopping it also stops the reminders that get someone to the door. Splitting it into `cal_reminders_previsit` / `cal_reminders_postvisit` is an n8n change to `Find Due Notifications`, where the scope names are matched. **Open.** |
+>
+> The original trap still stands and is why the narrow options need their
+> "this will continue" list:
 > "ID verification only" is close to meaningless: `Check Guards` already
 > refuses anyone holding a verification row (`already_sent`), so for a lead
 > mid-ladder it stops something that was never going to happen — while
@@ -850,21 +867,41 @@ Preconditions, all checkable from data already on the page:
 The n8n guards (trash tags, stage, phone) re-apply at send time as always, so
 this can only ever schedule a nudge, never force one.
 
-> **This is the argument for `rebook_anchor_at` after all, and it postdates the
-> decision to re-anchor.** Re-anchoring `link_sent_at` is defensible for a
-> one-off. A button Nicole can press repeatedly moves that timestamp **every
-> time** — and it is the funnel's "when did we send their link". After two or
-> three restarts the original date is gone and time-to-book is measured from
-> the most recent restart. A separate column costs one `appendDimension` and
-> one n8n change to prefer it. **Raised with the client 2026-09-23; decision
-> pending.**
+> **CORRECTION 2026-09-23 — re-anchoring does NOT corrupt the funnel, and the
+> separate column is the RISKIER option.** This was argued the wrong way round
+> for one turn. `funnel.ts` declares `link_sent_at` in its row type and **never
+> computes with it** (one occurrence, the declaration). Meanwhile `in-flight.ts`
+> **does** read it, in three places, for the next-send projection — so
+> re-anchoring keeps that projection correct for free, while a separate
+> `rebook_anchor_at` must be taught to every one of those readers or the page
+> silently shows wrong next-send dates.
+>
+> **Settled shape: re-anchor `link_sent_at`, and add a write-once
+> `original_link_sent_at` that NOTHING reads.** History is preserved, no n8n
+> change is needed, and a column no logic consults cannot break anything by
+> construction.
+>
+> Had `rebook_anchor_at` been chosen, the full account is: `Find Due Nudges`
+> (n8n), `in-flight.ts` ×3, `inquiries-setup.mjs`,
+> `cal-booking-reminders-verify.mjs` (115 assertions) and the snapshot payload.
+>
+> **Column cost, since it was asked: adding a column costs ZERO extra Sheets
+> requests.** The quota is requests per minute, not cells — a tab is read whole
+> in one request either way. The only one-off is an `appendDimension` if the
+> grid is full, which these tabs always are.
+
+> **`inquiries-setup.mjs` is already stale** — it declares 14 columns while
+> later scripts added `booking_reminder_count`, `booking_reminder_last_at`,
+> `booked_at` and `verification_required`. Repair it whenever it is next
+> touched, or a "repair" run rebuilds the tab without them.
 
 ### Open after this round
 
 | Question | Why it matters |
 |---|---|
-| Does Nicole use the per-sequence scopes (the "What to stop" dropdown)? | If not, delete it and remove the trap. Asked 2026-09-23; the term confused, re-asked in plainer words. |
-| Re-anchor `link_sent_at`, or add `rebook_anchor_at` after all? | 6f makes the restart repeatable, so re-anchoring now erases the funnel's link date a little more each press. |
+| Split `cal_reminders` into pre-visit and post-visit scopes? | Nicole wants to stop the review messages without stopping the reminders that get someone to the door. Not expressible today. |
+| ~~Does Nicole use the per-sequence scopes?~~ | **ANSWERED 2026-09-23: yes** — kept, as checkboxes with completed steps greyed out. |
+| ~~Re-anchor `link_sent_at`, or add `rebook_anchor_at`?~~ | **ANSWERED 2026-09-23: re-anchor**, plus a write-once `original_link_sent_at`. The premise for the separate column was wrong. |
 | ~~Which tags does the Stop disposition offer?~~ | **ANSWERED 2026-09-23: all three.** |
 | ~~Should a manual booking create a real Cal.com booking?~~ | **ANSWERED 2026-09-23: yes.** See 6e. |
 
