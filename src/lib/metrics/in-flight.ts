@@ -267,6 +267,16 @@ export interface LadderCell {
   glyph: string;
   /** Hover text. The project has no Tooltip component; cells use `title=`. */
   title: string;
+  /**
+   * How many nudges have been sent, on the two nudge cells only.
+   *
+   * Carried explicitly because the chart needs the number and `ord` cannot
+   * supply it: a completed ladder deliberately sorts to -1, and a cell that has
+   * sent none is 0 whether we owe the first nudge or the lead never needed one.
+   * The alternative — parsing it back out of `glyph` — would make a
+   * presentation string load-bearing.
+   */
+  count?: number;
 }
 
 /** The ladder columns, in the order they are walked. */
@@ -341,12 +351,14 @@ function nudgeCell(count: number, passed: boolean, max: number, what: string): L
           ord: -1,
           glyph: STATE_GLYPH.not_due,
           title: `No nudge needed — ${what.toLowerCase()} from the first message.`,
+          count,
         }
       : {
           state: "complete",
           ord: -1,
           glyph: `${count}${STATE_GLYPH.complete}`,
           title: `${what} after ${count} nudge${count === 1 ? "" : "s"}.`,
+          count,
         };
   }
   // Zero sent means the ladder has not started, so WE still owe the first
@@ -358,6 +370,7 @@ function nudgeCell(count: number, passed: boolean, max: number, what: string): L
       ord: 0,
       glyph: STATE_GLYPH.waiting,
       title: `No nudge sent yet; up to ${max} to come.`,
+      count,
     };
   }
   return {
@@ -365,6 +378,7 @@ function nudgeCell(count: number, passed: boolean, max: number, what: string): L
     ord: count,
     glyph: `${count}/${max}${STATE_GLYPH.sent}`,
     title: `Nudge ${count} of ${max} sent. Waiting on the lead.`,
+    count,
   };
 }
 
@@ -385,7 +399,16 @@ function postVisitCell(day: number | undefined, waiting: boolean, title: string)
       ? { state: "waiting", ord: -1, glyph: STATE_GLYPH.waiting, title }
       : { state: "not_due", ord: -2, glyph: STATE_GLYPH.not_due, title };
   }
-  return { state: "sent", ord: day, glyph: `d${day}`, title };
+  // The 🟨 is carried here for the same reason the nudge cells carry it: the
+  // state IS `sent`, and a cell that reads `d3` alone is the only `sent` cell
+  // in the table without the glyph that says so — which reads as a different
+  // kind of thing rather than the same thing with a day attached.
+  //
+  // It deliberately does NOT become ✅ on the last follow-up. Which day is
+  // last depends on the event category, and that rule table lives in the cron
+  // — copying it here to decide "the chain is finished" is exactly the second
+  // copy this module refuses to make elsewhere.
+  return { state: "sent", ord: day, glyph: `d${day}${STATE_GLYPH.sent}`, title };
 }
 
 export interface InFlightLead {
@@ -425,8 +448,167 @@ export interface InFlightLead {
 export interface InFlightResult {
   leads: InFlightLead[];
   counts: { active: number; suppressed: number; total: number };
+  /**
+   * The live nudge caps, so the chart can draw exactly the runway the
+   * workflows are configured for instead of a hardcoded four.
+   */
+  nudgeMax: { identity: number; booking: number };
   /** Things the operator should know are approximate or missing. */
   dataQuality: string[];
+}
+
+// ── pipeline position (the chart's single derivation) ─────────────────────
+
+/**
+ * The four labelled zones of the client's sketch (`docs/outreach-chart-sketch.jpg`).
+ */
+export type PipelineZoneKey = "identity" | "booking" | "walkthrough" | "post";
+
+export const PIPELINE_ZONES: { key: PipelineZoneKey; label: string }[] = [
+  { key: "identity", label: "ID verification" },
+  { key: "booking", label: "Schedule showing" },
+  { key: "walkthrough", label: "Walkthrough" },
+  { key: "post", label: "Post-showing" },
+];
+
+export interface PipelineBar {
+  key: string;
+  /** The full name, used in the tooltip and by the filter caption. */
+  label: string;
+  /**
+   * The axis label.
+   *
+   * Twelve bars across a 720-unit plot leave ~60 units each, and "Showing link
+   * sent" is wider than that at any readable size — so the axis carries the
+   * short form and the ZONE heading above supplies the rest ("Schedule showing
+   * · Sent"). Rotating or truncating instead is the most common way a small
+   * chart becomes unreadable.
+   */
+  short: string;
+  zone: PipelineZoneKey;
+  /** Hover text, and the reason a reader should trust the bucket. */
+  title: string;
+}
+
+/**
+ * The bars, built from the LIVE nudge caps rather than a hardcoded four.
+ *
+ * `identity_reminder_max` and `cal_booking_reminder_max` are Settings values the
+ * workflows read at send time, and the table's `n/max` cells already follow
+ * them. A chart with four nudge bars against a cadence of six would silently
+ * have nowhere to put the fifth and sixth.
+ */
+export function pipelineBars(nudgeMax: { identity: number; booking: number }): PipelineBar[] {
+  const bars: PipelineBar[] = [
+    {
+      key: "id_sent",
+      label: "ID sent",
+      short: "Sent",
+      zone: "identity",
+      title: "Asked to verify their ID. No reminder has gone out yet.",
+    },
+  ];
+  for (let i = 1; i <= nudgeMax.identity; i++) {
+    bars.push({
+      key: `id_nudge_${i}`,
+      label: `ID nudge ${i}`,
+      short: `${i}`,
+      zone: "identity",
+      title: `Sent ${i} ID verification reminder${i === 1 ? "" : "s"}; still not verified.`,
+    });
+  }
+  bars.push({
+    key: "link_sent",
+    label: "Showing link sent",
+    short: "Sent",
+    zone: "booking",
+    title: "Holds a booking link. No reminder has gone out yet.",
+  });
+  for (let i = 1; i <= nudgeMax.booking; i++) {
+    bars.push({
+      key: `link_nudge_${i}`,
+      label: `Booking nudge ${i}`,
+      short: `${i}`,
+      zone: "booking",
+      title: `Sent ${i} booking reminder${i === 1 ? "" : "s"}; still has not booked.`,
+    });
+  }
+  bars.push({
+    key: "awaiting_showing",
+    label: "Waiting on showing",
+    short: "Waiting",
+    zone: "walkthrough",
+    title: "Booked. Pre-visit reminders and the door code sit here.",
+  });
+  bars.push({
+    key: "post_showing",
+    label: "Post-showing",
+    short: "Follow-ups",
+    zone: "post",
+    title: "The visit has happened; follow-ups are the remaining sequence.",
+  });
+  return bars;
+}
+
+/**
+ * The ladder columns left to right.
+ *
+ * This is the one place `LADDER_STAGES` may be flattened. The warning on that
+ * constant is about the dash pass, which must stop at a STAGE boundary; here
+ * the grouping genuinely carries no information, because the walk runs right to
+ * left and stops at the first cell that is not a dash — which the dash pass has
+ * already guaranteed is the furthest point the lead reached.
+ */
+const LADDER_ORDER: (keyof LeadLadder)[] = LADDER_STAGES.flat();
+
+/**
+ * Which bar a lead stands in — **the rightmost non-`-` ladder cell**.
+ *
+ * Deliberately derived from the ladder the table renders rather than
+ * recomputed from the raw rows. Two derivations of "where is this lead" would
+ * drift, and a chart that disagrees with the table beneath it is worse than no
+ * chart: both look authoritative and nothing says which to believe.
+ *
+ * Returns `null` for a lead whose every cell is a dash — nothing has been sent
+ * to them at all. They are counted nowhere, so the caller must report them
+ * separately rather than let the bars quietly sum to less than the table.
+ */
+export function pipelinePositionOf(
+  ladder: LeadLadder,
+  nudgeMax: { identity: number; booking: number }
+): string | null {
+  for (let i = LADDER_ORDER.length - 1; i >= 0; i--) {
+    const key = LADDER_ORDER[i];
+    const c = ladder[key];
+    if (c.state === "not_due") continue;
+
+    switch (key) {
+      case "identitySent":
+        return "id_sent";
+      case "bookingLink":
+        return "link_sent";
+      case "preVisit":
+      case "doorCode":
+        return "awaiting_showing";
+      case "postVisit":
+        return "post_showing";
+      case "identityNudge":
+      case "bookingNudge": {
+        const isIdentity = key === "identityNudge";
+        const prefix = isIdentity ? "id" : "link";
+        const max = isIdentity ? nudgeMax.identity : nudgeMax.booking;
+        const n = c.count ?? 0;
+        // Zero nudges sent is not "nudge 1" — it is the lead cell's bar. The
+        // hourglass here means we OWE the first reminder, so nothing about
+        // that nudge ladder has happened yet.
+        if (n < 1) return isIdentity ? "id_sent" : "link_sent";
+        // A cadence lowered in Settings after a lead was already past the new
+        // cap would otherwise land them on a bar that no longer exists.
+        return `${prefix}_nudge_${Math.min(n, Math.max(max, 1))}`;
+      }
+    }
+  }
+  return null;
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────
@@ -1160,6 +1342,10 @@ export function computeInFlight(input: InFlightInput): InFlightResult {
       active: leads.filter((l) => l.active).length,
       suppressed: leads.filter((l) => l.suppression.suppressed).length,
       total: leads.length,
+    },
+    nudgeMax: {
+      identity: s.identityReminderMax,
+      booking: s.bookingReminderMax,
     },
     dataQuality,
   };

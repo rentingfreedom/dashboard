@@ -31,7 +31,7 @@ export const STAGE_COLORS = ["var(--series-1)", "var(--series-2)", "var(--series
  *
  * `w` is the plot's rendered pixel width, measured at hover time by the caller.
  */
-function Tip({ x, y, w, children }: { x: number; y: number; w: number; children: React.ReactNode }) {
+export function Tip({ x, y, w, children }: { x: number; y: number; w: number; children: React.ReactNode }) {
   const FLIP_BELOW_ABOVE_PX = 48;   // above this the tooltip would leave the card
   const EDGE_PX = 90;               // roughly half a tooltip
 

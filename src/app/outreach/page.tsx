@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
-import { RefreshCw, Info } from "lucide-react";
+import { RefreshCw, Info, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -12,15 +12,27 @@ import { useRole } from "@/lib/auth/use-role";
 import { StopOutreachDialog, type StopTarget } from "@/components/outreach/stop-outreach-dialog";
 import { RestartOutreachDialog, type RestartTarget } from "@/components/outreach/restart-outreach-dialog";
 import { OutreachTable } from "@/components/outreach/outreach-table";
-import type { InFlightLead, InFlightResult } from "@/lib/metrics/in-flight";
+import { OutreachChart } from "@/components/outreach/outreach-chart";
+import {
+  PIPELINE_ZONES,
+  pipelineBars,
+  pipelinePositionOf,
+  type InFlightLead,
+  type InFlightResult,
+} from "@/lib/metrics/in-flight";
 
 type Filter = "active" | "suppressed" | "all";
+type Position = { kind: "bar" | "zone"; key: string } | null;
 
 export default function OutreachPage() {
   const [result, setResult] = useState<InFlightResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<Filter>("active");
   const [inScopeOnly, setInScopeOnly] = useState(true);
+  const [position, setPosition] = useState<Position>(null);
+  // Deliberately not persisted: the page is prerendered, so reading
+  // localStorage for the initial value would mismatch on hydration.
+  const [chartOpen, setChartOpen] = useState(true);
   const [stopTarget, setStopTarget] = useState<StopTarget | null>(null);
   const [restartTarget, setRestartTarget] = useState<RestartTarget | null>(null);
   const { isAdmin } = useRole();
@@ -44,13 +56,25 @@ export default function OutreachPage() {
   }, [load]);
 
   /**
+   * The nudge caps come from the same Settings values the workflows read, so
+   * the chart draws exactly the runway that is configured rather than a
+   * hardcoded four. They also feed the position derivation, which has to agree
+   * with the `n/max` the table already renders.
+   */
+  const nudgeMax = useMemo(
+    () => result?.nudgeMax ?? { identity: 4, booking: 4 },
+    [result]
+  );
+  const bars = useMemo(() => pipelineBars(nudgeMax), [nudgeMax]);
+
+  /**
    * The active/suppressed/all filter stays here because it drives the counts on
    * the buttons. Text search and every column sort live inside the table, the
    * same split `properties-table.tsx` uses.
    *
    * The default order is newest inquiry first; any column header overrides it.
    */
-  const rows = useMemo(() => {
+  const pool = useMemo(() => {
     if (!result) return [];
     return result.leads
       // The FUB stage gate. "unknown" is kept deliberately: it means the
@@ -62,6 +86,28 @@ export default function OutreachPage() {
       )
       .sort((a, b) => (b.inquiredAt || "").localeCompare(a.inquiredAt || ""));
   }, [result, filter, inScopeOnly]);
+
+  /**
+   * The chart draws `pool`; the table draws `pool` narrowed by the bar or zone
+   * the operator clicked. Feeding the chart the narrowed list would zero every
+   * other bar the moment one was selected, leaving no way back.
+   */
+  const rows = useMemo(() => {
+    if (!position) return pool;
+    return pool.filter((l) => {
+      const pos = pipelinePositionOf(l.ladder, nudgeMax);
+      if (pos === null) return false;
+      if (position.kind === "bar") return pos === position.key;
+      return bars.find((b) => b.key === pos)?.zone === position.key;
+    });
+  }, [pool, position, nudgeMax, bars]);
+
+  const positionLabel = useMemo(() => {
+    if (!position) return "";
+    return position.kind === "bar"
+      ? bars.find((b) => b.key === position.key)?.label ?? position.key
+      : PIPELINE_ZONES.find((z) => z.key === position.key)?.label ?? position.key;
+  }, [position, bars]);
 
   /**
    * Counts recomputed against the same population the table shows.
@@ -143,6 +189,55 @@ export default function OutreachPage() {
         </div>
       ) : null}
 
+      {result ? (
+        <Card>
+          <CardContent className="space-y-2">
+            <button
+              type="button"
+              onClick={() => setChartOpen(!chartOpen)}
+              aria-expanded={chartOpen}
+              className="flex w-full items-center gap-1.5 text-left text-sm font-medium text-gray-700 hover:text-gray-900 dark:text-gray-300 dark:hover:text-gray-100"
+            >
+              <ChevronDown
+                className={cn("h-4 w-4 transition-transform", !chartOpen && "-rotate-90")}
+                aria-hidden
+              />
+              Pipeline
+              {/* Collapsed, the chart is out of the way but the filter it set
+                  is still in force — so the heading has to keep saying so, or
+                  the table looks short for no visible reason. */}
+              {!chartOpen && position ? (
+                <span className="font-normal text-gray-500 dark:text-gray-400">
+                  · filtered to {positionLabel}
+                </span>
+              ) : null}
+            </button>
+            {chartOpen && (
+              <OutreachChart
+                leads={pool}
+                nudgeMax={nudgeMax}
+                selected={position}
+                onSelect={setPosition}
+              />
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {/* A filter that is invisible is a filter that gets blamed on the data.
+          The caption states the narrowing in words and carries its own way
+          out, rather than relying on the reader noticing which bar is lit. */}
+      {position && (
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-gray-600 dark:text-gray-300">
+            Showing <span className="font-medium">{positionLabel}</span> — {rows.length} of {pool.length}
+          </span>
+          <Button size="sm" variant="ghost" onClick={() => setPosition(null)}>
+            Clear
+          </Button>
+        </div>
+      )}
+
       {loading && !result ? (
         <div className="space-y-2">
           {[0, 1, 2, 3].map((i) => (
@@ -152,7 +247,9 @@ export default function OutreachPage() {
       ) : rows.length === 0 ? (
         <Card>
           <CardContent className="py-10 text-center text-sm text-gray-500">
-            {filter === "active"
+            {position
+              ? `Nobody is at ${positionLabel} right now.`
+              : filter === "active"
               ? "Nobody is currently inside a messaging sequence."
               : filter === "suppressed"
               ? "Nobody has had their outreach stopped."

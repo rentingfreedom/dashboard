@@ -154,6 +154,25 @@
   --viz-grid: #e5e7eb;
   --viz-axis: #9ca3af;
   --viz-surface: #ffffff;
+  /* The outreach pipeline chart colours by ZONE — the four stages of the
+     sketch — at the client's request (2026-09-22), with a tinted band behind
+     each so the groups read without counting dividers.
+
+     Deliberately its own token set rather than --series-1..4, which mean the
+     four FUNNEL stages on another page: same values today, free to diverge,
+     and neither page can silently restyle the other.
+
+     Validated against both surfaces. Light mode WARNs on contrast for the
+     green and amber, which obligates relief — every bar carries its value as
+     a direct label and the table below is the table view. */
+  --zone-1: #2a78d6;
+  --zone-2: #eb6834;
+  --zone-3: #1baf7a;
+  --zone-4: #eda100;
+  --zone-bg-alpha: 8%;
+  /* The muted step for a bar outside the current selection: still its own
+     hue, so a filtered chart keeps its shape and its identities. */
+  --zone-muted-alpha: 28%;
 }
 .dark .viz-root {
   --series-1: #3987e5;
@@ -163,4 +182,11 @@
   --viz-grid: #1f2937;
   --viz-axis: #6b7280;
   --viz-surface: #111827;
+  /* Re-stepped for the dark surface, not flipped. */
+  --zone-1: #3987e5;
+  --zone-2: #d95926;
+  --zone-3: #199e70;
+  --zone-4: #c98500;
+  --zone-bg-alpha: 14%;
+  --zone-muted-alpha: 32%;
 }
