@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { MoreHorizontal, UserCheck, UserX, Lock, Unlock, PowerOff, Pencil, Trash2, RotateCcw } from "lucide-react";
+import { MoreHorizontal, UserCheck, UserX, Lock, Unlock, PowerOff, Pencil, Trash2, RotateCcw, Eye, EyeOff } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+import { fetchJson } from "@/lib/fetch-json";
 import type { Property, Lockbox } from "@/lib/types";
 import { DeactivateDialog } from "./deactivate-dialog";
 import { DeleteDialog } from "./delete-dialog";
@@ -87,6 +88,42 @@ export function PropertyActions({ property, availableLockboxes, onRefresh, onEdi
     }
   }
 
+  /**
+   * "Show anyway" (Item 07, 3a) — may this home be shown while it is occupied?
+   *
+   * Deliberately NOT a status override: `status` stays `occupied`, so the
+   * DoorLoop reconciliation and the funnel keep reporting the truth. Occupancy
+   * and showability are different facts that merely correlate.
+   */
+  async function handleToggleShowWhileOccupied() {
+    const next = !property.show_while_occupied;
+    setLoading(true);
+    try {
+      // fetchJson, not a raw fetch + res.json(): an HTML response (an expired
+      // Clerk session, a platform error) otherwise surfaces as
+      // `Unexpected token '<'`, which hides the status code — the single most
+      // useful fact about the failure. That is exactly what this action showed
+      // on 2026-09-22 and it made the cause undiagnosable from the screenshot.
+      await fetchJson(
+        `/api/properties/${encodeURIComponent(property.property_key)}/show-while-occupied`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            show: next,
+            expected: { show_while_occupied: property.show_while_occupied },
+          }),
+        }
+      );
+      toast.success(next ? "Showings allowed while occupied" : "No longer shown while occupied");
+      onRefresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleUnassignLockbox() {
     setLoading(true);
     try {
@@ -140,6 +177,27 @@ export function PropertyActions({ property, availableLockboxes, onRefresh, onEdi
                   Clear override
                 </DropdownMenuItem>
               )}
+            </>
+          )}
+          {/* Show anyway — only meaningful on an occupied home, and offered to
+              standard users as well as admins, because unlike a status override
+              it cannot contradict DoorLoop. */}
+          {property.status === "occupied" && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handleToggleShowWhileOccupied}>
+                {property.show_while_occupied ? (
+                  <>
+                    <EyeOff className="h-4 w-4 mr-2 text-gray-400" />
+                    Stop showing while occupied
+                  </>
+                ) : (
+                  <>
+                    <Eye className="h-4 w-4 mr-2 text-sky-500" />
+                    Show anyway while occupied
+                  </>
+                )}
+              </DropdownMenuItem>
             </>
           )}
           <DropdownMenuSeparator />

@@ -61,6 +61,16 @@ export interface Property {
   status_override_by: string;
   status_override_at: string;
 
+  // "Show anyway" (Item 07, 3a): this home may be shown even though it is
+  // occupied. Deliberately NOT implemented as a status_override — forcing a
+  // leased home to read "vacant" would misreport it to the DoorLoop
+  // reconciliation and to the funnel. Occupancy and showability are different
+  // facts that merely correlate. DoorLoop has no opinion about this column and
+  // the hourly sync never touches it.
+  show_while_occupied: boolean;
+  show_while_occupied_by: string;
+  show_while_occupied_at: string;
+
   // Google Sheets row metadata (not written back)
   _rowIndex?: number;           // 1-based row index in the sheet
 }

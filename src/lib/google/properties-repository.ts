@@ -35,6 +35,12 @@ const SAFE_COLUMNS = new Set([
   "status_override",
   "status_override_by",
   "status_override_at",
+  // "Show anyway" (Item 07, 3a). Ours to write; DoorLoop has no opinion about
+  // whether an occupied home may still be shown, so the hourly sync never
+  // touches these and they are safe here alongside the override trio.
+  "show_while_occupied",
+  "show_while_occupied_by",
+  "show_while_occupied_at",
 ]);
 
 /** Mirror of the sheet spill formula — used locally for audit/webhook, never written */
@@ -78,6 +84,11 @@ function parseProperty(raw: Record<string, string>): Property {
     status_override: (raw.status_override as PropertyStatus) ?? "",
     status_override_by: raw.status_override_by ?? "",
     status_override_at: raw.status_override_at ?? "",
+    // Gotcha 14: Sheets coerces "TRUE" to a boolean on write and hands it back
+    // as the string "TRUE", so normalise rather than comparing loosely.
+    show_while_occupied: (raw.show_while_occupied ?? "").trim().toUpperCase() === "TRUE",
+    show_while_occupied_by: raw.show_while_occupied_by ?? "",
+    show_while_occupied_at: raw.show_while_occupied_at ?? "",
     _rowIndex: raw._rowIndex ? parseInt(raw._rowIndex) : undefined,
   };
 }
@@ -443,6 +454,64 @@ export async function deactivateProperty(
     entity_id: propertyKey,
     property_key: propertyKey,
     before_json: JSON.stringify(parseProperty(existing)),
+    after_json: JSON.stringify(updates),
+    source: "dashboard",
+    notes: "",
+  });
+
+  return parseProperty({ ...existing, ...updates });
+}
+
+/**
+ * Set or clear "show anyway" — may this home be shown while it is occupied?
+ *
+ * Item 07, 3a. Deliberately NOT implemented through `status_override`: forcing a
+ * leased home to read "vacant" would misreport it to the DoorLoop reconciliation
+ * and to the funnel. Occupancy and showability are different facts that merely
+ * correlate, so this is its own column and `status` is left entirely alone.
+ *
+ * DoorLoop has no opinion about showability, so the hourly sync never touches
+ * these columns and there is no override bookkeeping to do.
+ */
+export async function setShowWhileOccupied(
+  propertyKey: string,
+  show: boolean,
+  actor: string,
+  expected?: Partial<Property>
+): Promise<Property> {
+  const { headers, rawObjects } = await readAll();
+
+  if (!headers.includes("show_while_occupied")) {
+    throw new Error(
+      "Properties tab has no show_while_occupied column — run scripts/show-while-occupied-setup.mjs --apply"
+    );
+  }
+
+  const rawIdx = rawObjects.findIndex((o) => o.property_key === propertyKey);
+  if (rawIdx === -1) throw new Error(`Property "${propertyKey}" not found.`);
+
+  const existing = rawObjects[rawIdx];
+  const before = parseProperty(existing);
+  checkConflicts(before, expected);
+  const rowIndex = parseInt(existing._rowIndex!);
+
+  const now = new Date().toISOString();
+  // Clearing wipes the attribution too, so a stale "set by X on Y" can never
+  // linger next to a flag that is now off.
+  const updates: Record<string, string> = show
+    ? { show_while_occupied: "TRUE", show_while_occupied_by: actor, show_while_occupied_at: now }
+    : { show_while_occupied: "FALSE", show_while_occupied_by: "", show_while_occupied_at: "" };
+
+  await updateSpecificColumns(TAB, rowIndex, updates, headers);
+
+  await writeAuditLog({
+    timestamp: now,
+    actor,
+    action: show ? "property.show_while_occupied_set" : "property.show_while_occupied_cleared",
+    entity_type: "property",
+    entity_id: propertyKey,
+    property_key: propertyKey,
+    before_json: JSON.stringify({ show_while_occupied: before.show_while_occupied }),
     after_json: JSON.stringify(updates),
     source: "dashboard",
     notes: "",

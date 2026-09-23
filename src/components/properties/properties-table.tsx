@@ -11,7 +11,7 @@ import {
   type ColumnFiltersState,
 } from "@tanstack/react-table";
 import { useState, useMemo } from "react";
-import { ExternalLink, ArrowUpDown, Lock, Unlock, Copy, Check, X, Flag, RotateCcw } from "lucide-react";
+import { ExternalLink, ArrowUpDown, Lock, Unlock, Copy, Check, X, Flag, RotateCcw, Eye } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -187,6 +187,26 @@ function StatusCell({
         >
           <RotateCcw className="h-3 w-3" />
         </button>
+      )}
+
+      {/* Item 07, 3a: showable despite being occupied. A separate fact from
+          `status`, so it reads as its own pill rather than distorting the
+          status one. Native title= — this project has no Tooltip component,
+          and the override pill above uses the same approach. */}
+      {property.show_while_occupied && s === "occupied" && (
+        <span
+          title={
+            `Shown while occupied${property.show_while_occupied_by ? ` — set by ${property.show_while_occupied_by}` : ""}` +
+            (property.show_while_occupied_at
+              ? ` on ${new Date(property.show_while_occupied_at).toLocaleString()}`
+              : "") +
+            ". Occupancy is unchanged; only showability."
+          }
+          className="inline-flex items-center gap-0.5 rounded-full border border-sky-200 bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700"
+        >
+          <Eye className="h-2.5 w-2.5" />
+          Showing
+        </span>
       )}
 
       {isSynced && !isOverridden && (
