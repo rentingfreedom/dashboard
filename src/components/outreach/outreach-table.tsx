@@ -12,7 +12,24 @@ import {
   type Row,
 } from "@tanstack/react-table";
 import { useState, useMemo, Fragment } from "react";
-import { ArrowUpDown, Search, X, Ban, Play, BellOff, ChevronRight, ChevronDown } from "lucide-react";
+import {
+  ArrowUpDown,
+  Search,
+  X,
+  Ban,
+  Play,
+  BellOff,
+  PauseCircle,
+  MoreHorizontal,
+  ChevronRight,
+  ChevronDown,
+} from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Table,
   TableBody,
@@ -24,7 +41,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { InFlightLead, LadderCell, SequenceState } from "@/lib/metrics/in-flight";
+import type {
+  InFlightLead,
+  LadderCell,
+  SequenceState,
+  SuppressionState,
+} from "@/lib/metrics/in-flight";
+import type { StopMode } from "./stop-outreach-dialog";
 
 const col = createColumnHelper<InFlightLead>();
 
@@ -45,6 +68,26 @@ function whenLabel(v: string | null): string {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+/**
+ * A suppression with an end date is a PAUSE; one without is a STOP.
+ *
+ * They are the same row in the same tab, so nothing downstream distinguishes
+ * them — but an operator scanning the table needs to, because one of the two
+ * resolves itself and the other never will.
+ */
+function suppressionLabel(s: SuppressionState): { word: string; until: string } {
+  const exp = s.expiresAt.trim();
+  if (!exp) return { word: "stopped", until: "" };
+  const ms = new Date(exp).getTime();
+  // Unparseable reads as permanent, matching the n8n matcher and the module:
+  // "we cannot tell when this ends" must never render as a date.
+  if (!Number.isFinite(ms)) return { word: "stopped", until: "" };
+  return {
+    word: "paused",
+    until: new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+  };
 }
 
 /**
@@ -169,7 +212,18 @@ function ExpandedRow({ lead, columnCount }: { lead: InFlightLead; columnCount: n
                 <Line k="Stopped by" v={lead.suppression.setBy || "—"} />
                 <Line k="Reason" v={lead.suppression.reason || "—"} />
                 <Line k="Scopes" v={lead.suppression.scopes.join(", ") || "all"} />
-                <Line k="Expires" v={lead.suppression.expiresAt || "no end date"} />
+                {/* Formatted, not raw. A pause is stored as the end of the
+                    chosen LOCAL day, which is the next day in UTC — so the raw
+                    ISO string reads as a date one later than the one the
+                    operator picked. */}
+                <Line
+                  k="Expires"
+                  v={
+                    suppressionLabel(lead.suppression).until
+                      ? new Date(lead.suppression.expiresAt).toLocaleString()
+                      : "no end date"
+                  }
+                />
               </>
             )}
             <Line k="person_id" v={lead.personId || "—"} />
@@ -227,7 +281,7 @@ function Line({ k, v }: { k: string; v: string }) {
 export interface OutreachTableProps {
   leads: InFlightLead[];
   isAdmin: boolean;
-  onStop: (lead: InFlightLead) => void;
+  onStop: (lead: InFlightLead, mode: StopMode) => void;
   onRestart: (lead: InFlightLead) => void;
 }
 
@@ -277,14 +331,22 @@ export function OutreachTable({ leads, isAdmin, onStop, onRestart }: OutreachTab
                   // lucide v1 icons take no `title`; the project has no Tooltip
                   // component either, so the hover text goes on a wrapper.
                   <span
-                    aria-label="Outreach stopped"
+                    aria-label={`Outreach ${suppressionLabel(l.suppression).word}`}
                     title={
-                      `Outreach stopped${l.suppression.setBy ? ` by ${l.suppression.setBy}` : ""}` +
+                      `Outreach ${suppressionLabel(l.suppression).word}` +
+                      (suppressionLabel(l.suppression).until
+                        ? ` until ${suppressionLabel(l.suppression).until}`
+                        : "") +
+                      (l.suppression.setBy ? ` by ${l.suppression.setBy}` : "") +
                       (l.suppression.reason ? ` — ${l.suppression.reason}` : "") +
                       ` — scopes: ${l.suppression.scopes.join(", ") || "all"}`
                     }
                   >
-                    <BellOff className="h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400" />
+                    {suppressionLabel(l.suppression).word === "paused" ? (
+                      <PauseCircle className="h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400" />
+                    ) : (
+                      <BellOff className="h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400" />
+                    )}
                   </span>
                 )}
               </div>
@@ -370,22 +432,47 @@ export function OutreachTable({ leads, isAdmin, onStop, onRestart }: OutreachTab
         header: () => <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Actions</span>,
         cell: ({ row }) => {
           const l = row.original;
-          // Restarting can cause a send, so it is admin-only. Stopping is safe
-          // in every direction and is not.
-          return l.suppression.suppressed ? (
-            isAdmin ? (
+          const sup = suppressionLabel(l.suppression);
+
+          // Restarting can cause a send, so it is admin-only. Pausing and
+          // stopping are safe in every direction and are not.
+          //
+          // "Insert into a sequence" is deliberately ABSENT. It is a send
+          // button rather than the inverse of Stop, and it needs its own
+          // preview naming the exact first message plus its preconditions.
+          if (l.suppression.suppressed) {
+            return isAdmin ? (
               <Button size="sm" variant="outline" onClick={() => onRestart(l)} className="h-7 text-xs">
                 <Play className="h-3 w-3 mr-1" />
                 Restart
               </Button>
             ) : (
-              <span className="text-[11px] text-gray-400 dark:text-gray-500">stopped</span>
-            )
-          ) : (
-            <Button size="sm" variant="outline" onClick={() => onStop(l)} className="h-7 text-xs">
-              <Ban className="h-3 w-3 mr-1" />
-              Stop
-            </Button>
+              <span className="text-[11px] text-gray-400 dark:text-gray-500">
+                {sup.word}
+                {sup.until && ` to ${sup.until}`}
+              </span>
+            );
+          }
+
+          return (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                aria-label="Outreach actions"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuItem onClick={() => onStop(l, "pause")}>
+                  <PauseCircle className="h-4 w-4 mr-2 text-amber-500" />
+                  Pause outreach…
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onStop(l, "stop")}>
+                  <Ban className="h-4 w-4 mr-2 text-red-500" />
+                  Stop outreach…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           );
         },
       }),

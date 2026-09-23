@@ -85,7 +85,7 @@ export function RestartOutreachDialog({
         </AlertDialogHeader>
 
         <div className="space-y-3 text-sm">
-              <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+              <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
                 <div className="font-medium">This can result in messages being sent.</div>
                 <ul className="mt-1 space-y-0.5">
                   <li>· The stop on “{scope}” will be lifted.</li>
@@ -102,7 +102,7 @@ export function RestartOutreachDialog({
                 </ul>
               </div>
 
-              <p className="text-xs text-gray-600">
+              <p className="text-xs text-gray-600 dark:text-gray-400">
                 The trash tags, the stage gate and the phone check are all re-applied before
                 anything is actually sent, so a lead who should not be contacted still will not
                 be.

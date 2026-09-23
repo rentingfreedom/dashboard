@@ -9,7 +9,11 @@ import { toast } from "sonner";
 import { fetchJson } from "@/lib/fetch-json";
 import { cn } from "@/lib/utils";
 import { useRole } from "@/lib/auth/use-role";
-import { StopOutreachDialog, type StopTarget } from "@/components/outreach/stop-outreach-dialog";
+import {
+  StopOutreachDialog,
+  type StopTarget,
+  type StopMode,
+} from "@/components/outreach/stop-outreach-dialog";
 import { RestartOutreachDialog, type RestartTarget } from "@/components/outreach/restart-outreach-dialog";
 import { OutreachTable } from "@/components/outreach/outreach-table";
 import { OutreachChart } from "@/components/outreach/outreach-chart";
@@ -132,7 +136,7 @@ export default function OutreachPage() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold">Outreach in flight</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
             Every lead currently inside an automated messaging sequence.
           </p>
         </div>
@@ -179,7 +183,7 @@ export default function OutreachPage() {
           still be skipped. An operator reading this page as a promise would
           eventually be surprised by a message that never arrived. */}
       {result?.dataQuality.length ? (
-        <div className="flex gap-2 rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800">
+        <div className="flex gap-2 rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300">
           <Info className="h-4 w-4 shrink-0 mt-0.5" />
           <div className="space-y-1">
             {result.dataQuality.map((d, i) => (
@@ -246,7 +250,7 @@ export default function OutreachPage() {
         </div>
       ) : rows.length === 0 ? (
         <Card>
-          <CardContent className="py-10 text-center text-sm text-gray-500">
+          <CardContent className="py-10 text-center text-sm text-gray-500 dark:text-gray-400">
             {position
               ? `Nobody is at ${positionLabel} right now.`
               : filter === "active"
@@ -260,8 +264,9 @@ export default function OutreachPage() {
         <OutreachTable
           leads={rows}
           isAdmin={isAdmin}
-          onStop={(lead: InFlightLead) =>
+          onStop={(lead: InFlightLead, mode: StopMode) =>
             setStopTarget({
+              mode,
               personId: lead.personId,
               personName: lead.personName,
               phone: lead.phone,
