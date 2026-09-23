@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Building2, Lock, CalendarCheck, Activity, Settings, Sun, Moon, TrendingDown } from "lucide-react";
+import { Building2, Lock, CalendarCheck, Activity, Settings, Sun, Moon, TrendingDown, Send } from "lucide-react";
 import { useTheme } from "next-themes";
 import { UserButton } from "@clerk/nextjs";
 import { cn } from "@/lib/utils";
@@ -13,6 +13,7 @@ const navItems = [
   { href: "/lockboxes", label: "Lockboxes", icon: Lock },
   { href: "/showings", label: "Showings", icon: CalendarCheck },
   { href: "/funnel", label: "Lead funnel", icon: TrendingDown },
+  { href: "/outreach", label: "Outreach", icon: Send },
   { href: "/activity", label: "Activity", icon: Activity },
   { href: "/settings", label: "Settings", icon: Settings, adminOnly: true },
 ];
