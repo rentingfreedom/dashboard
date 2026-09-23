@@ -250,9 +250,26 @@ export async function restartBookingNudges(
   const { objects: propObjects } = rowsToObjects(propRows);
   const { objects: bookObjects } = rowsToObjects(bookRows);
 
-  if (!inqHeaders.includes("original_link_sent_at")) {
+  /**
+   * Every column this writes must EXIST, checked up front.
+   *
+   * `updateSpecificColumns` skips a column it cannot find **silently**, so a
+   * missing header would not fail — it would clear three of the four fields
+   * and leave the fourth, producing exactly the half-reset this function's
+   * header warns is a silent no-op. Better to refuse than to half-restart.
+   */
+  const REQUIRED = [
+    "booked_at",
+    "link_sent_at",
+    "booking_reminder_count",
+    "booking_reminder_last_at",
+    "original_link_sent_at",
+  ];
+  const missing = REQUIRED.filter((c) => !inqHeaders.includes(c));
+  if (missing.length) {
     throw new Error(
-      "Inquiries has no original_link_sent_at column — run scripts/inquiries-setup.mjs --apply"
+      `Inquiries is missing ${missing.join(", ")} — run scripts/inquiries-setup.mjs and ` +
+        "scripts/original-link-sent-at-setup.mjs --apply"
     );
   }
 

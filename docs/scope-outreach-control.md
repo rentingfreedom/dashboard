@@ -633,8 +633,41 @@ cost.
 |---|---|---|
 | **Pause outreach…** | admin + user | **BUILT 2026-09-23.** A suppression with `expires_at`. |
 | **Stop outreach…** | admin + user | **BUILT.** Gains the FUB disposition section, 6b. |
-| **Cancel showing…** | admin + user | Only when a future `scheduled` booking exists. 6c. |
+| **Cancel showing…** | admin + user | Only when a future `scheduled` booking exists. 6c. **NOT BUILT.** |
+| **Mark ID verified by hand…** | admin + user | **BUILT 2026-09-23.** 6d. Shown only to a lead with no delivered link. |
+| **Restart booking nudges…** | admin only | **BUILT 2026-09-23.** 6f. Shown only to a lead who holds a link. |
 | **Restart** | admin only | As built. Can cause a send. |
+
+### Build status 2026-09-23
+
+| Item | State |
+|---|---|
+| Pause, scope reorder, dark mode | **BUILT** — `4755d3a` |
+| 6d mark verified, 6f restart nudges | **BUILT** — `0dec4ff` |
+| 6b Stop + FUB disposition | **BUILT** — `6806e84` |
+| 6c Cancel showing | **NOT BUILT** — its rebook half needs an n8n patch |
+| 6e Manual booking | **NOT BUILT** — Cal.com creation is unproven |
+
+**Nothing is deployed and nothing has run.** These are dashboard changes; the
+client triggers deploys from vercel.com.
+
+**Three prerequisites before any of it works in production:**
+
+1. **`original_link_sent_at` must be added to the Inquiries tab.**
+   `node scripts/original-link-sent-at-setup.mjs --apply`. Dry-run 2026-09-23:
+   the grid is **exactly full at 17/17**, so the script issues an
+   `appendDimension` first. `restartBookingNudges` refuses to run without it —
+   deliberately, because `updateSpecificColumns` skips a missing column
+   **silently**, which would half-reset the row.
+2. **`FUB_API_KEY` must be set in the Vercel project.** 6b is the first FUB
+   write this app has ever made, and the read path has never deployed either.
+   Without it the disposition half fails and reports; the stop still happens.
+3. **The client must deploy.**
+
+> **6c is blocked on n8n, which is why it is not built.** The rebook line is
+> appended to the cancellation message, and those messages are built in n8n —
+> so the toggle has to reach a build node, which means a patched workflow. That
+> is a live production change and was deliberately not made unattended.
 
 > **KEPT as checkboxes, decided 2026-09-23.** Nicole has real uses: stop the ID
 > nudges when she has validated an ID herself, stop the booking nudges when she
