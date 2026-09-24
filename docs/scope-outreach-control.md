@@ -497,11 +497,19 @@ zones:
 - Load the `dataviz` skill before writing any of it, and note the page is used in
   **dark mode** — see 4d.
 
-### 4c. A visual representation of the cycles
+### 4c. A visual representation of the cycles — **BUILT 2026-09-24**
 
 The client wants the sequence diagram from the Justin write-up on the page —
 the loops drawn, not just counted. Source: the artifact *Stopping Automated
 Messages*.
+
+`src/components/outreach/message-loops-diagram.tsx`, static (it explains the
+mechanism every column and bar on the page is built from; it does not read
+live data). Redrawn from the artifact's SVG rather than re-described, reusing
+the chart's own `--zone-1/2/3` and `--zone-bg-alpha` tokens so the two figures
+share one palette. Wired into the Pipeline card at the agreed layout —
+`lg:grid-cols-5`, chart on 3, diagram on 2 — and confirmed legible in both
+light and dark mode against the real running page.
 
 ### 4d. Colours — dark mode is the primary environment
 
