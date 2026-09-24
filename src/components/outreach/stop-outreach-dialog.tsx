@@ -46,7 +46,12 @@ export interface StopTarget {
  * which is the harmless direction for a menu to be wrong in.
  */
 const SCOPES = [
-  { value: "all", label: "All outreach" },
+  /**
+   * "All outreach" was a contradiction: a cancellation notice and a door code
+   * still go out, so the label promised more silence than the system delivers.
+   * What Stop actually halts is the SCHEDULING and nurture sequences.
+   */
+  { value: "all", label: "All scheduling messages" },
   { value: "identity", label: "ID verification only" },
   { value: "identity_reminders", label: "ID verification reminders only" },
   { value: "cal_link", label: "Booking link only" },

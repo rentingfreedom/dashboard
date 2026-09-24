@@ -645,7 +645,8 @@ cost.
 | Pause, scope reorder, dark mode | **BUILT** — `4755d3a` |
 | 6d mark verified, 6f restart nudges | **BUILT** — `0dec4ff` |
 | 6b Stop + FUB disposition | **BUILT** — `6806e84` |
-| 6c Cancel showing | **NOT BUILT** — its rebook half needs an n8n patch |
+| 6c Cancel self-guided tour | **BUILT 2026-09-23** — no n8n patch needed; the rebook wording rides `cancellationReason` |
+| 6g Stop redesign | scope label **APPLIED**; the tour toggle and second confirm remain |
 | 6e Manual booking | **NOT BUILT** — Cal.com creation is unproven |
 
 **Nothing is deployed and nothing has run.** These are dashboard changes; the
@@ -664,10 +665,11 @@ client triggers deploys from vercel.com.
    Without it the disposition half fails and reports; the stop still happens.
 3. **The client must deploy.**
 
-> **6c is blocked on n8n, which is why it is not built.** The rebook line is
-> appended to the cancellation message, and those messages are built in n8n —
-> so the toggle has to reach a build node, which means a patched workflow. That
-> is a live production change and was deliberately not made unattended.
+> **6c turned out NOT to need an n8n patch**, which was the reason it was
+> deferred. Routing the rebook wording through `cancellationReason` — already
+> carried by the cancel API and the webhook payload — removed the need for a
+> build-node change entirely. A second prerequisite went with it: `CAL_API_KEY`
+> in Vercel is now required.
 
 > **KEPT as checkboxes, decided 2026-09-23.** Nicole has real uses: stop the ID
 > nudges when she has validated an ID herself, stop the booking nudges when she
@@ -927,6 +929,96 @@ this can only ever schedule a nudge, never force one.
 > later scripts added `booking_reminder_count`, `booking_reminder_last_at`,
 > `booked_at` and `verification_required`. Repair it whenever it is next
 > touched, or a "repair" run rebuilds the tab without them.
+
+### 6g. Stop stops where they are, and calls off the tour — decided 2026-09-23
+
+Two changes, one of which is a deletion.
+
+**"All outreach" becomes "All scheduling messages".** The old label was a
+contradiction: a cancellation notice and a door code still go out. What Stop
+halts is the **scheduling and nurture** sequences, and saying so removes the
+confusion rather than papering over it. **APPLIED.**
+
+**The per-sequence scopes are dropped**, reversing the 2026-09-23 decision
+earlier the same day — and justified by what was built in between rather than
+by a change of mind. Of the three cases that earned them:
+
+| Case | Now served by |
+|---|---|
+| Manually validated ID | **6d**, which also releases the link — the scope alone left them stranded |
+| Manually scheduled | **6e**, free: a real Cal.com booking is seen by `hasBooked()` |
+| Stop just the review messages | Never expressible; `cal_reminders` covers pre-visit reminders too |
+
+Two of the three acquired better-fitting actions, and the third never worked.
+
+**Stop gains a "cancel their self-guided tour" toggle, default ON**, shown
+only when a future `scheduled` tour exists. When there is none the dialog
+**says so** — *"There are no self-guided tours to cancel"* — rather than
+hiding the control: a missing item reads as a missing feature, while the
+sentence answers the question the operator arrived with.
+
+> **This does NOT make suppression block a door code, and it must never be
+> built that way.** The access-code path deliberately cannot see the
+> suppression tab; mutation M1 and verifier section C exist to keep it that
+> way, because stranding someone at a locked door is the failure this project
+> began with. Stop simply performs a **second action** — it cancels the
+> booking, and the code stops because `Find Ready Showings` requires
+> `status === 'scheduled'`. No n8n change, no weakened guard.
+
+**A second confirmation follows the primary button**, naming the property and
+the time. Cancelling is irreversible — there is no un-cancel, only a rebook —
+and it emails and texts a real customer the instant it happens. The second
+step exists so that agreeing is a separate act from opening the dialog.
+
+> It fires **only** when a tour will actually be cancelled. A confirm that
+> appears every time is a speed bump people learn to click through, which
+> costs exactly the attention it was added to buy.
+
+### 6c. Cancel self-guided tour — **BUILT 2026-09-23**
+
+`POST /api/bookings/cancel`, reachable from the outreach table now and from
+`/showings` later; same route, two entry points.
+
+**Cal.com first, the sheet second.** Cancelling is the irreversible half and
+the one that stops the door code. Resetting the Inquiries row first and then
+failing to cancel would leave a lead being nudged to rebook a tour that is
+still on.
+
+Everything downstream self-heals from `BOOKING_CANCELLED` with no new wiring:
+the row flips, the invitee is told, reminders and follow-ups stop, and no code
+is minted.
+
+**The rebook toggle reuses `restartBookingNudges` (6f) verbatim** rather than
+re-implementing the reset — one definition of "back to day 0", not two. Its
+failure is reported, not thrown: the tour is already off and the invitee
+already knows, so claiming the whole thing failed would send someone to
+re-cancel a booking that no longer exists.
+
+> **A dispatched code STILL OPENS THE DOOR** (gotcha 8). The confirm says so
+> when `code_sent_at` is set. Cancelling removes the booking and tells them it
+> is off; it cannot recall the code.
+
+> **`findBooking` does NOT exclude cancelled rows** — it matches on identity.
+> So `status` now travels with the booking detail, and the menu item checks
+> category `showing`, status `scheduled` and a future start. Without that a
+> cancelled tour would still offer a Cancel button.
+
+> **The rebook wording rides `cancellationReason`**, the decision taken
+> 2026-09-23: it is already in the cancel API and already in the webhook
+> payload, so no new column and no sheet write. It is also shown to the
+> invitee in Cal.com's own email, so it is written for a human to read and
+> never as a machine sentinel.
+
+**NEW ENV REQUIREMENT — `CAL_API_KEY` must be set in the Vercel project.**
+Nothing in the Next.js app has ever called Cal.com; only n8n and the CLI
+scripts do. Verified live 2026-09-23 that the key in `.env.local`
+(`CAL_COM_CLAUDE_API`, `cal_live_…`) authenticates against `/v2/me` and
+`/v2/bookings` — it belongs to the client's own account
+(`contact@rentingfreedom.com`). **The client may prefer to issue a dedicated
+key** rather than reuse that one.
+
+**Still to build:** the `/showings` entry point, and the Stop integration in
+6g. The route and dialog are shared, so both are wiring.
 
 ### Open after this round
 

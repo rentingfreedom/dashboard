@@ -302,7 +302,7 @@ export interface LeadLadder {
 export interface LadderDetail {
   preVisitMessages: { label: string; sent: boolean }[];
   postVisitMessages: { label: string; sent: boolean }[];
-  booking: { uid: string; category: string; startTime: string } | null;
+  booking: { uid: string; category: string; startTime: string; status: string } | null;
   showing: { status: string; codeSentAt: string } | null;
 }
 
@@ -1294,6 +1294,10 @@ export function computeInFlight(input: InFlightInput): InFlightResult {
             uid: String(booking.booking_uid ?? ""),
             category: String(booking.event_category ?? ""),
             startTime: String(booking.start_time ?? ""),
+            // `findBooking` matches on identity and does NOT exclude cancelled
+            // rows, so the status has to travel with it — otherwise nothing
+            // downstream can tell a live tour from one already called off.
+            status: String(booking.status ?? ""),
           }
         : null,
       showing: showing

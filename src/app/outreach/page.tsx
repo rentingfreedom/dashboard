@@ -18,6 +18,10 @@ import { RestartOutreachDialog, type RestartTarget } from "@/components/outreach
 import { OutreachTable } from "@/components/outreach/outreach-table";
 import { OutreachChart } from "@/components/outreach/outreach-chart";
 import {
+  CancelTourDialog,
+  type CancelTourTarget,
+} from "@/components/outreach/cancel-tour-dialog";
+import {
   LeadActionDialog,
   type LeadActionTarget,
   type LeadActionKind,
@@ -45,6 +49,7 @@ export default function OutreachPage() {
   const [stopTarget, setStopTarget] = useState<StopTarget | null>(null);
   const [restartTarget, setRestartTarget] = useState<RestartTarget | null>(null);
   const [leadAction, setLeadAction] = useState<LeadActionTarget | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<CancelTourTarget | null>(null);
   const { isAdmin } = useRole();
 
   const load = useCallback(async (refresh = false) => {
@@ -282,6 +287,7 @@ export default function OutreachPage() {
                 .map((q) => ({ key: q.key, label: q.label, note: q.note })),
             })
           }
+          onCancelTour={setCancelTarget}
           onLeadAction={(lead: InFlightLead, kind: LeadActionKind) =>
             setLeadAction({
               kind,
@@ -307,6 +313,11 @@ export default function OutreachPage() {
       <StopOutreachDialog
         target={stopTarget}
         onOpenChange={(open) => { if (!open) setStopTarget(null); }}
+        onDone={() => load(true)}
+      />
+      <CancelTourDialog
+        target={cancelTarget}
+        onOpenChange={(open) => { if (!open) setCancelTarget(null); }}
         onDone={() => load(true)}
       />
       <LeadActionDialog
