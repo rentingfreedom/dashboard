@@ -216,6 +216,7 @@ export function OutreachChart({ leads, nudgeMax, selected, onSelect }: OutreachC
           const bx = PAD_L + i * slot + (slot - barW) / 2;
           const barH = Math.max(0, baseY - y(v));
           const sel = isSelected(b);
+          const isHovered = hover?.i === i;
           return (
             <g key={b.key}>
               {/* A full-height hit target: a zero bar has no height to click,
@@ -260,8 +261,17 @@ export function OutreachChart({ leads, nudgeMax, selected, onSelect }: OutreachC
                   height={barH}
                   rx={4}
                   fill={fillFor(b)}
-                  className="pointer-events-none"
-                  style={{ transition: "y 400ms ease-out, height 400ms ease-out, fill 150ms linear" }}
+                  className={isHovered ? "pointer-events-none drop-shadow-lg" : "pointer-events-none"}
+                  style={{
+                    transition: "y 400ms ease-out, height 400ms ease-out, fill 150ms linear, transform 150ms ease-out",
+                    // Grows from the BASELINE, not the centre — a bar popping
+                    // up while staying planted on the axis reads as emphasis;
+                    // popping from its centre would make it look like it's
+                    // floating free of the axis it's measured against.
+                    transform: isHovered ? "scale(1.33)" : "scale(1)",
+                    transformBox: "fill-box",
+                    transformOrigin: "50% 100%",
+                  }}
                 />
               )}
               {/* An empty position gets a faint stub on the baseline. Without
@@ -286,11 +296,13 @@ export function OutreachChart({ leads, nudgeMax, selected, onSelect }: OutreachC
               {v > 0 && (
                 <text
                   x={bx + barW / 2}
-                  y={y(v) - 5}
+                  y={isHovered ? y(v) - 9 : y(v) - 5}
                   textAnchor="middle"
-                  fontSize={10}
+                  fontSize={isHovered ? 14 : 10}
+                  fontWeight={isHovered ? 700 : 400}
+                  style={{ transition: "font-size 150ms ease-out, y 150ms ease-out" }}
                   className={
-                    sel || selected === null
+                    isHovered || sel || selected === null
                       ? "pointer-events-none fill-gray-700 dark:fill-gray-200"
                       : "pointer-events-none fill-gray-400 dark:fill-gray-500"
                   }

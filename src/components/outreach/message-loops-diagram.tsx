@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * The seven message loops a lead moves through (scope Part 4, item 4c) —
  * redrawn from the *Stopping Automated Messages* artifact's diagram, not
@@ -10,21 +12,42 @@
  * — a per-lead count belongs on the row that lead is in, not in a diagram
  * meant to be true for everyone at once.
  *
- * Reuses the chart's own `.viz-root` zone tokens (`--zone-1/2/3`,
- * `--zone-bg-alpha`) rather than inventing a second palette, so a reader
- * moving their eye between the two figures isn't asked to learn two colour
- * systems for one page. Must therefore be mounted inside `.viz-root`, same
- * requirement as `OutreachChart` — see that component's own note on what
- * happens if it isn't (every fill silently resolves to nothing).
+ * ── Horizontal, not the artifact's vertical stack ──────────────────────────
+ * The artifact is a full-width report page and drew the seven steps as a
+ * tall vertical ladder. Squeezed into this page's 2-of-5 grid column that
+ * same shape rendered nearly a page tall next to a ~110px chart — the wrong
+ * proportions for a figure meant to sit BESIDE the chart, not below it. This
+ * redraws the same seven steps as a single wide row, matching the chart's own
+ * wide-and-short aspect ratio.
+ *
+ * ── Detail lives behind hover, two ways ────────────────────────────────────
+ * The cards are too small at this scale to hold a full sentence, so detail is
+ * layered in rather than always-on: a native `<title>` tooltip per card for
+ * the quick answer, and the shared caption below for the mechanism as a
+ * whole. The caption reveals IN FLOW (a CSS grid-height trick, not
+ * `position: absolute`) — an absolutely-positioned version was tried first
+ * and escaped the Pipeline card's own boundary, since that card has no
+ * `overflow-hidden` to contain it. Growing the card on hover is the honest
+ * trade for never breaking out of it.
+ *
+ * ── The hover "pop" ─────────────────────────────────────────────────────────
+ * The hovered card scales up around its own centre (`transformBox:
+ * "fill-box"` is required for that centring — SVG's default transform origin
+ * is the nearest viewport corner, not the shape itself) and is re-drawn LAST
+ * so it paints over its neighbours rather than under them; SVG has no
+ * z-index, so "on top" only ever means "later in the document," which is why
+ * `order` below exists.
  */
 
-const W = 460;
-const ROW_H = 62;
-const BOX_H = 44;
-const BOX_X = 60;
-const BOX_W = 366;
-const DOT_X = 26;
-const TOP = 26;
+import { useState } from "react";
+
+const W = 900;
+const H = 170;
+const CARD_W = 100;
+const CARD_H = 70;
+const CARD_Y = 26;
+const GAP = 24;
+const LEGEND_Y = 128;
 
 type Kind = "once" | "repeat" | "timed";
 
@@ -35,143 +58,223 @@ const KIND_ZONE: Record<Kind, string> = {
 };
 
 interface Step {
-  title: string;
-  caption: string;
-  count: string;
+  /** Two short lines — chosen by hand rather than auto-wrapped, so each break lands somewhere sensible. */
+  lines: [string, string];
+  /** The full sentence, shown only in the hover tooltip at this scale. */
+  detail: string;
+  /** Short count badge, e.g. "4x" — the full "4 msgs / 4 days" lives in `detail` instead. */
+  count: string | null;
   kind: Kind;
 }
 
 const STEPS: Step[] = [
-  { title: "Inquiry recorded", caption: "Lead asks about a property", count: "—", kind: "once" },
-  { title: "ID verification", caption: "Up to 4 reminders, one a day", count: "4 msgs / 4 days", kind: "repeat" },
-  { title: "Booking link sent", caption: "Delivered once they verify", count: "2 msgs (SMS + email)", kind: "once" },
-  { title: "Booking nudges", caption: "Up to 4 reminders, one a day", count: "8 msgs / 4 days", kind: "repeat" },
+  { lines: ["Inquiry", "recorded"], detail: "Inquiry recorded — lead asks about a property.", count: null, kind: "once" },
   {
-    title: "Pre-visit reminders",
-    caption: "24h, 2h and reconfirm before the showing",
-    count: "3 msgs",
+    lines: ["ID", "verification"],
+    detail: "ID verification — up to 4 reminders, one a day. 4 messages over 4 days.",
+    count: "4×",
+    kind: "repeat",
+  },
+  {
+    lines: ["Booking", "link sent"],
+    detail: "Booking link sent — delivered once they verify. 2 messages (SMS + email).",
+    count: "2×",
+    kind: "once",
+  },
+  {
+    lines: ["Booking", "nudges"],
+    detail: "Booking nudges — up to 4 reminders, one a day. 8 messages over 4 days.",
+    count: "8×",
+    kind: "repeat",
+  },
+  {
+    lines: ["Pre-visit", "reminders"],
+    detail: "Pre-visit reminders — 24h, 2h and reconfirm before the showing. 3 messages.",
+    count: "3×",
     kind: "timed",
   },
-  { title: "Door code", caption: "Sent 60 minutes before the showing", count: "1 msg", kind: "timed" },
   {
-    title: "Post-visit follow-ups",
-    caption: "Day 0, 1, 2, 3 and 7 — includes the review request",
-    count: "10 msgs / 7 days",
+    lines: ["Door", "code"],
+    detail: "Door code — sent 60 minutes before the showing. 1 message.",
+    count: "1×",
+    kind: "timed",
+  },
+  {
+    lines: ["Post-visit", "follow-ups"],
+    detail:
+      "Post-visit follow-ups — day 0, 1, 2, 3 and 7, includes the review request. 10 messages over 7 days.",
+    count: "10×",
     kind: "repeat",
   },
 ];
 
-const H = TOP + (STEPS.length - 1) * ROW_H + BOX_H + 56;
+const ROW_W = STEPS.length * CARD_W + (STEPS.length - 1) * GAP;
+const START_X = (W - ROW_W) / 2;
 
-/**
- * A small circular-arrow badge above and left of a "repeating" row's dot —
- * the one visual cue a reader needs to spot "this is where someone can get
- * stuck," without a second legend entry per row.
- */
-function RepeatBadge({ cx, cy, color }: { cx: number; cy: number; color: string }) {
+/** A tiny "repeating" glyph — simpler than a hand-drawn loop at this scale, and just as recognizable. */
+function RepeatMark({ x, y, color }: { x: number; y: number; color: string }) {
   return (
-    <>
-      <path
-        d={`M ${cx - 26} ${cy - 7} a 9 9 0 1 0 6 -4`}
-        fill="none"
-        stroke={color}
-        strokeWidth={2}
-        strokeLinecap="round"
-      />
-      <path d={`M ${cx - 22} ${cy - 12} l 2 6 l -6 1 z`} fill={color} />
-    </>
+    <text x={x} y={y} fontSize={11} textAnchor="middle" fill={color} className="pointer-events-none">
+      ↻
+    </text>
   );
 }
 
 export function MessageLoopsDiagram() {
+  const [hovered, setHovered] = useState<number | null>(null);
+
+  // Draw order for the card layer only: everyone in their normal left-to-right
+  // order, except the hovered one, which moves to the end so it paints over
+  // its neighbours instead of under them.
+  const order = STEPS.map((_, i) => i);
+  if (hovered !== null) {
+    order.splice(order.indexOf(hovered), 1);
+    order.push(hovered);
+  }
+
   return (
-    <figure className="viz-root m-0">
+    <figure className="viz-root group m-0">
       <svg
         viewBox={`0 0 ${W} ${H}`}
-        className="w-full"
+        className="w-full overflow-visible"
         role="img"
-        aria-label="The seven automated message loops a lead moves through, from inquiry to post-visit follow-ups: three run daily and repeat until they stop or expire, two send once, and two are tied to a booked showing time."
+        aria-label="The seven automated message loops a lead moves through, in order: inquiry recorded, ID verification, booking link sent, booking nudges, pre-visit reminders, door code, post-visit follow-ups. Three repeat daily until they stop or expire, two send once, and two are tied to a booked showing time."
       >
-        {STEPS.map((s, i) => {
-          const boxTop = TOP + i * ROW_H;
-          const dotCy = boxTop + BOX_H / 2;
+        <defs>
+          <marker
+            id="loops-arrowhead"
+            viewBox="0 0 10 10"
+            refX={8}
+            refY={5}
+            markerWidth={7}
+            markerHeight={7}
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--viz-axis)" />
+          </marker>
+        </defs>
+
+        {STEPS.map((_, i) => {
+          if (i === 0) return null;
+          const prevRight = START_X + (i - 1) * (CARD_W + GAP) + CARD_W;
+          const nextLeft = START_X + i * (CARD_W + GAP);
+          const y = CARD_Y + CARD_H / 2;
+          return (
+            <line
+              key={`arrow-${i}`}
+              x1={prevRight + 2}
+              x2={nextLeft - 6}
+              y1={y}
+              y2={y}
+              stroke="var(--viz-axis)"
+              strokeWidth={1.5}
+              markerEnd="url(#loops-arrowhead)"
+            />
+          );
+        })}
+
+        {order.map((i) => {
+          const s = STEPS[i];
+          const x = START_X + i * (CARD_W + GAP);
           const color = KIND_ZONE[s.kind];
           const isRepeat = s.kind === "repeat";
+          const isHovered = hovered === i;
           return (
-            <g key={s.title}>
-              {i > 0 && (
-                <line
-                  x1={DOT_X}
-                  x2={DOT_X}
-                  y1={TOP + (i - 1) * ROW_H + BOX_H / 2 + 10}
-                  y2={dotCy - 10}
-                  stroke="var(--viz-grid)"
-                  strokeWidth={2}
-                />
-              )}
-              <circle cx={DOT_X} cy={dotCy} r={7} fill={color} />
-              {isRepeat && <RepeatBadge cx={DOT_X} cy={dotCy} color={color} />}
+            <g
+              key={s.lines.join(" ")}
+              className="cursor-default transition-transform duration-150 ease-out"
+              style={{
+                transform: isHovered ? "scale(1.33)" : "scale(1)",
+                transformBox: "fill-box",
+                transformOrigin: "center",
+              }}
+              onMouseEnter={() => setHovered(i)}
+              onMouseLeave={() => setHovered((h) => (h === i ? null : h))}
+            >
+              <title>{s.detail}</title>
               <rect
-                x={BOX_X}
-                y={boxTop}
-                width={BOX_W}
-                height={BOX_H}
+                x={x}
+                y={CARD_Y}
+                width={CARD_W}
+                height={CARD_H}
                 rx={7}
                 fill={`color-mix(in srgb, ${color} var(--zone-bg-alpha), var(--viz-surface))`}
-                stroke={isRepeat ? color : "var(--viz-grid)"}
-                strokeWidth={1.5}
+                stroke={color}
+                strokeWidth={isRepeat ? 1.75 : 1.25}
+                className={isHovered ? "drop-shadow-lg" : undefined}
               />
+              <circle cx={x + 12} cy={CARD_Y + 12} r={4} fill={color} />
+              {isRepeat && <RepeatMark x={x + 12} y={CARD_Y + 8} color={color} />}
               <text
-                x={BOX_X + 16}
-                y={boxTop + 19}
-                fontSize={13.5}
+                x={x + CARD_W / 2}
+                y={CARD_Y + 33}
+                textAnchor="middle"
+                fontSize={11.5}
                 fontWeight={700}
                 className="fill-gray-900 dark:fill-gray-100"
               >
-                {s.title}
-              </text>
-              <text x={BOX_X + 16} y={boxTop + 35} fontSize={11} className="fill-gray-500 dark:fill-gray-400">
-                {s.caption}
+                {s.lines[0]}
               </text>
               <text
-                x={BOX_X + BOX_W - 12}
-                y={boxTop + 27}
-                fontSize={11}
+                x={x + CARD_W / 2}
+                y={CARD_Y + 47}
+                textAnchor="middle"
+                fontSize={11.5}
                 fontWeight={700}
-                textAnchor="end"
-                fill={color}
+                className="fill-gray-900 dark:fill-gray-100"
               >
-                {s.count}
+                {s.lines[1]}
               </text>
+              {s.count && (
+                <text
+                  x={x + CARD_W / 2}
+                  y={CARD_Y + 62}
+                  textAnchor="middle"
+                  fontSize={10}
+                  fontWeight={700}
+                  fill={color}
+                >
+                  {s.count}
+                </text>
+              )}
             </g>
           );
         })}
 
-        {/* Legend — three encodings repeat across every row, so it earns a
-            legend rather than a label on each mark (artifact-diagramming).
-            The repeat dot sits at x=38, not the left edge — its badge draws
-            ~26px to its own left, which would run off the viewBox otherwise. */}
-        <g transform={`translate(0 ${H - 44})`}>
-          <circle cx={38} cy={8} r={6} fill={KIND_ZONE.repeat} />
-          <RepeatBadge cx={38} cy={8} color={KIND_ZONE.repeat} />
-          <text x={52} y={12} fontSize={11} className="fill-gray-500 dark:fill-gray-400">
+        {/* Legend — three encodings repeat across every card, so it earns a
+            legend rather than a label on each mark (artifact-diagramming). */}
+        <g transform={`translate(${START_X} ${LEGEND_Y})`}>
+          <circle cx={6} cy={0} r={5} fill={KIND_ZONE.repeat} />
+          <RepeatMark x={6} y={-4} color={KIND_ZONE.repeat} />
+          <text x={18} y={4} fontSize={11} className="fill-gray-500 dark:fill-gray-400">
             Repeating — where people get stuck
           </text>
-          <circle cx={10} cy={28} r={6} fill={KIND_ZONE.once} />
-          <text x={24} y={32} fontSize={11} className="fill-gray-500 dark:fill-gray-400">
+          <circle cx={270} cy={0} r={5} fill={KIND_ZONE.once} />
+          <text x={282} y={4} fontSize={11} className="fill-gray-500 dark:fill-gray-400">
             Sent once
           </text>
-          <circle cx={140} cy={28} r={6} fill={KIND_ZONE.timed} />
-          <text x={154} y={32} fontSize={11} className="fill-gray-500 dark:fill-gray-400">
+          <circle cx={390} cy={0} r={5} fill={KIND_ZONE.timed} />
+          <text x={402} y={4} fontSize={11} className="fill-gray-500 dark:fill-gray-400">
             Tied to a booked time
           </text>
         </g>
       </svg>
-      <figcaption className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-        Each loop runs independently and decides who is due by reading the spreadsheet fresh every
-        few minutes — a lead can be taken out of a loop, or put back into one, by changing what the
-        sheet says.
-      </figcaption>
+
+      {/* IN FLOW, not `position: absolute` — the first version escaped the
+          Pipeline card's own boundary, because that card has no
+          `overflow-hidden` to contain a floating child. A CSS grid-height
+          reveal (0fr -> 1fr) stays in flow and animates just as smoothly;
+          the card simply grows a little on hover, which is the honest
+          version of "hidden until hovered." */}
+      <div className="grid grid-rows-[0fr] transition-[grid-template-rows] duration-200 ease-out group-hover:grid-rows-[1fr]">
+        <div className="overflow-hidden">
+          <figcaption className="pt-2 text-sm text-gray-600 dark:text-gray-300">
+            Hover a step for what it sends and how often. Each loop runs independently and decides
+            who is due by reading the spreadsheet fresh every few minutes — a lead can be taken out
+            of a loop, or put back into one, by changing what the sheet says.
+          </figcaption>
+        </div>
+      </div>
     </figure>
   );
 }
