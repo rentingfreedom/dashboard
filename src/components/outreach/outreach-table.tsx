@@ -23,7 +23,6 @@ import {
   MoreHorizontal,
   BadgeCheck,
   RotateCcw,
-  CalendarX,
   ChevronRight,
   ChevronDown,
 } from "lucide-react";
@@ -31,7 +30,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -54,7 +52,6 @@ import type {
 } from "@/lib/metrics/in-flight";
 import type { StopMode } from "./stop-outreach-dialog";
 import type { LeadActionKind } from "./lead-action-dialog";
-import type { CancelTourTarget } from "./cancel-tour-dialog";
 
 const col = createColumnHelper<InFlightLead>();
 
@@ -291,10 +288,9 @@ export interface OutreachTableProps {
   onStop: (lead: InFlightLead, mode: StopMode) => void;
   onRestart: (lead: InFlightLead) => void;
   onLeadAction: (lead: InFlightLead, kind: LeadActionKind) => void;
-  onCancelTour: (target: CancelTourTarget) => void;
 }
 
-export function OutreachTable({ leads, isAdmin, onStop, onRestart, onLeadAction, onCancelTour }: OutreachTableProps) {
+export function OutreachTable({ leads, isAdmin, onStop, onRestart, onLeadAction }: OutreachTableProps) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -481,23 +477,6 @@ export function OutreachTable({ leads, isAdmin, onStop, onRestart, onLeadAction,
           // offered. Every `skipped_*` value is a recorded NON-send.
           const linkDelivered = l.linkSent.trim().toLowerCase() === "true";
 
-          /**
-           * A tour is cancellable only if it is a self-guided showing, still
-           * `scheduled`, and in the future. `findBooking` matches on identity
-           * and does not exclude cancelled rows, so the status is checked here
-           * rather than assumed.
-           */
-          const b = l.ladderDetail.booking;
-          const startMs = b ? new Date(b.startTime).getTime() : NaN;
-          const tour =
-            b &&
-            b.uid &&
-            b.category.trim().toLowerCase() === "showing" &&
-            b.status.trim().toLowerCase() === "scheduled" &&
-            Number.isFinite(startMs) &&
-            startMs > Date.now()
-              ? b
-              : null;
 
           return (
             <DropdownMenu>
@@ -528,32 +507,6 @@ export function OutreachTable({ leads, isAdmin, onStop, onRestart, onLeadAction,
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />
-                {/* Stated rather than omitted. A missing item reads as a
-                    missing feature; saying there is nothing to cancel answers
-                    the question the operator actually came with. */}
-                {tour ? (
-                  <DropdownMenuItem
-                    onClick={() =>
-                      onCancelTour({
-                        personId: l.personId,
-                        personName: l.personName,
-                        propertyKey: l.propertyKey,
-                        propertyAddress: l.propertyAddress,
-                        bookingUid: tour.uid,
-                        startTime: tour.startTime,
-                        codeAlreadySent: Boolean(l.ladderDetail.showing?.codeSentAt?.trim()),
-                      })
-                    }
-                  >
-                    <CalendarX className="h-4 w-4 mr-2 text-red-500" />
-                    Cancel self-guided tour…
-                  </DropdownMenuItem>
-                ) : (
-                  <DropdownMenuLabel className="font-normal text-xs text-gray-400 dark:text-gray-500">
-                    No self-guided tours to cancel
-                  </DropdownMenuLabel>
-                )}
-                <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => onStop(l, "pause")}>
                   <PauseCircle className="h-4 w-4 mr-2 text-amber-500" />
                   Pause outreach…
@@ -568,7 +521,7 @@ export function OutreachTable({ leads, isAdmin, onStop, onRestart, onLeadAction,
         },
       }),
     ],
-    [isAdmin, onStop, onRestart, onLeadAction, onCancelTour, expanded]
+    [isAdmin, onStop, onRestart, onLeadAction, expanded]
   );
 
   const table = useReactTable({

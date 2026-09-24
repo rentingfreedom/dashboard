@@ -18,10 +18,6 @@ import { RestartOutreachDialog, type RestartTarget } from "@/components/outreach
 import { OutreachTable } from "@/components/outreach/outreach-table";
 import { OutreachChart } from "@/components/outreach/outreach-chart";
 import {
-  CancelTourDialog,
-  type CancelTourTarget,
-} from "@/components/outreach/cancel-tour-dialog";
-import {
   LeadActionDialog,
   type LeadActionTarget,
   type LeadActionKind,
@@ -37,6 +33,29 @@ import {
 type Filter = "active" | "suppressed" | "all";
 type Position = { kind: "bar" | "zone"; key: string } | null;
 
+/**
+ * The lead's self-guided tour, if one can still be called off.
+ *
+ * `findBooking` in the metrics module matches on IDENTITY and does not exclude
+ * cancelled rows, so the status is checked here rather than assumed — without
+ * it an already-cancelled tour would offer a live cancel control.
+ */
+function cancellableTour(lead: InFlightLead): StopTarget["tour"] {
+  const b = lead.ladderDetail.booking;
+  if (!b || !b.uid) return null;
+  if (b.category.trim().toLowerCase() !== "showing") return null;
+  if (b.status.trim().toLowerCase() !== "scheduled") return null;
+  const startMs = new Date(b.startTime).getTime();
+  if (!Number.isFinite(startMs) || startMs <= Date.now()) return null;
+  return {
+    bookingUid: b.uid,
+    startTime: b.startTime,
+    propertyKey: lead.propertyKey,
+    propertyAddress: lead.propertyAddress,
+    codeAlreadySent: Boolean(lead.ladderDetail.showing?.codeSentAt?.trim()),
+  };
+}
+
 export default function OutreachPage() {
   const [result, setResult] = useState<InFlightResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -49,7 +68,6 @@ export default function OutreachPage() {
   const [stopTarget, setStopTarget] = useState<StopTarget | null>(null);
   const [restartTarget, setRestartTarget] = useState<RestartTarget | null>(null);
   const [leadAction, setLeadAction] = useState<LeadActionTarget | null>(null);
-  const [cancelTarget, setCancelTarget] = useState<CancelTourTarget | null>(null);
   const { isAdmin } = useRole();
 
   const load = useCallback(async (refresh = false) => {
@@ -285,9 +303,9 @@ export default function OutreachPage() {
               liveSequences: lead.sequences
                 .filter((q) => q.nextSendAt !== null)
                 .map((q) => ({ key: q.key, label: q.label, note: q.note })),
+              tour: cancellableTour(lead),
             })
           }
-          onCancelTour={setCancelTarget}
           onLeadAction={(lead: InFlightLead, kind: LeadActionKind) =>
             setLeadAction({
               kind,
@@ -313,11 +331,6 @@ export default function OutreachPage() {
       <StopOutreachDialog
         target={stopTarget}
         onOpenChange={(open) => { if (!open) setStopTarget(null); }}
-        onDone={() => load(true)}
-      />
-      <CancelTourDialog
-        target={cancelTarget}
-        onOpenChange={(open) => { if (!open) setCancelTarget(null); }}
         onDone={() => load(true)}
       />
       <LeadActionDialog

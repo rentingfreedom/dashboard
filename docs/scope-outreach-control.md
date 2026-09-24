@@ -957,6 +957,24 @@ only when a future `scheduled` tour exists. When there is none the dialog
 hiding the control: a missing item reads as a missing feature, while the
 sentence answers the question the operator arrived with.
 
+> **It lives IN the Stop dialog, never as its own menu item.** A first pass
+> shipped a separate "Cancel self-guided tour…" entry; the client corrected it
+> 2026-09-23. Stopping outreach and calling off the tour are one intention,
+> and making them two clicks invites doing only the first — leaving a lead
+> silently stopped but still expected at a door.
+>
+> That first pass also **crashed the page**: the "no tours" line used
+> `DropdownMenuLabel`, which Base UI requires inside a `<Menu.Group>`, and it
+> was used bare. `tsc` and `npm run build` were both green — it only fails at
+> render. **The safe set of menu parts is the five `property-actions.tsx`
+> uses**: DropdownMenu, Trigger, Content, Item, Separator.
+
+**A pause never cancels a tour.** A pause is temporary by definition; calling
+off a showing is not. The toggle appears only on a permanent stop.
+
+**Leaving the toggle OFF says what that means** — the tour stays booked and
+the access code will still be sent — rather than silently doing nothing.
+
 > **This does NOT make suppression block a door code, and it must never be
 > built that way.** The access-code path deliberately cannot see the
 > suppression tab; mutation M1 and verifier section C exist to keep it that
@@ -1009,16 +1027,19 @@ re-cancel a booking that no longer exists.
 > invitee in Cal.com's own email, so it is written for a human to read and
 > never as a machine sentinel.
 
-**NEW ENV REQUIREMENT — `CAL_API_KEY` must be set in the Vercel project.**
+**NEW ENV REQUIREMENT — `CAL_COM_CLAUDE_API` must be set in the Vercel
+project.** The name is reused rather than renamed at the client's request: one
+Cal.com key, one name. It exists **only in `.env.local`** today — n8n does not
+use it (n8n keeps its own `httpHeaderAuth` credential in its database, which is
+why the name appears nowhere there).
 Nothing in the Next.js app has ever called Cal.com; only n8n and the CLI
-scripts do. Verified live 2026-09-23 that the key in `.env.local`
-(`CAL_COM_CLAUDE_API`, `cal_live_…`) authenticates against `/v2/me` and
-`/v2/bookings` — it belongs to the client's own account
-(`contact@rentingfreedom.com`). **The client may prefer to issue a dedicated
-key** rather than reuse that one.
+scripts do. Verified live 2026-09-23 that it (`cal_live_…`) authenticates against `/v2/me`
+and `/v2/bookings`, and that it belongs to the client's own account
+(`contact@rentingfreedom.com`).
 
-**Still to build:** the `/showings` entry point, and the Stop integration in
-6g. The route and dialog are shared, so both are wiring.
+**Still to build:** the `/showings` entry point. The route is shared, so it is
+wiring plus a dialog — the outreach one was folded into Stop and deleted rather
+than left orphaned.
 
 ### Open after this round
 

@@ -34,6 +34,21 @@ export interface StopTarget {
   email: string;
   /** Which sequences would actually be stopped, for the preview. */
   liveSequences: { key: string; label: string; note: string }[];
+  /**
+   * A future, still-scheduled self-guided tour, or null.
+   *
+   * Cancelling lives HERE rather than in its own menu item: stopping outreach
+   * and calling off the tour are one intention, and making them two clicks
+   * invites doing only the first.
+   */
+  tour: {
+    bookingUid: string;
+    startTime: string;
+    propertyKey: string;
+    propertyAddress: string;
+    /** Already dispatched — it cannot be recalled (gotcha 8). */
+    codeAlreadySent: boolean;
+  } | null;
 }
 
 /**
@@ -78,6 +93,14 @@ const DURATIONS = [
  */
 const COLD_STAGE = "Cold Rental Lead 1 month Hold";
 
+function whenLabel(iso: string): string {
+  const ms = new Date(iso).getTime();
+  if (!Number.isFinite(ms)) return iso || "an unknown time";
+  return new Date(ms).toLocaleString(undefined, {
+    weekday: "long", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+  });
+}
+
 /** Local YYYY-MM-DD, for the <input type="date"> floor. */
 function todayLocal(): string {
   const d = new Date();
@@ -100,6 +123,8 @@ export function StopOutreachDialog({
   const [customDate, setCustomDate] = useState("");
   const [dispositionTag, setDispositionTag] = useState("");
   const [moveToCold, setMoveToCold] = useState(false);
+  const [cancelTour, setCancelTour] = useState(true);
+  const [confirming, setConfirming] = useState(false);
 
   const mode = target?.mode ?? "stop";
   const isPause = mode === "pause";
@@ -139,6 +164,10 @@ export function StopOutreachDialog({
   // route reads as permanent — a pause silently becoming a stop.
   const blocked = isPause && duration === "custom" && !customDate;
 
+  // Only a permanent stop calls off a tour. A pause is temporary by
+  // definition, and cancelling a showing is not.
+  const willCancelTour = !isPause && cancelTour && target?.tour != null;
+
   async function handleStop() {
     if (!target || blocked) return;
     setSaving(true);
@@ -170,6 +199,38 @@ export function StopOutreachDialog({
       if (res?.dispositionError) {
         toast.warning(`Outreach stopped, but FUB was not updated: ${res.dispositionError}`);
       }
+
+      /**
+       * The tour is cancelled AFTER the stop, and its failure is reported
+       * rather than thrown.
+       *
+       * The stop is the reversible half; cancelling is not. Cancelling first
+       * and then failing to stop would call off a real showing and leave the
+       * nudges running, which is the worst of both.
+       */
+      if (willCancelTour && target.tour) {
+        try {
+          await fetchJson("/api/bookings/cancel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              bookingUid: target.tour.bookingUid,
+              reason: reason || undefined,
+              // Never offer a rebook from here: they are being stopped.
+              rebook: false,
+              personId: target.personId,
+              propertyKey: target.tour.propertyKey || undefined,
+            }),
+          });
+          toast.success("Their self-guided tour was cancelled");
+        } catch (err) {
+          toast.warning(
+            `Outreach stopped, but the tour was NOT cancelled: ${
+              err instanceof Error ? err.message : "unknown error"
+            }`
+          );
+        }
+      }
       onOpenChange(false);
       setReason("");
       setScope("all");
@@ -177,6 +238,8 @@ export function StopOutreachDialog({
       setCustomDate("");
       setDispositionTag("");
       setMoveToCold(false);
+      setCancelTour(true);
+      setConfirming(false);
       onDone();
     } catch (err) {
       toast.error(
@@ -284,6 +347,42 @@ export function StopOutreachDialog({
                 their access code.
               </p>
 
+              {/* The tour. Only on a permanent stop — a pause is temporary by
+                  definition and calling off a showing is not. */}
+              {!isPause && (
+                target?.tour ? (
+                  <div className="rounded border border-gray-200 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-800/50">
+                    <label className="flex items-start gap-2 text-xs text-gray-700 dark:text-gray-300">
+                      <input
+                        type="checkbox"
+                        checked={cancelTour}
+                        onChange={(e) => setCancelTour(e.target.checked)}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        Also cancel their self-guided tour
+                        <span className="block text-gray-500 dark:text-gray-400">
+                          {target.tour.propertyAddress || target.tour.propertyKey} ·{" "}
+                          {whenLabel(target.tour.startTime)}
+                        </span>
+                      </span>
+                    </label>
+                    {!cancelTour && (
+                      <p className="mt-1.5 text-xs text-amber-700 dark:text-amber-400">
+                        The tour stays booked, and their access code will still be sent.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  /* Said rather than omitted: a missing control reads as a
+                     missing feature, while this answers the question the
+                     operator arrived with. */
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    There are no self-guided tours to cancel.
+                  </p>
+                )
+              )}
+
               {/* The CRM half. Offered only on a permanent stop: a trash tag
                   has its own blocking window that has nothing to do with the
                   pause date, so a lead could come back from the pause and
@@ -345,11 +444,37 @@ export function StopOutreachDialog({
                 />
               </div>
         </div>
+        {confirming && target?.tour && (
+          <div className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300">
+            <div className="font-medium">This cancels a real showing. It cannot be undone.</div>
+            <div className="mt-1">
+              {target.tour.propertyAddress || target.tour.propertyKey} ·{" "}
+              {whenLabel(target.tour.startTime)}
+            </div>
+            <div className="mt-1">
+              {target.personName || "The lead"} will be emailed and texted straight away.
+            </div>
+            {target.tour.codeAlreadySent && (
+              <div className="mt-1 font-medium">
+                Their access code has already been sent and will still open the lockbox —
+                cancelling cannot recall it.
+              </div>
+            )}
+          </div>
+        )}
+
         <AlertDialogFooter>
           <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
           <AlertDialogAction
             onClick={(e) => {
               e.preventDefault();
+              // Cancelling a showing is irreversible and texts a real customer
+              // instantly, so agreeing to it is a separate act from opening
+              // this dialog. Nothing else here needs a second step.
+              if (willCancelTour && !confirming) {
+                setConfirming(true);
+                return;
+              }
               handleStop();
             }}
             disabled={saving || blocked}
@@ -358,6 +483,8 @@ export function StopOutreachDialog({
               ? isPause
                 ? "Pausing…"
                 : "Stopping…"
+              : confirming
+              ? "Yes, stop and cancel the tour"
               : isPause
               ? "Pause outreach"
               : "Stop outreach"}

@@ -22,9 +22,13 @@
  * derives codes algorithmically from time and serial (gotcha 8). Callers must
  * say so rather than implying the code is revoked.
  *
- * NOTE: `CAL_API_KEY` must be set in the Vercel project. Nothing in the
- * Next.js app has ever called Cal.com — only n8n and the CLI scripts do — so
- * this is a NEW server-side env requirement.
+ * NOTE: `CAL_COM_CLAUDE_API` must be set in the Vercel project. It currently
+ * exists ONLY in `.env.local` — n8n does not use it (n8n holds its own
+ * `httpHeaderAuth` credential in its database, which is why the name appears
+ * nowhere there), so this is a NEW server-side env requirement.
+ *
+ * The name is reused rather than renamed to `CAL_API_KEY` at the client's
+ * request: one Cal.com key, one name, wherever it appears.
  */
 
 const BASE = process.env.CAL_API_BASE ?? "https://api.cal.com";
@@ -37,7 +41,7 @@ const BASE = process.env.CAL_API_BASE ?? "https://api.cal.com";
 const API_VERSION = "2024-08-13";
 
 export function isConfigured(): boolean {
-  return Boolean(process.env.CAL_API_KEY);
+  return Boolean(process.env.CAL_COM_CLAUDE_API);
 }
 
 export interface CancelBookingResult {
@@ -60,7 +64,7 @@ export async function cancelBooking(
 ): Promise<CancelBookingResult> {
   if (!isConfigured()) {
     throw new Error(
-      "CAL_API_KEY is not set in this environment, so the booking cannot be cancelled."
+      "CAL_COM_CLAUDE_API is not set in this environment, so the booking cannot be cancelled."
     );
   }
   const id = String(uid ?? "").trim();
@@ -69,7 +73,7 @@ export async function cancelBooking(
   const res = await fetch(`${BASE}/v2/bookings/${encodeURIComponent(id)}/cancel`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${process.env.CAL_API_KEY}`,
+      Authorization: `Bearer ${process.env.CAL_COM_CLAUDE_API}`,
       "cal-api-version": API_VERSION,
       "Content-Type": "application/json",
     },
