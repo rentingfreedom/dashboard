@@ -1,9 +1,11 @@
 /**
  * Minimal Follow Up Boss client — READ-ONLY except for one deliberate write.
  *
- * Exists for one job: the funnel page's "Waiting on verification" panel cannot
+ * Built for one job: the funnel page's "Waiting on verification" panel cannot
  * tell a lead who is genuinely waiting from one Nicole has already rejected,
  * because the rejection is recorded in FUB and the page reads Google Sheets.
+ * `fetchPeopleByStages` (scope 6e, the manual-booking person picker) is a
+ * second READ built on the same contract — it does not change it.
  *
  * NOTE: FUB_API_KEY must be set in the Vercel project. Nothing in the Next.js
  * app has ever called FUB — only n8n and the CLI scripts do — so this is a NEW
@@ -294,6 +296,91 @@ export const TRASH_TAG_WINDOWS: Record<TrashTag, { days: number | null; label: s
 
 export function isTrashTag(v: string): v is TrashTag {
   return (TRASH_TAGS as readonly string[]).includes(v);
+}
+
+/** One row of the manual-booking person picker (scope 6e). */
+export interface FubPersonSummary {
+  id: string;
+  name: string;
+  phone: string;
+  email: string;
+  stage: string;
+}
+
+/**
+ * Every person currently in one of the given stages — used to populate the
+ * manual-booking person picker (scope 6e). A READ, so it fits this module's
+ * read-only contract the same as `fetchLeadStatuses`.
+ *
+ * Unlike `fetchPerson`, this uses the LIST endpoint on purpose: it is scoped
+ * to the two gated tenant stages, neither of which is Trash, so gotcha 18
+ * (list endpoints excluding Trash by default) does not apply here — there is
+ * nothing to exclude. Paged explicitly rather than trusting a single page,
+ * per gotcha 23: an unrecognised or misspelled param can return a whole
+ * collection with a 200, so under-paging would silently produce a truncated
+ * list that reads as complete.
+ */
+export async function fetchPeopleByStages(stages: string[]): Promise<FubPersonSummary[]> {
+  const out = new Map<string, FubPersonSummary>();
+  if (!isConfigured()) return [];
+
+  const headers = {
+    Authorization: authHeader(),
+    "X-System": SYSTEM,
+    "X-System-Key": SYSTEM_KEY,
+    Accept: "application/json",
+  };
+
+  for (const stage of stages) {
+    const s = String(stage ?? "").trim();
+    if (!s) continue;
+    const limit = 100;
+    let offset = 0;
+    for (;;) {
+      let body: {
+        people?: {
+          id?: number | string;
+          name?: string;
+          firstName?: string;
+          lastName?: string;
+          stage?: string;
+          phones?: { value?: string }[];
+          emails?: { value?: string }[];
+        }[];
+        _metadata?: { total?: number };
+      };
+      try {
+        const res = await fetch(
+          `${BASE}/people?stage=${encodeURIComponent(s)}&limit=${limit}&offset=${offset}&fields=allFields`,
+          { headers, cache: "no-store" }
+        );
+        if (!res.ok) {
+          console.warn(`[fub] GET /people?stage=${s} -> ${res.status} ${res.statusText}`);
+          break;
+        }
+        body = await res.json();
+      } catch (err) {
+        console.warn(`[fub] GET /people?stage=${s} failed:`, err instanceof Error ? err.message : err);
+        break;
+      }
+      const people = Array.isArray(body.people) ? body.people : [];
+      for (const p of people) {
+        const id = String(p.id ?? "").trim();
+        if (!id) continue;
+        const name =
+          String(p.name ?? "").trim() ||
+          [p.firstName, p.lastName].map((x) => String(x ?? "").trim()).filter(Boolean).join(" ");
+        const phone = Array.isArray(p.phones) ? String(p.phones[0]?.value ?? "").trim() : "";
+        const email = Array.isArray(p.emails) ? String(p.emails[0]?.value ?? "").trim() : "";
+        out.set(id, { id, name, phone, email, stage: String(p.stage ?? s).trim() });
+      }
+      const total = body._metadata?.total ?? people.length;
+      offset += people.length;
+      if (people.length === 0 || offset >= total) break;
+    }
+  }
+
+  return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export interface DispositionInput {

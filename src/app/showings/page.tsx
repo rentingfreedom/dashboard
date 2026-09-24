@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { ShowingsTable } from "@/components/showings/showings-table";
+import { AddManualBookingDialog } from "@/components/showings/add-manual-booking-dialog";
 import { fetchJson } from "@/lib/fetch-json";
 import type { Showing } from "@/lib/types";
 
@@ -14,6 +15,7 @@ export default function ShowingsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -45,10 +47,16 @@ export default function ShowingsPage() {
               Upcoming and past property showings. Access codes are sent automatically 1 hour before each showing.
             </p>
           </div>
-          <Button variant="outline" size="sm" onClick={() => load(true)} disabled={refreshing} className="h-8">
-            <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={() => setAddOpen(true)} className="h-8">
+              <Plus className="h-3.5 w-3.5 mr-1.5" />
+              Add manual booking
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => load(true)} disabled={refreshing} className="h-8">
+              <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -59,9 +67,11 @@ export default function ShowingsPage() {
         ) : error ? (
           <ErrorState message={error} onRetry={() => load()} />
         ) : (
-          <ShowingsTable showings={showings} />
+          <ShowingsTable showings={showings} onRefresh={() => load(true)} />
         )}
       </div>
+
+      <AddManualBookingDialog open={addOpen} onOpenChange={setAddOpen} onDone={() => load(true)} />
     </div>
   );
 }

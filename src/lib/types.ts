@@ -144,7 +144,9 @@ export type AuditAction =
   | "lockbox.retired"
   | "showing.created"
   | "showing.updated"
-  | "showing.cancelled";
+  | "showing.cancelled"
+  | "booking.cancelled"
+  | "booking.manual_created";
 
 export interface AuditLogEntry {
   timestamp: string;

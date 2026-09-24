@@ -5,13 +5,27 @@ import {
   flexRender, createColumnHelper, type SortingState,
 } from "@tanstack/react-table";
 import { useState, useMemo } from "react";
-import { ArrowUpDown } from "lucide-react";
+import { ArrowUpDown, MoreHorizontal, Ban } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { ShowingStatusBadge } from "./showing-status-badge";
+import { CancelShowingDialog } from "./cancel-showing-dialog";
 import type { Showing } from "@/lib/types";
+
+/** A future, still-`scheduled` booking — the only one `/api/bookings/cancel` can act on. */
+function isCancellable(s: Showing): boolean {
+  if (String(s.status).trim().toLowerCase() !== "scheduled") return false;
+  const ms = new Date(s.showing_time).getTime();
+  return Number.isFinite(ms) && ms > Date.now();
+}
 
 const col = createColumnHelper<Showing>();
 
@@ -30,12 +44,15 @@ function formatDateTime(v: string): string {
 
 interface ShowingsTableProps {
   showings: Showing[];
+  /** Reload the list after a cancel succeeds. Omit to hide the Actions column. */
+  onRefresh?: () => void;
 }
 
-export function ShowingsTable({ showings }: ShowingsTableProps) {
+export function ShowingsTable({ showings, onRefresh }: ShowingsTableProps) {
   const [sorting, setSorting] = useState<SortingState>([{ id: "showing_time", desc: true }]);
   const [globalFilter, setGlobalFilter] = useState("");
   const [showCancelled, setShowCancelled] = useState(false);
+  const [cancelTarget, setCancelTarget] = useState<Showing | null>(null);
 
   // Cancelled showings are history, not work — hidden by default so the table
   // shows what is actually upcoming. They are kept rather than deleted because
@@ -55,14 +72,14 @@ export function ShowingsTable({ showings }: ShowingsTableProps) {
       cell: ({ getValue }) => (
         <span className="font-medium text-gray-900 dark:text-gray-100 text-sm">{getValue() || "—"}</span>
       ),
-      size: 20,
+      size: 18,
     }),
     col.accessor("person_name", {
       header: () => <span className="text-xs font-medium text-gray-500">Attendee Name</span>,
       cell: ({ getValue }) => (
         <span className="text-sm text-gray-700 dark:text-gray-300">{getValue() || "—"}</span>
       ),
-      size: 20,
+      size: 18,
     }),
     col.accessor("showing_time", {
       header: ({ column }) => (
@@ -76,12 +93,12 @@ export function ShowingsTable({ showings }: ShowingsTableProps) {
       cell: ({ getValue }) => (
         <span className="text-xs text-gray-600 dark:text-gray-400">{formatDateTime(getValue())}</span>
       ),
-      size: 18,
+      size: 16,
     }),
     col.accessor("status", {
       header: () => <span className="text-xs font-medium text-gray-500">Status</span>,
       cell: ({ getValue }) => <ShowingStatusBadge status={getValue()} />,
-      size: 12,
+      size: 10,
     }),
     col.accessor("access_code", {
       header: () => <span className="text-xs font-medium text-gray-500">Access Code</span>,
@@ -91,16 +108,50 @@ export function ShowingsTable({ showings }: ShowingsTableProps) {
           ? <span className="text-xs font-mono text-gray-700 dark:text-gray-300">{v}</span>
           : <span className="text-xs text-gray-300 dark:text-gray-600">—</span>;
       },
-      size: 15,
+      size: 14,
     }),
     col.accessor("code_sent_at", {
       header: () => <span className="text-xs font-medium text-gray-500">Code Sent</span>,
       cell: ({ getValue }) => (
         <span className="text-xs text-gray-500 dark:text-gray-400">{formatDateTime(getValue())}</span>
       ),
-      size: 15,
+      size: 14,
     }),
-  ], []);
+    ...(onRefresh
+      ? [
+          col.display({
+            id: "actions",
+            header: () => <span className="text-xs font-medium text-gray-500">Actions</span>,
+            cell: ({ row }: { row: { original: Showing } }) => {
+              const s = row.original;
+              if (!isCancellable(s)) {
+                return <span className="text-xs text-gray-300 dark:text-gray-600">—</span>;
+              }
+              return (
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    aria-label="Showing actions"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <MoreHorizontal className="h-4 w-4" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-48">
+                    <DropdownMenuItem
+                      onClick={() => setCancelTarget(s)}
+                      className="text-red-600 focus:text-red-600"
+                    >
+                      <Ban className="h-4 w-4 mr-2" />
+                      Cancel showing…
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              );
+            },
+            size: 10,
+          }),
+        ]
+      : []),
+  ], [onRefresh]);
 
   const table = useReactTable({
     data: visibleShowings,
@@ -186,6 +237,14 @@ export function ShowingsTable({ showings }: ShowingsTableProps) {
           </TableBody>
         </Table>
       </div>
+
+      {onRefresh && (
+        <CancelShowingDialog
+          showing={cancelTarget}
+          onOpenChange={(open) => { if (!open) setCancelTarget(null); }}
+          onDone={() => { setCancelTarget(null); onRefresh(); }}
+        />
+      )}
     </div>
   );
 }
