@@ -229,6 +229,7 @@ export interface SuppressionState {
  *   🟨   sent      we sent; the LEAD has not done their part
  *   ✅   complete  the stage is done
  *   ❌   failed    it was due, the window closed, it did not happen
+ *   🛑   stopped   outreach was halted here — a 6b Stop or Pause (6b/6g)
  *
  * `waiting` and `sent` are mutually exclusive by construction — one is "ball
  * in our court", the other "ball in theirs" — so a cell is never both.
@@ -239,11 +240,17 @@ export interface SuppressionState {
  * is the single derivation the chart (4b) should count, rather than
  * re-deriving the pipeline a second way and letting the two drift.
  *
+ * `stopped` is an OVERLAY on that same rightmost cell, applied after the
+ * ladder is otherwise finished — see the pass in `computeInFlight` — so it
+ * never disagrees with `pipelinePositionOf` about where the lead stands: that
+ * function only checks `state !== "not_due"` and switches on the column name,
+ * neither of which `stopped` changes.
+ *
  * `ord` is the ONLY thing sorting and filtering may use — never the glyph,
  * which would order by code point. Sorting a state column DESCENDING puts ❌
  * first, which is the rows that need someone to act.
  */
-export type LadderState = "not_due" | "waiting" | "sent" | "complete" | "failed";
+export type LadderState = "not_due" | "waiting" | "sent" | "complete" | "failed" | "stopped";
 
 const STATE_ORD: Record<LadderState, number> = {
   not_due: 0,
@@ -251,6 +258,7 @@ const STATE_ORD: Record<LadderState, number> = {
   sent: 2,
   complete: 3,
   failed: 4,
+  stopped: 5,
 };
 
 export const STATE_GLYPH: Record<LadderState, string> = {
@@ -259,6 +267,7 @@ export const STATE_GLYPH: Record<LadderState, string> = {
   sent: "\u{1F7E8}",
   complete: "✅",
   failed: "❌",
+  stopped: "\u{1F6D1}",
 };
 
 export interface LadderCell {
@@ -1262,6 +1271,29 @@ export function computeInFlight(input: InFlightInput): InFlightResult {
       // columns.
       if (stage.some((k) => ["waiting", "sent", "failed"].includes(ladder[k].state))) {
         stopped = true;
+      }
+    }
+
+    // A suppressed lead reads as "halted here", not merely quiet (6b/6g). The
+    // 🛑 overlays the SAME rightmost non-`-` cell `pipelinePositionOf` would
+    // derive, so the marker and the chart bucket never disagree about where
+    // the lead stands. A lead with every cell still `not_due` — suppressed
+    // before anything was ever sent — has nowhere to put it; `flags` already
+    // carries "outreach suppressed" for that case.
+    if (suppression.suppressed) {
+      for (let i = LADDER_ORDER.length - 1; i >= 0; i--) {
+        const k = LADDER_ORDER[i];
+        if (ladder[k].state === "not_due") continue;
+        const who = suppression.setBy ? ` by ${suppression.setBy}` : "";
+        const reason = suppression.reason ? ` — ${suppression.reason}` : "";
+        ladder[k] = {
+          ...ladder[k],
+          state: "stopped",
+          ord: STATE_ORD.stopped,
+          glyph: STATE_GLYPH.stopped,
+          title: `Outreach stopped here${who}${reason}.`,
+        };
+        break;
       }
     }
 

@@ -110,7 +110,8 @@ function Cell({ cell }: { cell: LadderCell }) {
         // scanning for the one cell that needs them, not for steps that never
         // applied to this lead.
         cell.state === "not_due" && "text-gray-300 dark:text-gray-600",
-        cell.state === "failed" && "font-semibold"
+        (cell.state === "failed" || cell.state === "stopped") && "font-semibold",
+        cell.state === "stopped" && "text-red-600 dark:text-red-400"
       )}
     >
       {cell.glyph}
@@ -637,6 +638,7 @@ function Legend() {
     ["🟨", "sent, waiting on them"],
     ["✅", "complete"],
     ["❌", "missed"],
+    ["🛑", "stopped here"],
   ];
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-500 dark:text-gray-400">
