@@ -30,7 +30,17 @@ import {
   type InFlightResult,
 } from "@/lib/metrics/in-flight";
 
-type Filter = "active" | "suppressed" | "all";
+/**
+ * `abandoned` is the residue: not in a sequence, and not deliberately stopped.
+ *
+ * Without it the counts had no way to reach the difference between Active and
+ * All — a lead who quietly fell out of every ladder was reachable only by
+ * eye, which is exactly the population worth looking at.
+ */
+type Filter = "active" | "suppressed" | "abandoned" | "all";
+
+/** Ran out of sequence without anyone deciding to stop them. */
+const isAbandoned = (l: InFlightLead): boolean => !l.active && !l.suppression.suppressed;
 type Position = { kind: "bar" | "zone"; key: string } | null;
 
 /**
@@ -115,7 +125,13 @@ export default function OutreachPage() {
       // a FUB outage and look like a quiet funnel.
       .filter((l) => (inScopeOnly ? l.stageCategory === "active" || l.stageCategory === "unknown" : true))
       .filter((l) =>
-        filter === "all" ? true : filter === "suppressed" ? l.suppression.suppressed : l.active
+        filter === "all"
+          ? true
+          : filter === "suppressed"
+          ? l.suppression.suppressed
+          : filter === "abandoned"
+          ? isAbandoned(l)
+          : l.active
       )
       .sort((a, b) => (b.inquiredAt || "").localeCompare(a.inquiredAt || ""));
   }, [result, filter, inScopeOnly]);
@@ -156,6 +172,7 @@ export default function OutreachPage() {
     return {
       active: pool.filter((l) => l.active).length,
       suppressed: pool.filter((l) => l.suppression.suppressed).length,
+      abandoned: pool.filter(isAbandoned).length,
       all: pool.length,
     } as Record<Filter, number>;
   }, [result, inScopeOnly]);
@@ -176,7 +193,7 @@ export default function OutreachPage() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        {(["active", "suppressed", "all"] as Filter[]).map((f) => (
+        {(["active", "suppressed", "abandoned", "all"] as Filter[]).map((f) => (
           <Button
             key={f}
             size="sm"
@@ -286,6 +303,8 @@ export default function OutreachPage() {
               ? "Nobody is currently inside a messaging sequence."
               : filter === "suppressed"
               ? "Nobody has had their outreach stopped."
+              : filter === "abandoned"
+              ? "Nobody has fallen out of a sequence."
               : "No inquiries recorded."}
           </CardContent>
         </Card>

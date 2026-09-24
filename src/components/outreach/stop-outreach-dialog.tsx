@@ -340,19 +340,28 @@ export function StopOutreachDialog({
                 )}
               </div>
 
-              {/* The one guarantee worth stating on screen: this is the failure
-                  the whole project started from. */}
-              <p className="rounded border border-green-200 bg-green-50 p-2 text-xs text-green-800 dark:border-green-800 dark:bg-green-950/40 dark:text-green-300">
-                Their door code is not affected. A lead with a confirmed showing still receives
-                their access code.
-              </p>
+              {/* The guarantee is only TRUE while a tour survives, so it is
+                  shown only then.
+
+                  Stating it unconditionally was wrong in the one case that
+                  matters most: with the tour being cancelled, no code is sent
+                  — `Update Showings Row (Cancelled)` writes `status:
+                  "cancelled"` and `Find Ready Showings` opens with
+                  `if (r.status !== 'scheduled') return false`. Promising a
+                  code there would have been the opposite of the truth. */}
+              {target?.tour && !willCancelTour && (
+                <p className="rounded border border-green-200 bg-green-50 p-2 text-xs text-green-800 dark:border-green-800 dark:bg-green-950/40 dark:text-green-300">
+                  Their tour stays booked and their access code will still be sent. Stopping
+                  outreach never strands a lead at a locked door.
+                </p>
+              )}
 
               {/* The tour. Only on a permanent stop — a pause is temporary by
                   definition and calling off a showing is not. */}
               {!isPause && (
                 target?.tour ? (
-                  <div className="rounded border border-gray-200 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-800/50">
-                    <label className="flex items-start gap-2 text-xs text-gray-700 dark:text-gray-300">
+                  <div className="rounded border border-amber-300 bg-amber-50 p-2 dark:border-amber-700 dark:bg-amber-950/40">
+                    <label className="flex items-start gap-2 text-xs text-amber-900 dark:text-amber-200">
                       <input
                         type="checkbox"
                         checked={cancelTour}
@@ -361,17 +370,12 @@ export function StopOutreachDialog({
                       />
                       <span>
                         Also cancel their self-guided tour
-                        <span className="block text-gray-500 dark:text-gray-400">
+                        <span className="block text-amber-800/80 dark:text-amber-300/80">
                           {target.tour.propertyAddress || target.tour.propertyKey} ·{" "}
                           {whenLabel(target.tour.startTime)}
                         </span>
                       </span>
                     </label>
-                    {!cancelTour && (
-                      <p className="mt-1.5 text-xs text-amber-700 dark:text-amber-400">
-                        The tour stays booked, and their access code will still be sent.
-                      </p>
-                    )}
                   </div>
                 ) : (
                   /* Said rather than omitted: a missing control reads as a
