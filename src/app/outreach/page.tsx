@@ -17,6 +17,7 @@ import {
 import { RestartOutreachDialog, type RestartTarget } from "@/components/outreach/restart-outreach-dialog";
 import { OutreachTable } from "@/components/outreach/outreach-table";
 import { OutreachChart } from "@/components/outreach/outreach-chart";
+import { MessageLoopsDiagram } from "@/components/outreach/message-loops-diagram";
 import {
   LeadActionDialog,
   type LeadActionTarget,
@@ -276,12 +277,22 @@ export default function OutreachPage() {
               ) : null}
             </button>
             {chartOpen && (
-              <OutreachChart
-                leads={pool}
-                nudgeMax={nudgeMax}
-                selected={position}
-                onSelect={setPosition}
-              />
+              <div className="grid gap-6 lg:grid-cols-5">
+                <div className="lg:col-span-3">
+                  <OutreachChart
+                    leads={pool}
+                    nudgeMax={nudgeMax}
+                    selected={position}
+                    onSelect={setPosition}
+                  />
+                </div>
+                {/* Agreed layout 2026-09-22: the chart answers "how many people
+                    are where"; this answers "what actually happens to one of
+                    them" — the mechanism the chart's bars are counts of. */}
+                <div className="lg:col-span-2">
+                  <MessageLoopsDiagram />
+                </div>
+              </div>
             )}
           </CardContent>
         </Card>
