@@ -39,8 +39,21 @@ import {
  */
 type Filter = "active" | "suppressed" | "abandoned" | "all";
 
-/** Ran out of sequence without anyone deciding to stop them. */
-const isAbandoned = (l: InFlightLead): boolean => !l.active && !l.suppression.suppressed;
+/**
+ * The three pills PARTITION the pool — Active + Suppressed + Abandoned = All.
+ *
+ * That needs Suppressed to take precedence, because `l.active` does not
+ * consult suppression: it is true whenever a ladder cell is `waiting`, and
+ * those cells fire on the lead's own state (has a phone, not yet asked)
+ * regardless of whether anyone has stopped them. So a suppressed lead was
+ * being counted twice, and the pills could not add up.
+ *
+ * Reading a stopped lead as "Suppressed" rather than "Active" is also the
+ * truer answer: nothing is going to be sent to them.
+ */
+const isSuppressed = (l: InFlightLead): boolean => l.suppression.suppressed;
+const isActive = (l: InFlightLead): boolean => l.active && !isSuppressed(l);
+const isAbandoned = (l: InFlightLead): boolean => !l.active && !isSuppressed(l);
 type Position = { kind: "bar" | "zone"; key: string } | null;
 
 /**
@@ -128,10 +141,10 @@ export default function OutreachPage() {
         filter === "all"
           ? true
           : filter === "suppressed"
-          ? l.suppression.suppressed
+          ? isSuppressed(l)
           : filter === "abandoned"
           ? isAbandoned(l)
-          : l.active
+          : isActive(l)
       )
       .sort((a, b) => (b.inquiredAt || "").localeCompare(a.inquiredAt || ""));
   }, [result, filter, inScopeOnly]);
@@ -170,8 +183,8 @@ export default function OutreachPage() {
       inScopeOnly ? l.stageCategory === "active" || l.stageCategory === "unknown" : true
     );
     return {
-      active: pool.filter((l) => l.active).length,
-      suppressed: pool.filter((l) => l.suppression.suppressed).length,
+      active: pool.filter(isActive).length,
+      suppressed: pool.filter(isSuppressed).length,
       abandoned: pool.filter(isAbandoned).length,
       all: pool.length,
     } as Record<Filter, number>;
