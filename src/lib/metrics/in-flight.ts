@@ -1310,6 +1310,23 @@ export function computeInFlight(input: InFlightInput): InFlightResult {
       LADDER_STAGES.flat().some((k) => ladder[k].state === "waiting");
     if (suppression.suppressed) flags.push("outreach suppressed");
 
+    /**
+     * A stop that has since lapsed, leaving the link row inert.
+     *
+     * `skipped_outreach_suppressed` is deliberately NOT recovered by the sweep
+     * — restarting is an explicit act, never a side effect of a date passing.
+     * A PAUSE, though, lapses on its own, and at that moment the lead stops
+     * reading as suppressed: the Restart control disappears along with the only
+     * thing that would repair them, and they sit in no sequence at all with
+     * nothing on screen saying why.
+     *
+     * So the stranded state is flagged in its own right, independently of
+     * whether a suppression is still in force.
+     */
+    if (!suppression.suppressed && norm(row.link_sent) === "skipped_outreach_suppressed") {
+      flags.push("booking link stranded by a lifted stop — needs a restart");
+    }
+
     leads.push({
       eventId: String(row.event_id ?? "").trim(),
       personId,

@@ -445,7 +445,15 @@ export function OutreachTable({ leads, isAdmin, onStop, onRestart, onLeadAction 
           // "Insert into a sequence" is deliberately ABSENT. It is a send
           // button rather than the inverse of Stop, and it needs its own
           // preview naming the exact first message plus its preconditions.
-          if (l.suppression.suppressed) {
+          /**
+           * A lapsed PAUSE leaves the link row inert while the lead no longer
+           * reads as suppressed — so keying the Restart control on
+           * `suppressed` alone takes away the one thing that repairs them at
+           * the exact moment they need it. Offered for either condition.
+           */
+          const linkStranded = l.linkSent.trim().toLowerCase() === "skipped_outreach_suppressed";
+
+          if (l.suppression.suppressed || linkStranded) {
             return isAdmin ? (
               <Button size="sm" variant="outline" onClick={() => onRestart(l)} className="h-7 text-xs">
                 <Play className="h-3 w-3 mr-1" />
@@ -453,8 +461,14 @@ export function OutreachTable({ leads, isAdmin, onStop, onRestart, onLeadAction 
               </Button>
             ) : (
               <span className="text-[11px] text-gray-400 dark:text-gray-500">
-                {sup.word}
-                {sup.until && ` to ${sup.until}`}
+                {l.suppression.suppressed ? (
+                  <>
+                    {sup.word}
+                    {sup.until && ` to ${sup.until}`}
+                  </>
+                ) : (
+                  "needs restart"
+                )}
               </span>
             );
           }
@@ -590,7 +604,9 @@ export function OutreachTable({ leads, isAdmin, onStop, onRestart, onLeadAction 
                   <TableRow
                     className={cn(
                       "hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors border-gray-100 dark:border-gray-800",
-                      row.original.suppression.suppressed && "bg-amber-50/50 dark:bg-amber-950/20"
+                      (row.original.suppression.suppressed ||
+                        row.original.linkSent.trim().toLowerCase() === "skipped_outreach_suppressed") &&
+                        "bg-amber-50/50 dark:bg-amber-950/20"
                     )}
                   >
                     {row.getVisibleCells().map((cell) => (

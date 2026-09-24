@@ -88,7 +88,15 @@ export function RestartOutreachDialog({
               <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
                 <div className="font-medium">This can result in messages being sent.</div>
                 <ul className="mt-1 space-y-0.5">
-                  <li>· The stop on “{scope}” will be lifted.</li>
+                  {/* A lead reached through the "stranded" path has no stop
+                      left to lift — their pause lapsed on its own. Saying one
+                      will be lifted would describe an action that cannot
+                      happen. */}
+                  {target?.scopes.length ? (
+                    <li>· The stop on “{scope}” will be lifted.</li>
+                  ) : (
+                    <li>· Their stop has already lapsed — this repairs what it left behind.</li>
+                  )}
                   {target?.linkStranded && (
                     <li>
                       · Their booking link for{" "}
