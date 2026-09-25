@@ -245,10 +245,34 @@ component in this project** — the properties table uses the native `title=`
 attribute (see the override tooltip). Match that, and reuse the existing
 `_by` / `_at` pattern in the hover text.
 
-### 3b. "Property leased" — message and cancel
+### 3b. "Property leased" — message and cancel — **CANCEL + SUPPRESS BUILT 2026-09-24, NOTIFY NOT YET**
 
 One action that, for a property: messages every lead with an open inquiry to say
 the home is gone, cancels any booked showings, and suppresses their sequences.
+
+> **Two of the three are real and live today; the third has no home yet.**
+> `src/lib/google/leased-property-repository.ts` (the plan — tenant exclusion,
+> trash exclusion, per-lead message state), `leased-property-execute.ts` (cancel +
+> suppress, chunked and paced, re-plans every chunk), the `leased-plan` /
+> `leased-execute` routes, and `PropertyLeasedDialog` (wired into `/properties`'s
+> row menu, admin only) are all built and pass `tsc`/`eslint`. **Not yet exercised
+> against the live app** — no dev server was reachable to click through it in the
+> session that built it.
+>
+> **Notify is stubbed, not built.** Every message in this estate is sent by n8n
+> using credentials that live only in n8n's own store — nothing in this Next.js
+> app has ever held a Twilio or Gmail credential, and this is a message type
+> nothing sends today on either side. `leased-property-execute.ts`'s header
+> documents the exact contract for a NEW webhook,
+> `POST {N8N_BASE}/webhook/property-leased-notify`, and
+> `scripts/property-leased-setup.mjs` creates the four Settings keys the copy
+> will live in (`property_leased_sms_template`,
+> `property_leased_sms_cancel_note`, `property_leased_email_subject`,
+> `property_leased_email_body`) — **created BLANK, not yet run against the live
+> sheet, and the copy itself has not been written or signed off.** Until that
+> workflow exists, executing this action cancels and suppresses for real but
+> reports `notified: false` for everyone, which the dialog shows per lead rather
+> than hiding.
 
 **The new tenant is excluded entirely and receives NOTHING from this button.**
 Client decision 2026-09-22: Nicole handles move-in communication herself. They
