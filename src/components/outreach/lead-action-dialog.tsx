@@ -49,13 +49,14 @@ const COPY: Record<
   mark_verified: {
     title: "Mark ID verified by hand",
     description:
-      "Records that someone confirmed this lead's identity outside Stripe, and releases the booking link they are waiting on.",
+      "Records that someone confirmed this lead's identity outside Stripe, and releases every booking link they are waiting on — ID verification is one fact about the person, not per property.",
     endpoint: "/api/outreach/mark-verified",
     cta: "Mark verified",
     busy: "Recording…",
     effects: [
-      "They will not be asked to verify their ID again.",
-      "Their booking link is handed back to the sweep, which will send it.",
+      "They will not be asked to verify their ID again, for this or any other property.",
+      "Applies to EVERY property this lead has an open inquiry on — not just this one.",
+      "Every released booking link is sent immediately, not just queued.",
       "The ID verification reminders stop, because there is nothing left to chase.",
     ],
     withReason: true,
@@ -100,14 +101,17 @@ export function LeadActionDialog({
         restarted?: number;
         waived?: number;
         released?: number;
+        swept?: boolean;
         skipped?: Record<string, string>;
       }>(copy.endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           personId: target.personId,
-          // Scoped to the row the operator was looking at. Omitting it would
-          // silently act on every property this lead has ever inquired about.
+          // For restart_nudges this scopes the action to the row the operator
+          // was looking at. For mark_verified the backend ignores it for
+          // filtering (verification is person-level, not per-property) — it
+          // is sent only as audit-trail context for which row was open.
           propertyKey: target.propertyKey || undefined,
           ...(copy.withReason && reason ? { reason } : {}),
         }),
@@ -130,12 +134,14 @@ export function LeadActionDialog({
               (skipped.length ? ` (${skipped.length} row(s) skipped)` : "")
           );
         }
-      } else {
+      } else if (res.released) {
         toast.success(
-          res.released
-            ? `${who} marked verified — their booking link will be sent`
-            : `${who} marked verified`
+          res.swept
+            ? `${who} marked verified — ${res.released} booking link(s) sent`
+            : `${who} marked verified — ${res.released} link(s) released, but the send could not be confirmed. Check FUB.`
         );
+      } else {
+        toast.success(`${who} marked verified`);
       }
 
       onOpenChange(false);
@@ -168,13 +174,22 @@ export function LeadActionDialog({
             </ul>
           </div>
 
-          {target?.propertyAddress || target?.propertyKey ? (
+          {target?.kind === "restart_nudges" &&
+          (target?.propertyAddress || target?.propertyKey) ? (
             <p className="text-xs text-gray-500 dark:text-gray-400">
               Applies to{" "}
               <span className="font-medium text-gray-700 dark:text-gray-300">
                 {target.propertyAddress || target.propertyKey}
               </span>{" "}
               only. Other properties this lead has inquired about are untouched.
+            </p>
+          ) : null}
+
+          {target?.kind === "mark_verified" ? (
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Applies to <span className="font-medium text-gray-700 dark:text-gray-300">every</span>{" "}
+              property this lead currently has an open, unsent inquiry on — ID verification
+              covers the whole person, not one property.
             </p>
           ) : null}
 

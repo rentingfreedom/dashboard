@@ -588,9 +588,135 @@ v1 has Stop and Restart. The client wants a single **Actions** menu per row:
 
 ---
 
-## Part 5 — Nicole's follow-up task and the send-off (requested 2026-09-22)
+## Part 5 — Nicole's follow-up task and the send-off — **BUILT 2026-09-26, NOT YET ACTIVATED**
 
-New n8n work, requested by Justin. **Nothing here is built.**
+New n8n work, requested by Justin. Client decisions confirmed 2026-09-26 (answers
+to every open question below), built the same day as
+`RentingFreedom Production - No Response Follow-Up` (`24ZSshSO2T3HuHC9`),
+`scripts/n8n-create-no-response-followup.mjs`. **Created INACTIVE**;
+`followup_enabled` (Settings) is a second, independent kill switch, also
+FALSE. Neither has been flipped — see "Still open" below.
+
+> **One workflow, four chained phases, each its own small loop** — Find ID
+> task candidates → Find booking task candidates → Find due send-offs → Find
+> due tag+moves, matching this estate's own precedent (Identity Reminders,
+> Cal Booking Reminders) rather than one fused branching loop. State lives on
+> a NEW tab, `Followup_Tracking` (`scripts/followup-tracking-setup.mjs`) —
+> neither Identity_Verifications (per-reminder, not per-flow) nor Inquiries
+> (a booking flow spans multiple property rows) has a natural home for "has
+> this person's no-response flow started, and how far has it gotten".
+
+> **A real bug caught before activation, not after.** The first version had
+> no go-forward cutoff. `scripts/followup-preview.mjs` (read-only, no writes)
+> run against live data 2026-09-26 found **69 people already past their 2nd
+> reminder** (59 ID, 10 booking) — activating as built would have created 69
+> Nicole tasks on the first tick. Fixed with `followup_start_at`
+> (`scripts/followup-flow-settings-setup.mjs`), same discipline as
+> `inquiry_flow_start_at` / `cal_booking_reminder_start_at`: a 2nd-reminder
+> event before this timestamp is ignored. Re-running the preview after the
+> fix reports 0 candidates, as it should for a workflow that has never run.
+
+> **A second class of bug found and fixed during the build, not by testing:**
+> several nodes read `$json` immediately after a Twilio, Gmail, or FUB
+> HTTP-request node, which REPLACES `$json` with its own response (gotcha
+> 12) rather than passing the original data through. Every `Update Tracking`
+> write and every `FUB - Log Note` downstream of a send now reads its data
+> via an explicit named reference (`$('Resolve Sendoff').first().json...`)
+> instead. Unfixed, the practical effect would have been: a send-off is sent,
+> but the tracking row is never marked `sendoff_sent_at` — so the SAME lead
+> gets a second, third, and every-subsequent-hour send-off forever.
+
+### 5a. A FUB task for Nicole after the 2nd nudge — built as two independent tracks
+
+**Client decision 2026-09-26: two separate tasks (ID and booking), not one.**
+Each track creates its own row in `Followup_Tracking` and its own FUB task,
+independently timed and independently cancellable.
+
+- **ID track**: triggers off `Identity_Verifications` rows with
+  `reminder_number = 2` and a real `sent_at` — i.e. exactly when the Identity
+  Reminders workflow's own 2nd reminder fires (already the 10am ET window).
+- **Booking track — client decision 2026-09-26, "whichever property hits
+  second":** a lead stalled on two properties must NOT be moved toward Cold
+  because one property's nudges are ahead of the other. The trigger is: every
+  property the lead is CURRENTLY stalled on (linked, not yet booked) has
+  reached its own 2nd nudge; the anchor timestamp is the LATEST of those —
+  the slower property is definitionally the one that pushes the group over
+  the threshold last. Booking ANY one of them cancels the whole flow (see 5b).
+- **Dedup**: an OPEN row (no `responded_at`/`cancelled_at`) for that
+  (person, track) blocks a new one. A CLOSED row does not — a person who
+  finishes this flow once and later inquires again is eligible for a fresh one.
+- **Gated at creation**: `allowed_stages` and the three trash tags/stages,
+  re-checked live against FUB at the moment the task would be created — not
+  from a stale Inquiries/Identity_Verifications snapshot.
+
+> **"Cancelled when the lead leaves the tenant-looking stages" is
+> implemented as "the remaining AUTOMATED steps are skipped", not as
+> deleting or completing the FUB task itself.** FUB's task API has no clean
+> "cancel" distinct from complete/delete, and this estate's convention is
+> record-don't-drop. A lead who drifts out of scope after the task is
+> created still has an open task for Nicole to act on or dismiss by hand;
+> what stops automatically is the send-off and the tag+move.
+
+### 5b. The send-off message, 4 ET-calendar-days after the task
+
+**Client decision 2026-09-26: "if they book a showing" (booking track) / "if
+they verify their ID" (ID track) is what counts as responded** — settling
+the open question below. Checked live at send time, not from a stale flag.
+
+Copy — client's verbatim text as the EMAIL body; a SHORT, separately-derived
+SMS (client confirmed 2026-09-26 this should not be the same wall of text on
+both channels, matching every other dual-channel template in this estate).
+Both are DRAFT, in Settings (`followup_sendoff_sms_template`,
+`followup_sendoff_email_subject`, `followup_sendoff_email_body`) —
+**not yet client-signed-off.** One known wording note, left verbatim
+pending sign-off: "try and base with you" is almost certainly meant to read
+"touch base with you".
+
+`{{contact_first_name}}` / `{{inquiry_address}}` are the estate's own
+placeholder convention (the client's `%...%` form translated). SMS renders
+through `sms_footer` like every other lead-facing template; the email does
+not (`CAL_LINK_EMAIL_COPY_MARKER` precedent). Stage/trash-gated and
+re-checked live, same as task creation.
+
+> **Outreach_Suppression is NOT consulted, and that is a known, deliberate
+> gap for now — not an oversight.** Wiring it in is the same one-node
+> `executeOnce` splice as every other `OUTREACH_SUPPRESSION_MARKER` site;
+> it was left out of this first build to keep the change reviewable, and
+> should be added before activation if a stopped lead must never receive a
+> send-off. Worth a decision, not a silent addition.
+
+### 5c. One day later — tag and move
+
+**Client decision 2026-09-26: yes, the existing `No Response Trash` tag**,
+settling the open question below. `FUB - Update Person (Tag+Stage)` writes
+`stage`, `tags` (existing tags read live and merged — FUB's PUT replaces the
+whole array, so survivors are re-sent verbatim, same as the tag-expiry
+cleanup precedent) and `customTrashDate` (stamped in the SAME PUT — the
+dateless-trash-tag lesson: a tag with no date reads as already-expired) in
+one call.
+
+### Open questions for the client — ALL ANSWERED 2026-09-26
+
+| Question | Answer |
+|---|---|
+| What counts as "responded"? | ID track: they verify. Booking track: they book ANY showing (not property-specific). |
+| Two follow-up tasks (ID + booking) or one? | Two, independent. |
+| Is `[no response]` the existing `No Response Trash` tag? | Yes. |
+| Timing of the send-off/tag relative to the 2nd nudge? | +4 ET-calendar-days after the task, then +1 more after the send-off. |
+| Multi-property booking-nudge handling? | "Whichever property hits second" — wait for every currently-stalled property, not the first to reach nudge 2. |
+
+### Still open before this can be activated
+
+1. **Client sign-off on the send-off SMS/email copy** — it is DRAFT.
+2. **Whether to wire in `Outreach_Suppression`** before go-live (see 5b).
+3. **`followup_enabled` and the workflow's own active flag both need
+   flipping** — deliberately two separate switches, neither touched yet.
+4. **No offline verifier exists for this build**, unlike most features this
+   size in this estate (`*-verify.mjs`, typically 40–100+ assertions against
+   the live deployed code). `followup-preview.mjs` is read-only and covers
+   candidate detection only, not the send-off/tag phases (nothing can be due
+   for those yet, since the workflow has never run) — worth building before
+   activation, not after.
 
 ### 5a. A FUB task for Nicole after the 2nd nudge
 

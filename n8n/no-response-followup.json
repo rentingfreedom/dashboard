@@ -1,0 +1,3369 @@
+{
+  "updatedAt": "2026-09-25T20:20:31.051Z",
+  "createdAt": "2026-09-25T20:20:31.051Z",
+  "id": "24ZSshSO2T3HuHC9",
+  "name": "RentingFreedom Production - No Response Follow-Up",
+  "description": null,
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "fu-trigger",
+      "name": "Hourly Tick",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        500
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "fu-read-settings",
+      "name": "Read Settings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        500
+      ],
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Settings",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "id": "fu-read-iv",
+      "name": "Read Identity Verifications",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        440,
+        500
+      ],
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Identity_Verifications",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "executeOnce": true
+    },
+    {
+      "id": "fu-read-inq",
+      "name": "Read Inquiries",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        660,
+        500
+      ],
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Inquiries",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "executeOnce": true
+    },
+    {
+      "id": "fu-read-track",
+      "name": "Read Followup Tracking",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        880,
+        500
+      ],
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Followup_Tracking",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "executeOnce": true
+    },
+    {
+      "id": "fu-find-id-task",
+      "name": "Find ID Task Candidates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        500
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// FOLLOWUP_FLOW_MARKER -- Part 5, client decision 2026-09-26.\nconst settingsRows = $('Read Settings').all().map(i => i.json);\nconst settings = {};\nfor (const r of settingsRows) { const k = String(r.key ?? '').trim(); if (k) settings[k] = String(r.value ?? '').trim(); }\nif (String(settings.followup_enabled || '').trim().toLowerCase() !== 'true') {\n  console.log('[followup] followup_enabled is not true -- 0 ID-task candidates');\n  return [];\n}\n\nconst trackRows = $('Read Followup Tracking').all().map(i => i.json);\nconst openIds = new Set(\n  trackRows.filter(r => String(r.track ?? '').trim() === 'id_verification')\n    .filter(r => !String(r.responded_at ?? '').trim() && !String(r.cancelled_at ?? '').trim())\n    .map(r => String(r.person_id ?? '').trim())\n);\n\nconst ivRows = $('Read Identity Verifications').all().map(i => i.json);\nconst latest = new Map();\nfor (const row of ivRows) {\n  if (String(row.reminder_number ?? '').trim() !== '2') continue;\n  const sentAt = String(row.sent_at ?? '').trim();\n  if (!sentAt) continue;\n  const personId = String(row.lead_id ?? '').trim();\n  if (!personId) continue;\n  const prior = latest.get(personId);\n  if (!prior || Date.parse(sentAt) > Date.parse(prior)) latest.set(personId, sentAt);\n}\n\n// Go-forward cutoff -- same discipline as inquiry_flow_start_at /\n// cal_booking_reminder_start_at. Without it, activating this workflow for\n// the first time would create a task for every lead ALREADY past their 2nd\n// reminder (69 of them, measured 2026-09-26) in one tick. Unparseable/missing\n// fails CLOSED -- nothing is ever due, not \"treat as always past\".\nconst startAtMs = Date.parse(settings.followup_start_at || '');\nconst startOk = Number.isFinite(startAtMs);\n\nconst out = [];\nfor (const [personId, anchorAt] of latest) {\n  if (openIds.has(personId)) continue;\n  if (!startOk || Date.parse(anchorAt) <= startAtMs) continue;\n  out.push({ json: { person_id: personId, track: 'id_verification', anchor_at: anchorAt,\n                      driving_property_key: '', driving_property_address: '' } });\n}\nconsole.log('[followup] ID task candidates: ' + out.length);\nreturn out;"
+      }
+    },
+    {
+      "id": "fu-id-loop",
+      "name": "ID Task Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1320,
+        500
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "fu-id-get-person",
+      "name": "FUB - Get Person (ID Task)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        420
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://api.followupboss.com/v1/people/' + $json.person_id + '?fields=allFields' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "id": "fu-id-resolve",
+      "name": "Resolve ID Task",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        420
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const norm = (s) => String(s ?? '').trim().toLowerCase();\nconst TRASH_TAGS = ['permanent trash', 'no response trash', 'denied credit'];\nconst TRASH_STAGES = ['trash', 'permanent trash', 'cold rental lead 1 month hold'];\nfunction guardVerdict(person, allowedStages) {\n  if (!person || !person.id) return { ok: false, reason: 'person_not_found' };\n  const stage = norm(person.stage);\n  const tags = (person.tags || []).map(norm);\n  const hitTags = tags.filter(t => TRASH_TAGS.indexOf(t) !== -1);\n  if (hitTags.length) return { ok: false, reason: 'trash_tag:' + hitTags.join('/'), stage, tags: person.tags || [] };\n  if (TRASH_STAGES.indexOf(stage) !== -1) return { ok: false, reason: 'trash_stage:' + stage, stage, tags: person.tags || [] };\n  if (allowedStages.length && allowedStages.indexOf(stage) === -1) return { ok: false, reason: 'stage_not_allowed:' + stage, stage, tags: person.tags || [] };\n  return { ok: true, reason: '', stage, tags: person.tags || [] };\n}\nconst settingsRows = $('Read Settings').all().map(i => i.json);\nconst settings = {};\nfor (const r of settingsRows) { const k = String(r.key ?? '').trim(); if (k) settings[k] = String(r.value ?? '').trim(); }\nconst allowed = String(settings.allowed_stages || '').split(',').map(norm).filter(Boolean);\n\nconst d = $('ID Task Loop').first().json; // batchSize 1, cf. gotcha 11\nconst resp = $json || {};\nconst person = (resp.people && resp.people[0]) ? resp.people[0] : resp;\nconst v = guardVerdict(person, allowed);\n\nif (!v.ok) return [{ json: Object.assign({}, d, { proceed: false, skip_reason: v.reason }) }];\n\nconst etDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());\nconst nicoleId = Number(settings.fub_nicole_user_id || 0);\nconst taskName = String(settings.followup_task_name || '').trim() || 'Follow up - no response';\n\nreturn [{ json: Object.assign({}, d, {\n  proceed: true, assigned_user_id: nicoleId, task_name: taskName, task_due_date: etDate,\n}) }];"
+      }
+    },
+    {
+      "id": "fu-id-guard-if",
+      "name": "Guard OK? (ID Task)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        420
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.proceed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "fu-id-create-task",
+      "name": "FUB - Create Task (ID)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        340
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/tasks",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($json.person_id), name: $json.task_name, type: 'Follow Up', assignedUserId: Number($json.assigned_user_id), dueDate: $json.task_due_date }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "id": "fu-id-log-note",
+      "name": "FUB - Log Note (ID Task Created)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        340
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Resolve ID Task').first().json.person_id || 0), body: 'Automated follow-up: 2nd ID verification reminder sent with no response. Phone-call task created for Nicole.' }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "id": "fu-id-append-track",
+      "name": "Append Followup Tracking Row (ID)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2640,
+        340
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Followup_Tracking",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "person_id": "={{ $('Resolve ID Task').first().json.person_id }}",
+            "track": "={{ $('Resolve ID Task').first().json.track }}",
+            "driving_property_key": "={{ $('Resolve ID Task').first().json.driving_property_key || '' }}",
+            "driving_property_address": "={{ $('Resolve ID Task').first().json.driving_property_address || '' }}",
+            "task_created_at": "={{ new Date().toISOString() }}",
+            "sendoff_sent_at": "",
+            "tagged_at": "",
+            "responded_at": "",
+            "cancelled_at": "",
+            "cancelled_reason": ""
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "track",
+              "displayName": "track",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "driving_property_key",
+              "displayName": "driving_property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "driving_property_address",
+              "displayName": "driving_property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "task_created_at",
+              "displayName": "task_created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sendoff_sent_at",
+              "displayName": "sendoff_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "tagged_at",
+              "displayName": "tagged_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "responded_at",
+              "displayName": "responded_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cancelled_at",
+              "displayName": "cancelled_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cancelled_reason",
+              "displayName": "cancelled_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "fu-id-loopback",
+      "name": "Loop Back (ID Task)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2860,
+        500
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "fu-find-book-task",
+      "name": "Find Booking Task Candidates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        660
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const settingsRows = $('Read Settings').all().map(i => i.json);\nconst settings = {};\nfor (const r of settingsRows) { const k = String(r.key ?? '').trim(); if (k) settings[k] = String(r.value ?? '').trim(); }\nif (String(settings.followup_enabled || '').trim().toLowerCase() !== 'true') {\n  console.log('[followup] followup_enabled is not true -- 0 booking-task candidates');\n  return [];\n}\nconst norm = (s) => String(s ?? '').trim().toLowerCase();\n\nconst trackRows = $('Read Followup Tracking').all().map(i => i.json);\nconst openIds = new Set(\n  trackRows.filter(r => String(r.track ?? '').trim() === 'booking')\n    .filter(r => !String(r.responded_at ?? '').trim() && !String(r.cancelled_at ?? '').trim())\n    .map(r => String(r.person_id ?? '').trim())\n);\n\nconst inqRows = $('Read Inquiries').all().map(i => i.json);\nconst byPerson = new Map();\nfor (const row of inqRows) {\n  if (norm(row.link_sent) !== 'true') continue;       // never delivered -> not on the nudge track\n  if (String(row.booked_at ?? '').trim()) continue;    // already booked -> not \"active\"\n  const personId = String(row.person_id ?? '').trim();\n  if (!personId) continue;\n  const list = byPerson.get(personId) ?? [];\n  list.push(row);\n  byPerson.set(personId, list);\n}\n\n// Go-forward cutoff -- see the matching comment in Find ID Task Candidates.\nconst startAtMs = Date.parse(settings.followup_start_at || '');\nconst startOk = Number.isFinite(startAtMs);\n\nconst out = [];\nfor (const [personId, rows] of byPerson) {\n  if (openIds.has(personId)) continue;\n  // Every currently-active property must have reached its 2nd nudge. The\n  // anchor is the LATEST booking_reminder_last_at among them -- the slowest\n  // row is definitionally the one that pushed the group over the threshold.\n  let minCount = Infinity, latestAt = '', latestKey = '', latestAddr = '';\n  for (const row of rows) {\n    const c = parseInt(row.booking_reminder_count, 10);\n    const count = Number.isFinite(c) ? c : 0;\n    if (count < minCount) minCount = count;\n    const lastAt = String(row.booking_reminder_last_at ?? '').trim();\n    if (lastAt && (!latestAt || Date.parse(lastAt) > Date.parse(latestAt))) {\n      latestAt = lastAt;\n      latestKey = String(row.property_key ?? '').trim();\n      latestAddr = String(row.property_address ?? '').trim();\n    }\n  }\n  if (minCount < 2) continue;  // still actively nudging at least one property\n  if (!latestAt) continue;     // defensive -- nothing to anchor on\n  if (!startOk || Date.parse(latestAt) <= startAtMs) continue;\n  out.push({ json: { person_id: personId, track: 'booking', anchor_at: latestAt,\n                      driving_property_key: latestKey, driving_property_address: latestAddr } });\n}\nconsole.log('[followup] booking task candidates: ' + out.length);\nreturn out;"
+      }
+    },
+    {
+      "id": "fu-book-loop",
+      "name": "Booking Task Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1540,
+        660
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "fu-book-get-person",
+      "name": "FUB - Get Person (Booking Task)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        580
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://api.followupboss.com/v1/people/' + $json.person_id + '?fields=allFields' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "id": "fu-book-resolve",
+      "name": "Resolve Booking Task",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        580
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const norm = (s) => String(s ?? '').trim().toLowerCase();\nconst TRASH_TAGS = ['permanent trash', 'no response trash', 'denied credit'];\nconst TRASH_STAGES = ['trash', 'permanent trash', 'cold rental lead 1 month hold'];\nfunction guardVerdict(person, allowedStages) {\n  if (!person || !person.id) return { ok: false, reason: 'person_not_found' };\n  const stage = norm(person.stage);\n  const tags = (person.tags || []).map(norm);\n  const hitTags = tags.filter(t => TRASH_TAGS.indexOf(t) !== -1);\n  if (hitTags.length) return { ok: false, reason: 'trash_tag:' + hitTags.join('/'), stage, tags: person.tags || [] };\n  if (TRASH_STAGES.indexOf(stage) !== -1) return { ok: false, reason: 'trash_stage:' + stage, stage, tags: person.tags || [] };\n  if (allowedStages.length && allowedStages.indexOf(stage) === -1) return { ok: false, reason: 'stage_not_allowed:' + stage, stage, tags: person.tags || [] };\n  return { ok: true, reason: '', stage, tags: person.tags || [] };\n}\nconst settingsRows = $('Read Settings').all().map(i => i.json);\nconst settings = {};\nfor (const r of settingsRows) { const k = String(r.key ?? '').trim(); if (k) settings[k] = String(r.value ?? '').trim(); }\nconst allowed = String(settings.allowed_stages || '').split(',').map(norm).filter(Boolean);\n\nconst d = $('Booking Task Loop').first().json; // batchSize 1, cf. gotcha 11\nconst resp = $json || {};\nconst person = (resp.people && resp.people[0]) ? resp.people[0] : resp;\nconst v = guardVerdict(person, allowed);\n\nif (!v.ok) return [{ json: Object.assign({}, d, { proceed: false, skip_reason: v.reason }) }];\n\nconst etDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());\nconst nicoleId = Number(settings.fub_nicole_user_id || 0);\nconst taskName = String(settings.followup_task_name || '').trim() || 'Follow up - no response';\n\nreturn [{ json: Object.assign({}, d, {\n  proceed: true, assigned_user_id: nicoleId, task_name: taskName, task_due_date: etDate,\n}) }];"
+      }
+    },
+    {
+      "id": "fu-book-guard-if",
+      "name": "Guard OK? (Booking Task)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
+        580
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.proceed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "fu-book-create-task",
+      "name": "FUB - Create Task (Booking)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        500
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/tasks",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($json.person_id), name: $json.task_name, type: 'Follow Up', assignedUserId: Number($json.assigned_user_id), dueDate: $json.task_due_date }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "id": "fu-book-log-note",
+      "name": "FUB - Log Note (Booking Task Created)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        500
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Resolve Booking Task').first().json.person_id || 0), body: 'Automated follow-up: 2nd booking nudge sent with no response (' + ($('Resolve Booking Task').first().json.driving_property_address || $('Resolve Booking Task').first().json.driving_property_key || 'a property') + '). Phone-call task created for Nicole.' }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "id": "fu-book-append-track",
+      "name": "Append Followup Tracking Row (Booking)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2860,
+        500
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Followup_Tracking",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "person_id": "={{ $('Resolve Booking Task').first().json.person_id }}",
+            "track": "={{ $('Resolve Booking Task').first().json.track }}",
+            "driving_property_key": "={{ $('Resolve Booking Task').first().json.driving_property_key || '' }}",
+            "driving_property_address": "={{ $('Resolve Booking Task').first().json.driving_property_address || '' }}",
+            "task_created_at": "={{ new Date().toISOString() }}",
+            "sendoff_sent_at": "",
+            "tagged_at": "",
+            "responded_at": "",
+            "cancelled_at": "",
+            "cancelled_reason": ""
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "track",
+              "displayName": "track",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "driving_property_key",
+              "displayName": "driving_property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "driving_property_address",
+              "displayName": "driving_property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "task_created_at",
+              "displayName": "task_created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sendoff_sent_at",
+              "displayName": "sendoff_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "tagged_at",
+              "displayName": "tagged_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "responded_at",
+              "displayName": "responded_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cancelled_at",
+              "displayName": "cancelled_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cancelled_reason",
+              "displayName": "cancelled_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "fu-book-loopback",
+      "name": "Loop Back (Booking Task)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3080,
+        660
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "fu-find-sendoff",
+      "name": "Find Sendoff Candidates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        820
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const settingsRows = $('Read Settings').all().map(i => i.json);\nconst settings = {};\nfor (const r of settingsRows) { const k = String(r.key ?? '').trim(); if (k) settings[k] = String(r.value ?? '').trim(); }\nif (String(settings.followup_enabled || '').trim().toLowerCase() !== 'true') return [];\nfunction etDayIndex(d) {\n  const s = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);\n  return Math.floor(Date.parse(s + 'T00:00:00Z') / 86400000);\n}\nfunction etDaysSince(iso) {\n  const t = Date.parse(iso);\n  if (!Number.isFinite(t)) return null; // unparseable -> never due, the safe direction\n  return etDayIndex(new Date()) - etDayIndex(new Date(t));\n}\nconst daysToSendoff = Number(settings.followup_days_to_sendoff || 4);\n\nconst out = [];\nfor (const item of $('Read Followup Tracking').all()) {\n  const r = item.json;\n  if (!String(r.task_created_at ?? '').trim()) continue;\n  if (String(r.sendoff_sent_at ?? '').trim()) continue;\n  if (String(r.responded_at ?? '').trim()) continue;\n  if (String(r.cancelled_at ?? '').trim()) continue;\n  const days = etDaysSince(r.task_created_at);\n  if (days === null || days < daysToSendoff) continue;\n  out.push({ json: Object.assign({}, r) });\n}\nconsole.log('[followup] sendoff candidates: ' + out.length);\nreturn out;"
+      }
+    },
+    {
+      "id": "fu-sendoff-loop",
+      "name": "Sendoff Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1760,
+        820
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "fu-sendoff-get-person",
+      "name": "FUB - Get Person (Sendoff)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        740
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://api.followupboss.com/v1/people/' + $json.person_id + '?fields=allFields' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "id": "fu-sendoff-resolve",
+      "name": "Resolve Sendoff",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        740
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const norm = (s) => String(s ?? '').trim().toLowerCase();\nconst TRASH_TAGS = ['permanent trash', 'no response trash', 'denied credit'];\nconst TRASH_STAGES = ['trash', 'permanent trash', 'cold rental lead 1 month hold'];\nfunction guardVerdict(person, allowedStages) {\n  if (!person || !person.id) return { ok: false, reason: 'person_not_found' };\n  const stage = norm(person.stage);\n  const tags = (person.tags || []).map(norm);\n  const hitTags = tags.filter(t => TRASH_TAGS.indexOf(t) !== -1);\n  if (hitTags.length) return { ok: false, reason: 'trash_tag:' + hitTags.join('/'), stage, tags: person.tags || [] };\n  if (TRASH_STAGES.indexOf(stage) !== -1) return { ok: false, reason: 'trash_stage:' + stage, stage, tags: person.tags || [] };\n  if (allowedStages.length && allowedStages.indexOf(stage) === -1) return { ok: false, reason: 'stage_not_allowed:' + stage, stage, tags: person.tags || [] };\n  return { ok: true, reason: '', stage, tags: person.tags || [] };\n}\nconst settingsRows = $('Read Settings').all().map(i => i.json);\nconst settings = {};\nfor (const r of settingsRows) { const k = String(r.key ?? '').trim(); if (k) settings[k] = String(r.value ?? '').trim(); }\nconst allowed = String(settings.allowed_stages || '').split(',').map(norm).filter(Boolean);\n\nconst d = $('Sendoff Loop').first().json; // batchSize 1\nconst resp = $json || {};\nconst person = (resp.people && resp.people[0]) ? resp.people[0] : resp;\n\n// Responded first -- a lead who responded but has since drifted stage should\n// still be recorded as responded, not cancelled; response is the better fact.\nconst track = String(d.track ?? '').trim();\nlet responded = false;\nif (track === 'id_verification') {\n  const ivRows = $('Read Identity Verifications').all().map(i => i.json);\n  responded = ivRows.some(r => String(r.lead_id ?? '').trim() === String(d.person_id ?? '').trim()\n                              && norm(r.status) === 'verified');\n} else {\n  const inqRows = $('Read Inquiries').all().map(i => i.json);\n  responded = inqRows.some(r => String(r.person_id ?? '').trim() === String(d.person_id ?? '').trim()\n                               && String(r.booked_at ?? '').trim());\n}\nif (responded) return [{ json: Object.assign({}, d, { outcome: 'responded' }) }];\n\nconst v = guardVerdict(person, allowed);\nif (!v.ok) return [{ json: Object.assign({}, d, { outcome: 'cancelled', cancel_reason: v.reason }) }];\n\nconst contactFirstName = String((person.firstName || '')).trim();\nconst inquiryAddress = String(d.driving_property_address || 'your rental inquiry').trim();\n\nconst smsRaw = String(settings.followup_sendoff_sms_template || '')\n  .replace(/\\{\\{contact_first_name\\}\\}/g, contactFirstName)\n  .replace(/\\{\\{inquiry_address\\}\\}/g, inquiryAddress);\nconst smsFooter = String(settings.sms_footer || '').trim();\nconst smsMessage = (!smsFooter || !smsRaw || smsRaw.includes(smsFooter)) ? smsRaw : (smsRaw + '\\n\\n' + smsFooter);\n\nconst emailSubject = String(settings.followup_sendoff_email_subject || '')\n  .replace(/\\{\\{contact_first_name\\}\\}/g, contactFirstName)\n  .replace(/\\{\\{inquiry_address\\}\\}/g, inquiryAddress);\nconst emailBody = String(settings.followup_sendoff_email_body || '')\n  .replace(/\\{\\{contact_first_name\\}\\}/g, contactFirstName)\n  .replace(/\\{\\{inquiry_address\\}\\}/g, inquiryAddress);\n\nconst phone = (person.phones && person.phones[0] && person.phones[0].value) || d.phone || '';\nconst email = (person.emails && person.emails[0] && person.emails[0].value) || d.email || '';\n\nreturn [{ json: Object.assign({}, d, {\n  outcome: 'send', has_phone: !!phone, has_email: !!email, phone: String(phone), email: String(email),\n  from_number: settings.from_number || '', message: smsMessage, subject: emailSubject, email_body: emailBody,\n}) }];"
+      }
+    },
+    {
+      "id": "fu-sendoff-responded-if",
+      "name": "Responded? (Sendoff)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2420,
+        740
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.outcome === 'responded' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "fu-sendoff-mark-responded",
+      "name": "Update Tracking (Sendoff Responded)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2640,
+        660
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Followup_Tracking",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "row_number": "={{ $('Resolve Sendoff').first().json.row_number }}",
+            "responded_at": "={{ new Date().toISOString() }}"
+          },
+          "matchingColumns": [
+            "row_number"
+          ],
+          "schema": [
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "track",
+              "displayName": "track",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "driving_property_key",
+              "displayName": "driving_property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "driving_property_address",
+              "displayName": "driving_property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "task_created_at",
+              "displayName": "task_created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sendoff_sent_at",
+              "displayName": "sendoff_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "tagged_at",
+              "displayName": "tagged_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "responded_at",
+              "displayName": "responded_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cancelled_at",
+              "displayName": "cancelled_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cancelled_reason",
+              "displayName": "cancelled_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "fu-sendoff-note-responded",
+      "name": "FUB - Log Note (Responded, Sendoff)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        660
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Resolve Sendoff').first().json.person_id || 0), body: 'Automated follow-up cancelled: lead responded before the send-off was due.' }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "id": "fu-sendoff-guard-if",
+      "name": "Guard OK? (Sendoff)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        820
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.outcome === 'send' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "fu-sendoff-mark-cancelled",
+      "name": "Update Tracking (Sendoff Cancelled)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2860,
+        900
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Followup_Tracking",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "row_number": "={{ $('Resolve Sendoff').first().json.row_number }}",
+            "cancelled_at": "={{ new Date().toISOString() }}",
+            "cancelled_reason": "={{ $('Resolve Sendoff').first().json.cancel_reason || '' }}"
+          },
+          "matchingColumns": [
+            "row_number"
+          ],
+          "schema": [
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "track",
+              "displayName": "track",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "driving_property_key",
+              "displayName": "driving_property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "driving_property_address",
+              "displayName": "driving_property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "task_created_at",
+              "displayName": "task_created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sendoff_sent_at",
+              "displayName": "sendoff_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "tagged_at",
+              "displayName": "tagged_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "responded_at",
+              "displayName": "responded_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cancelled_at",
+              "displayName": "cancelled_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cancelled_reason",
+              "displayName": "cancelled_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "fu-sendoff-note-cancelled",
+      "name": "FUB - Log Note (Sendoff Cancelled)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3080,
+        900
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Resolve Sendoff').first().json.person_id || 0), body: 'Automated follow-up cancelled: ' + ($('Resolve Sendoff').first().json.cancel_reason || 'lead now out of scope') + '.' }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "id": "fu-sendoff-has-phone",
+      "name": "Has Phone? (Sendoff)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2860,
+        740
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.has_phone }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "fu-sendoff-send-sms",
+      "name": "Send Sendoff SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        3080,
+        660
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      },
+      "parameters": {
+        "from": "={{ $('Resolve Sendoff').first().json.from_number }}",
+        "to": "={{ $('Resolve Sendoff').first().json.phone }}",
+        "message": "={{ $('Resolve Sendoff').first().json.message }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "fu-sendoff-sms-failed",
+      "name": "Sendoff SMS Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3300,
+        660
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ !!$json.error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "fu-sendoff-sms-fail-note",
+      "name": "FUB - Log Note (Sendoff SMS Failed)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3520,
+        600
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Resolve Sendoff').first().json.person_id || 0), body: 'Automated no-response send-off SMS FAILED: ' + (($json.error && $json.error.message) || JSON.stringify($json.error) || 'unknown error') }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "id": "fu-sendoff-sms-ok-note",
+      "name": "FUB - Log Note (Sendoff SMS Sent)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3520,
+        720
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Resolve Sendoff').first().json.person_id || 0), body: 'Automated no-response send-off SMS sent.' }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "id": "fu-sendoff-has-email",
+      "name": "Has Email? (Sendoff)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3740,
+        740
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $('Resolve Sendoff').first().json.has_email }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "fu-sendoff-send-email",
+      "name": "Send Sendoff Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        3960,
+        660
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "8F2JkQuOKIKFO18Z",
+          "name": "Gmail account"
+        }
+      },
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Resolve Sendoff').first().json.email }}",
+        "subject": "={{ $('Resolve Sendoff').first().json.subject }}",
+        "message": "={{ $('Resolve Sendoff').first().json.email_body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "webhookId": "b48d74f9-b370-40cb-b659-827c88fec688"
+    },
+    {
+      "id": "fu-sendoff-email-failed",
+      "name": "Sendoff Email Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4180,
+        660
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ !!$json.error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "fu-sendoff-email-fail-note",
+      "name": "FUB - Log Note (Sendoff Email Failed)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4400,
+        600
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Resolve Sendoff').first().json.person_id || 0), body: 'Automated no-response send-off email FAILED: ' + (($json.error && $json.error.message) || JSON.stringify($json.error) || 'unknown error') }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "id": "fu-sendoff-email-ok-note",
+      "name": "FUB - Log Note (Sendoff Email Sent)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4400,
+        720
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Resolve Sendoff').first().json.person_id || 0), body: 'Automated no-response send-off email sent.' }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "id": "fu-sendoff-mark-sent",
+      "name": "Update Tracking (Sendoff Sent)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        4620,
+        740
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Followup_Tracking",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "row_number": "={{ $('Resolve Sendoff').first().json.row_number }}",
+            "sendoff_sent_at": "={{ new Date().toISOString() }}"
+          },
+          "matchingColumns": [
+            "row_number"
+          ],
+          "schema": [
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "track",
+              "displayName": "track",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "driving_property_key",
+              "displayName": "driving_property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "driving_property_address",
+              "displayName": "driving_property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "task_created_at",
+              "displayName": "task_created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sendoff_sent_at",
+              "displayName": "sendoff_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "tagged_at",
+              "displayName": "tagged_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "responded_at",
+              "displayName": "responded_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cancelled_at",
+              "displayName": "cancelled_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cancelled_reason",
+              "displayName": "cancelled_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "fu-sendoff-loopback",
+      "name": "Loop Back (Sendoff)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        4840,
+        820
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "fu-find-tag",
+      "name": "Find Tag Candidates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        980
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const settingsRows = $('Read Settings').all().map(i => i.json);\nconst settings = {};\nfor (const r of settingsRows) { const k = String(r.key ?? '').trim(); if (k) settings[k] = String(r.value ?? '').trim(); }\nif (String(settings.followup_enabled || '').trim().toLowerCase() !== 'true') return [];\nfunction etDayIndex(d) {\n  const s = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);\n  return Math.floor(Date.parse(s + 'T00:00:00Z') / 86400000);\n}\nfunction etDaysSince(iso) {\n  const t = Date.parse(iso);\n  if (!Number.isFinite(t)) return null; // unparseable -> never due, the safe direction\n  return etDayIndex(new Date()) - etDayIndex(new Date(t));\n}\nconst daysToTag = Number(settings.followup_days_to_tag || 1);\n\nconst out = [];\nfor (const item of $('Read Followup Tracking').all()) {\n  const r = item.json;\n  if (!String(r.sendoff_sent_at ?? '').trim()) continue;\n  if (String(r.tagged_at ?? '').trim()) continue;\n  if (String(r.responded_at ?? '').trim()) continue;\n  if (String(r.cancelled_at ?? '').trim()) continue;\n  const days = etDaysSince(r.sendoff_sent_at);\n  if (days === null || days < daysToTag) continue;\n  out.push({ json: Object.assign({}, r) });\n}\nconsole.log('[followup] tag candidates: ' + out.length);\nreturn out;"
+      }
+    },
+    {
+      "id": "fu-tag-loop",
+      "name": "Tag Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1980,
+        980
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "fu-tag-get-person",
+      "name": "FUB - Get Person (Tag)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        900
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://api.followupboss.com/v1/people/' + $json.person_id + '?fields=allFields' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "id": "fu-tag-resolve",
+      "name": "Resolve Tag",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        900
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const norm = (s) => String(s ?? '').trim().toLowerCase();\nconst TRASH_TAGS = ['permanent trash', 'no response trash', 'denied credit'];\nconst TRASH_STAGES = ['trash', 'permanent trash', 'cold rental lead 1 month hold'];\nfunction guardVerdict(person, allowedStages) {\n  if (!person || !person.id) return { ok: false, reason: 'person_not_found' };\n  const stage = norm(person.stage);\n  const tags = (person.tags || []).map(norm);\n  const hitTags = tags.filter(t => TRASH_TAGS.indexOf(t) !== -1);\n  if (hitTags.length) return { ok: false, reason: 'trash_tag:' + hitTags.join('/'), stage, tags: person.tags || [] };\n  if (TRASH_STAGES.indexOf(stage) !== -1) return { ok: false, reason: 'trash_stage:' + stage, stage, tags: person.tags || [] };\n  if (allowedStages.length && allowedStages.indexOf(stage) === -1) return { ok: false, reason: 'stage_not_allowed:' + stage, stage, tags: person.tags || [] };\n  return { ok: true, reason: '', stage, tags: person.tags || [] };\n}\nconst settingsRows = $('Read Settings').all().map(i => i.json);\nconst settings = {};\nfor (const r of settingsRows) { const k = String(r.key ?? '').trim(); if (k) settings[k] = String(r.value ?? '').trim(); }\nconst allowed = String(settings.allowed_stages || '').split(',').map(norm).filter(Boolean);\n\nconst d = $('Tag Loop').first().json; // batchSize 1\nconst resp = $json || {};\nconst person = (resp.people && resp.people[0]) ? resp.people[0] : resp;\n\n// Responded first -- a lead who responded but has since drifted stage should\n// still be recorded as responded, not cancelled; response is the better fact.\nconst track = String(d.track ?? '').trim();\nlet responded = false;\nif (track === 'id_verification') {\n  const ivRows = $('Read Identity Verifications').all().map(i => i.json);\n  responded = ivRows.some(r => String(r.lead_id ?? '').trim() === String(d.person_id ?? '').trim()\n                              && norm(r.status) === 'verified');\n} else {\n  const inqRows = $('Read Inquiries').all().map(i => i.json);\n  responded = inqRows.some(r => String(r.person_id ?? '').trim() === String(d.person_id ?? '').trim()\n                               && String(r.booked_at ?? '').trim());\n}\nif (responded) return [{ json: Object.assign({}, d, { outcome: 'responded' }) }];\n\nconst v = guardVerdict(person, allowed);\nif (!v.ok) return [{ json: Object.assign({}, d, { outcome: 'cancelled', cancel_reason: v.reason }) }];\n\nconst noResponseTagLabel = String(settings.followup_no_response_tag || 'No Response Trash').trim();\nconst coldStage = String(settings.followup_cold_stage || 'Cold Rental Lead 1 month Hold').trim();\nconst currentTags = person.tags || [];\nconst alreadyHasTag = currentTags.map(norm).indexOf(norm(noResponseTagLabel)) !== -1;\nconst mergedTags = alreadyHasTag ? currentTags : currentTags.concat([noResponseTagLabel]);\n\nreturn [{ json: Object.assign({}, d, {\n  outcome: 'send', target_stage: coldStage, merged_tags: mergedTags, no_response_tag_label: noResponseTagLabel,\n}) }];"
+      }
+    },
+    {
+      "id": "fu-tag-responded-if",
+      "name": "Responded? (Tag)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        900
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.outcome === 'responded' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "fu-tag-mark-responded",
+      "name": "Update Tracking (Tag Responded)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2860,
+        820
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Followup_Tracking",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "row_number": "={{ $('Resolve Tag').first().json.row_number }}",
+            "responded_at": "={{ new Date().toISOString() }}"
+          },
+          "matchingColumns": [
+            "row_number"
+          ],
+          "schema": [
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "track",
+              "displayName": "track",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "driving_property_key",
+              "displayName": "driving_property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "driving_property_address",
+              "displayName": "driving_property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "task_created_at",
+              "displayName": "task_created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sendoff_sent_at",
+              "displayName": "sendoff_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "tagged_at",
+              "displayName": "tagged_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "responded_at",
+              "displayName": "responded_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cancelled_at",
+              "displayName": "cancelled_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cancelled_reason",
+              "displayName": "cancelled_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "fu-tag-note-responded",
+      "name": "FUB - Log Note (Responded, Tag)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3080,
+        820
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Resolve Tag').first().json.person_id || 0), body: 'Automated follow-up cancelled: lead responded before the tag+move was due.' }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "id": "fu-tag-guard-if",
+      "name": "Guard OK? (Tag)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2860,
+        980
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.outcome === 'send' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "fu-tag-mark-cancelled",
+      "name": "Update Tracking (Tag Cancelled)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3080,
+        1060
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Followup_Tracking",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "row_number": "={{ $('Resolve Tag').first().json.row_number }}",
+            "cancelled_at": "={{ new Date().toISOString() }}",
+            "cancelled_reason": "={{ $('Resolve Tag').first().json.cancel_reason || '' }}"
+          },
+          "matchingColumns": [
+            "row_number"
+          ],
+          "schema": [
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "track",
+              "displayName": "track",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "driving_property_key",
+              "displayName": "driving_property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "driving_property_address",
+              "displayName": "driving_property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "task_created_at",
+              "displayName": "task_created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sendoff_sent_at",
+              "displayName": "sendoff_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "tagged_at",
+              "displayName": "tagged_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "responded_at",
+              "displayName": "responded_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cancelled_at",
+              "displayName": "cancelled_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cancelled_reason",
+              "displayName": "cancelled_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "fu-tag-note-cancelled",
+      "name": "FUB - Log Note (Tag Cancelled)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3300,
+        1060
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Resolve Tag').first().json.person_id || 0), body: 'Automated follow-up cancelled: ' + ($('Resolve Tag').first().json.cancel_reason || 'lead now out of scope') + '.' }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "id": "fu-tag-update-person",
+      "name": "FUB - Update Person (Tag+Stage)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3080,
+        900
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ 'https://api.followupboss.com/v1/people/' + $json.person_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ stage: $json.target_stage, tags: $json.merged_tags, customTrashDate: new Date().toISOString() }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "id": "fu-tag-note-tagged",
+      "name": "FUB - Log Note (Tagged+Moved)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3300,
+        900
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.followupboss.com/v1/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-System",
+              "value": "RentingFreedom"
+            },
+            {
+              "name": "X-System-Key",
+              "value": "55e05a4d42e692a05db7be23f2178e04"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ personId: Number($('Resolve Tag').first().json.person_id || 0), body: 'Automated follow-up: no response after the send-off. Tagged \\'' + ($('Resolve Tag').first().json.no_response_tag_label || 'No Response Trash') + '\\' and moved to \\'' + ($('Resolve Tag').first().json.target_stage || '') + '\\'.' }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Iap4KzaMs92QWwSR",
+          "name": "FUB Owner"
+        }
+      }
+    },
+    {
+      "id": "fu-tag-mark-tagged",
+      "name": "Update Tracking (Tagged)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3520,
+        900
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Followup_Tracking",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "row_number": "={{ $('Resolve Tag').first().json.row_number }}",
+            "tagged_at": "={{ new Date().toISOString() }}"
+          },
+          "matchingColumns": [
+            "row_number"
+          ],
+          "schema": [
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "person_id",
+              "displayName": "person_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "track",
+              "displayName": "track",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "driving_property_key",
+              "displayName": "driving_property_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "driving_property_address",
+              "displayName": "driving_property_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "task_created_at",
+              "displayName": "task_created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sendoff_sent_at",
+              "displayName": "sendoff_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "tagged_at",
+              "displayName": "tagged_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "responded_at",
+              "displayName": "responded_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cancelled_at",
+              "displayName": "cancelled_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cancelled_reason",
+              "displayName": "cancelled_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "fu-tag-loopback",
+      "name": "Loop Back (Tag)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3740,
+        980
+      ],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Hourly Tick": {
+      "main": [
+        [
+          {
+            "node": "Read Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Settings": {
+      "main": [
+        [
+          {
+            "node": "Read Identity Verifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Identity Verifications": {
+      "main": [
+        [
+          {
+            "node": "Read Inquiries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Inquiries": {
+      "main": [
+        [
+          {
+            "node": "Read Followup Tracking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Followup Tracking": {
+      "main": [
+        [
+          {
+            "node": "Find ID Task Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find ID Task Candidates": {
+      "main": [
+        [
+          {
+            "node": "ID Task Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ID Task Loop": {
+      "main": [
+        [
+          {
+            "node": "Find Booking Task Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FUB - Get Person (ID Task)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Get Person (ID Task)": {
+      "main": [
+        [
+          {
+            "node": "Resolve ID Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve ID Task": {
+      "main": [
+        [
+          {
+            "node": "Guard OK? (ID Task)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard OK? (ID Task)": {
+      "main": [
+        [
+          {
+            "node": "FUB - Create Task (ID)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Back (ID Task)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Create Task (ID)": {
+      "main": [
+        [
+          {
+            "node": "FUB - Log Note (ID Task Created)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Log Note (ID Task Created)": {
+      "main": [
+        [
+          {
+            "node": "Append Followup Tracking Row (ID)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append Followup Tracking Row (ID)": {
+      "main": [
+        [
+          {
+            "node": "Loop Back (ID Task)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Back (ID Task)": {
+      "main": [
+        [
+          {
+            "node": "ID Task Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Booking Task Candidates": {
+      "main": [
+        [
+          {
+            "node": "Booking Task Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Booking Task Loop": {
+      "main": [
+        [
+          {
+            "node": "Find Sendoff Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FUB - Get Person (Booking Task)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Get Person (Booking Task)": {
+      "main": [
+        [
+          {
+            "node": "Resolve Booking Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Booking Task": {
+      "main": [
+        [
+          {
+            "node": "Guard OK? (Booking Task)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard OK? (Booking Task)": {
+      "main": [
+        [
+          {
+            "node": "FUB - Create Task (Booking)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Back (Booking Task)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Create Task (Booking)": {
+      "main": [
+        [
+          {
+            "node": "FUB - Log Note (Booking Task Created)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Log Note (Booking Task Created)": {
+      "main": [
+        [
+          {
+            "node": "Append Followup Tracking Row (Booking)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append Followup Tracking Row (Booking)": {
+      "main": [
+        [
+          {
+            "node": "Loop Back (Booking Task)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Back (Booking Task)": {
+      "main": [
+        [
+          {
+            "node": "Booking Task Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Sendoff Candidates": {
+      "main": [
+        [
+          {
+            "node": "Sendoff Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sendoff Loop": {
+      "main": [
+        [
+          {
+            "node": "Find Tag Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FUB - Get Person (Sendoff)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Get Person (Sendoff)": {
+      "main": [
+        [
+          {
+            "node": "Resolve Sendoff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Sendoff": {
+      "main": [
+        [
+          {
+            "node": "Responded? (Sendoff)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Responded? (Sendoff)": {
+      "main": [
+        [
+          {
+            "node": "Update Tracking (Sendoff Responded)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Guard OK? (Sendoff)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Tracking (Sendoff Responded)": {
+      "main": [
+        [
+          {
+            "node": "FUB - Log Note (Responded, Sendoff)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Log Note (Responded, Sendoff)": {
+      "main": [
+        [
+          {
+            "node": "Loop Back (Sendoff)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard OK? (Sendoff)": {
+      "main": [
+        [
+          {
+            "node": "Has Phone? (Sendoff)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Tracking (Sendoff Cancelled)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Tracking (Sendoff Cancelled)": {
+      "main": [
+        [
+          {
+            "node": "FUB - Log Note (Sendoff Cancelled)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Log Note (Sendoff Cancelled)": {
+      "main": [
+        [
+          {
+            "node": "Loop Back (Sendoff)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Phone? (Sendoff)": {
+      "main": [
+        [
+          {
+            "node": "Send Sendoff SMS",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Has Email? (Sendoff)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Sendoff SMS": {
+      "main": [
+        [
+          {
+            "node": "Sendoff SMS Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sendoff SMS Failed?": {
+      "main": [
+        [
+          {
+            "node": "FUB - Log Note (Sendoff SMS Failed)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FUB - Log Note (Sendoff SMS Sent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Log Note (Sendoff SMS Failed)": {
+      "main": [
+        [
+          {
+            "node": "Has Email? (Sendoff)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Log Note (Sendoff SMS Sent)": {
+      "main": [
+        [
+          {
+            "node": "Has Email? (Sendoff)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email? (Sendoff)": {
+      "main": [
+        [
+          {
+            "node": "Send Sendoff Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Tracking (Sendoff Sent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Sendoff Email": {
+      "main": [
+        [
+          {
+            "node": "Sendoff Email Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sendoff Email Failed?": {
+      "main": [
+        [
+          {
+            "node": "FUB - Log Note (Sendoff Email Failed)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FUB - Log Note (Sendoff Email Sent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Log Note (Sendoff Email Failed)": {
+      "main": [
+        [
+          {
+            "node": "Update Tracking (Sendoff Sent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Log Note (Sendoff Email Sent)": {
+      "main": [
+        [
+          {
+            "node": "Update Tracking (Sendoff Sent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Tracking (Sendoff Sent)": {
+      "main": [
+        [
+          {
+            "node": "Loop Back (Sendoff)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Back (Sendoff)": {
+      "main": [
+        [
+          {
+            "node": "Sendoff Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Tag Candidates": {
+      "main": [
+        [
+          {
+            "node": "Tag Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tag Loop": {
+      "main": [
+        [],
+        [
+          {
+            "node": "FUB - Get Person (Tag)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Get Person (Tag)": {
+      "main": [
+        [
+          {
+            "node": "Resolve Tag",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Tag": {
+      "main": [
+        [
+          {
+            "node": "Responded? (Tag)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Responded? (Tag)": {
+      "main": [
+        [
+          {
+            "node": "Update Tracking (Tag Responded)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Guard OK? (Tag)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Tracking (Tag Responded)": {
+      "main": [
+        [
+          {
+            "node": "FUB - Log Note (Responded, Tag)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Log Note (Responded, Tag)": {
+      "main": [
+        [
+          {
+            "node": "Loop Back (Tag)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard OK? (Tag)": {
+      "main": [
+        [
+          {
+            "node": "FUB - Update Person (Tag+Stage)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Tracking (Tag Cancelled)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Tracking (Tag Cancelled)": {
+      "main": [
+        [
+          {
+            "node": "FUB - Log Note (Tag Cancelled)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Log Note (Tag Cancelled)": {
+      "main": [
+        [
+          {
+            "node": "Loop Back (Tag)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Update Person (Tag+Stage)": {
+      "main": [
+        [
+          {
+            "node": "FUB - Log Note (Tagged+Moved)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FUB - Log Note (Tagged+Moved)": {
+      "main": [
+        [
+          {
+            "node": "Update Tracking (Tagged)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Tracking (Tagged)": {
+      "main": [
+        [
+          {
+            "node": "Loop Back (Tag)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Back (Tag)": {
+      "main": [
+        [
+          {
+            "node": "Tag Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "zvwMJSOZBwqVM8Lo"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "d2f06855-e5b4-4a62-8c2b-b29aafcbd9cc",
+  "activeVersionId": null,
+  "versionCounter": 1,
+  "triggerCount": 0,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-09-25T20:20:31.051Z",
+      "createdAt": "2026-09-25T20:20:31.051Z",
+      "role": "workflow:owner",
+      "workflowId": "24ZSshSO2T3HuHC9",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": null
+}

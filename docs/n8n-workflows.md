@@ -54,6 +54,7 @@ workflows should read this file first.
 | `87TEvHQzAv5rnuMT` | Funnel Daily Snapshot | Daily 23:30 UTC. One POST to the dashboard, which appends a `Funnel_Snapshots` row. Computes NOTHING itself and reads no Sheet. **ACTIVE since 2026-09-17.** |
 | `W6PoSadMxnoHwxhG` | Delete Property | Sheets `anyUpdate` poll (**every 5 min**) on the SAME tab → filter `active == "Delete"` → deletes the cal.com event type, the Google resource, and the sheet row. **ACTIVE.** |
 | `3tUbcCzaBqYisAHr` | Property Leased Notify | Webhook `property-leased-notify`. One item per call — invoked by the dashboard's own paced `leased-execute` loop, not a poll. Sends the "this home is gone" SMS + email for Item 07, 3b, and logs every send to FUB. **ACTIVE, live-tested 2026-09-25. Copy is still DRAFT, not client-signed-off.** |
+| `24ZSshSO2T3HuHC9` | No Response Follow-Up | Hourly. Part 5 — 2nd ID/booking reminder → Nicole phone-call task → +4d send-off SMS/email → +1d No Response Trash tag + move to Cold. **INACTIVE, built and validated offline 2026-09-26. `followup_enabled` Settings key is FALSE. Copy is DRAFT, not client-signed-off. Not yet activated.** |
 
 ### Funnel Daily Snapshot — `87TEvHQzAv5rnuMT` (2026-09-16, ACTIVE since 2026-09-17)
 

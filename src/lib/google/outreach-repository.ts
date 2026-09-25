@@ -370,7 +370,14 @@ export async function restartBookingNudges(
 
 export interface MarkVerifiedInput {
   personId: string;
-  /** Limit to one property. Omit to cover every row for this person. */
+  /**
+   * Audit-trail context ONLY — which property's row the operator was looking
+   * at when they clicked. NEVER used to filter which rows get waived: Stripe
+   * Identity verifies the PERSON, not a property, and a lead who inquired on
+   * three properties only ever completes ID verification once. Filtering by
+   * property here left the other two silently still gated — fixed
+   * 2026-09-26, see the function doc below.
+   */
   propertyKey?: string;
   reason?: string;
 }
@@ -378,10 +385,25 @@ export interface MarkVerifiedInput {
 export interface MarkVerifiedResult {
   waived: number;
   released: number;
+  /** True if the sweep webhook was re-POSTed to actually deliver the released link(s). */
+  swept: boolean;
 }
 
+const VERIFY_SWEEP_WEBHOOK =
+  "https://automation.rentingfreedom.com/webhook/send-cal-link-after-verification";
+
 /**
- * Record that a human verified this lead's ID, and release their booking link.
+ * Record that a human verified this lead's ID, and release their booking link(s).
+ *
+ * ── Person-level, not property-level — fixed 2026-09-26 ──────────────────
+ * ID verification is a fact about the PERSON (one Stripe Identity check),
+ * never about a single property inquiry. A lead who inquired on three
+ * properties only ever verifies once, so this must waive and release EVERY
+ * Inquiries row for them, not just the one the operator happened to be
+ * looking at. The earlier version filtered on `input.propertyKey`, which the
+ * caller always supplied from row context — so in practice a lead with
+ * multiple open inquiries only ever had one released, and the rest sat
+ * silently gated forever with no further prompt to fix it.
  *
  * ── Why this is not "stop the ID reminders" ──────────────────────────────
  * Suppressing `identity_reminders` silences the nagging and leaves the lead
@@ -400,8 +422,15 @@ export interface MarkVerifiedResult {
  *
  * **Blank is NOT a waiver.** The string "FALSE" is written explicitly.
  *
- * Flipping `link_sent` back to `"false"` hands the row to the sweep, which
- * re-applies every guard before it sends anything.
+ * ── Flipping the sheet cell is not enough — it has to be swept ───────────
+ * `send-cal-link-after-verification` (`UbO0l29GtILMm1sP`) is webhook-triggered
+ * ONLY — there is no cron scanning for `link_sent = false` rows. Flipping the
+ * cell without re-POSTing the sweep, as the earlier version did, left the
+ * "released" row sitting unsent until some unrelated event happened to replay
+ * the sweep for that person — the exact failure `release-stranded.ts` was
+ * built to fix for the verification-toggle case. Same fix, same webhook, same
+ * `{ uri: ".../people?id=<personId>" }` shape, applied once per call (the
+ * sweep is addressed by person and sends one SMS/email per unsent row).
  */
 export async function markVerifiedManually(
   input: MarkVerifiedInput,
@@ -423,7 +452,7 @@ export async function markVerifiedManually(
   let released = 0;
   for (const row of objects) {
     if (String(row.person_id ?? "").trim() !== personId) continue;
-    if (input.propertyKey && norm(row.property_key) !== norm(input.propertyKey)) continue;
+    // Deliberately NOT filtered by property — see the function doc above.
 
     const updates: Record<string, string> = { verification_required: "FALSE" };
 
@@ -440,6 +469,27 @@ export async function markVerifiedManually(
     waived++;
   }
 
+  let swept = false;
+  if (released > 0) {
+    try {
+      const res = await fetch(VERIFY_SWEEP_WEBHOOK, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uri: `https://api.followupboss.com/v1/people?id=${personId}` }),
+      });
+      swept = res.ok;
+      if (!res.ok) {
+        console.error(`[markVerifiedManually] sweep webhook -> ${res.status} ${await res.text()}`);
+      }
+    } catch (err) {
+      console.error("[markVerifiedManually] sweep webhook failed:", err);
+      // Not thrown: the waive/release write already succeeded and must not be
+      // rolled back over a delivery hiccup — the row is still correctly
+      // `link_sent = false` and will go out the next time anything replays
+      // the sweep for this person. `swept: false` tells the caller to say so.
+    }
+  }
+
   await writeAuditLog({
     timestamp: now,
     actor,
@@ -448,11 +498,11 @@ export async function markVerifiedManually(
     entity_id: personId,
     property_key: input.propertyKey ?? "",
     before_json: "",
-    after_json: JSON.stringify({ waived, released }),
+    after_json: JSON.stringify({ waived, released, swept }),
     source: "dashboard",
     notes: input.reason ?? "",
   });
 
   invalidateInFlightCache();
-  return { waived, released };
+  return { waived, released, swept };
 }
