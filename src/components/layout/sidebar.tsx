@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Building2, Lock, CalendarCheck, Activity, Settings, Sun, Moon, TrendingDown, Send } from "lucide-react";
@@ -22,6 +23,13 @@ export function Sidebar() {
   const pathname = usePathname();
   const { theme, setTheme } = useTheme();
   const { isAdmin } = useRole();
+  // next-themes resolves `theme` from localStorage/matchMedia synchronously
+  // on the client's first render (to avoid a flash of the wrong theme), but
+  // the server has no localStorage and always renders with `theme`
+  // undefined. That mismatch is exactly the hydration error this guards
+  // against: render a fixed icon until mounted, then switch to the real one.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   if (pathname === "/sign-in") {
     return null;
@@ -79,7 +87,13 @@ export function Sidebar() {
             className="p-1.5 rounded-md text-gray-400 hover:text-gray-700 dark:text-gray-500 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
             title="Toggle dark mode"
           >
-            {theme === "dark" ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+            {/* A fixed icon pre-mount, not `theme === "dark"` — that
+                comparison is exactly what raced the server render above. */}
+            {mounted && theme === "dark" ? (
+              <Sun className="h-3.5 w-3.5" />
+            ) : (
+              <Moon className="h-3.5 w-3.5" />
+            )}
           </button>
           <UserButton />
         </div>
