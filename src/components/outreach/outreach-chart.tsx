@@ -25,7 +25,6 @@
  */
 
 import { useMemo, useState } from "react";
-import { Tip } from "@/components/funnel/charts";
 import {
   PIPELINE_ZONES,
   pipelineBars,
@@ -81,7 +80,11 @@ export interface OutreachChartProps {
 }
 
 export function OutreachChart({ leads, nudgeMax, selected, onSelect }: OutreachChartProps) {
-  const [hover, setHover] = useState<{ i: number; x: number; y: number; w: number } | null>(null);
+  // Just the hovered bar's index now -- it used to also carry pixel
+  // coordinates for the floating Tip, which was dropped as too intrusive
+  // (it sat on top of the very bars it was describing). The hover-pop
+  // (scale + bigger value label) is the whole affordance now.
+  const [hover, setHover] = useState<number | null>(null);
 
   const bars = useMemo(() => pipelineBars(nudgeMax), [nudgeMax]);
 
@@ -216,9 +219,13 @@ export function OutreachChart({ leads, nudgeMax, selected, onSelect }: OutreachC
           const bx = PAD_L + i * slot + (slot - barW) / 2;
           const barH = Math.max(0, baseY - y(v));
           const sel = isSelected(b);
-          const isHovered = hover?.i === i;
+          const isHovered = hover === i;
           return (
             <g key={b.key}>
+              {/* Native tooltip, replacing the removed floating Tip — it sat
+                  on top of the very bars it described, which read as
+                  intrusive rather than helpful. */}
+              <title>{`${b.label}: ${v} ${v === 1 ? "person" : "people"}. ${b.title}`}</title>
               {/* A full-height hit target: a zero bar has no height to click,
                   and an empty position is exactly the one an operator wants to
                   confirm is genuinely empty. It runs down past the baseline to
@@ -242,16 +249,8 @@ export function OutreachChart({ leads, nudgeMax, selected, onSelect }: OutreachC
                     toggle({ kind: "bar", key: b.key });
                   }
                 }}
-                onMouseEnter={(e) => {
-                  const r = (e.currentTarget.ownerSVGElement as SVGSVGElement).getBoundingClientRect();
-                  setHover({
-                    i,
-                    x: ((bx + barW / 2) / W) * r.width,
-                    y: (y(v) / H) * r.height,
-                    w: r.width,
-                  });
-                }}
-                onMouseLeave={() => setHover(null)}
+                onMouseEnter={() => setHover(i)}
+                onMouseLeave={() => setHover((h) => (h === i ? null : h))}
               />
               {v > 0 && (
                 <rect
@@ -261,16 +260,31 @@ export function OutreachChart({ leads, nudgeMax, selected, onSelect }: OutreachC
                   height={barH}
                   rx={4}
                   fill={fillFor(b)}
-                  className={isHovered ? "pointer-events-none drop-shadow-lg" : "pointer-events-none"}
+                  // A stroke, not a drop-shadow filter, for the hover
+                  // emphasis — see the loops diagram's identical note: a
+                  // `filter` on an element scaling past the viewBox (needing
+                  // `overflow: visible` to avoid being clipped) made Chrome
+                  // subtly recompute the SVG's own intrinsic size on every
+                  // hover, reading as neighbouring labels "jumping."
+                  stroke={isHovered ? zoneVar(b.zone) : "none"}
+                  strokeWidth={isHovered ? 2 : 0}
+                  className="pointer-events-none"
                   style={{
                     transition: "y 400ms ease-out, height 400ms ease-out, fill 150ms linear, transform 150ms ease-out",
-                    // Grows from the BASELINE, not the centre — a bar popping
-                    // up while staying planted on the axis reads as emphasis;
-                    // popping from its centre would make it look like it's
-                    // floating free of the axis it's measured against.
-                    transform: isHovered ? "scale(1.33)" : "scale(1)",
+                    // WIDTH only, not height. Height IS the encoded value here
+                    // — scaling it on hover would make a bar look like it grew
+                    // taller, i.e. like the count changed, which is exactly
+                    // backwards for a hover effect on a bar chart. Widening
+                    // (plus a small lift) pops the bar without touching the
+                    // one dimension that has to stay honest. It also sidesteps
+                    // the two bugs a height-scale actually had: a bar's real
+                    // top moving unpredictably far past its (fixed-offset)
+                    // value label depending on how tall the bar already was,
+                    // and a tall bar's scaled top exceeding the plot's
+                    // headroom and being clipped by the SVG's own edge.
+                    transform: isHovered ? "scaleX(1.33) translateY(-3px)" : "none",
                     transformBox: "fill-box",
-                    transformOrigin: "50% 100%",
+                    transformOrigin: "center",
                   }}
                 />
               )}
@@ -296,7 +310,13 @@ export function OutreachChart({ leads, nudgeMax, selected, onSelect }: OutreachC
               {v > 0 && (
                 <text
                   x={bx + barW / 2}
-                  y={isHovered ? y(v) - 9 : y(v) - 5}
+                  // A FIXED offset from the bar's own (unscaled) top, not one
+                  // that depends on how tall the bar is: the bar's height
+                  // never changes on hover now (only its width does), so this
+                  // is the one offset that clears every bar consistently
+                  // rather than working for short bars and failing for tall
+                  // ones.
+                  y={isHovered ? y(v) - 11 : y(v) - 5}
                   textAnchor="middle"
                   fontSize={isHovered ? 14 : 10}
                   fontWeight={isHovered ? 700 : 400}
@@ -373,18 +393,6 @@ export function OutreachChart({ leads, nudgeMax, selected, onSelect }: OutreachC
           );
         })}
       </svg>
-
-      {hover && (
-        <Tip x={hover.x} y={hover.y} w={hover.w}>
-          <span className="font-medium text-gray-900 dark:text-gray-100">{bars[hover.i].label}</span>
-          <span className="ml-1.5 tabular-nums text-gray-600 dark:text-gray-300">
-            {totalOf(bars[hover.i].key)}
-          </span>
-          <span className="block max-w-56 whitespace-normal text-gray-500 dark:text-gray-400">
-            {bars[hover.i].title}
-          </span>
-        </Tip>
-      )}
 
       {/* The bars must account for everyone the table is showing. A lead whose
           every ladder cell is a dash has had nothing sent to them at all and
