@@ -286,10 +286,17 @@ the home is gone, cancels any booked showings, and suppresses their sequences.
 > **DRAFT copy — not yet reviewed by the client.** Good enough to prove the
 > pipeline works; get real sign-off before this runs against a real lead.
 >
-> **No FUB note-logging yet** — "every lead-facing send writes a FUB Note" is
-> a real, repeated convention in this estate (2026-08-30) and this workflow
-> does not follow it. Documented as a deliberate gap in the workflow's own
-> header, not silently dropped — worth adding once the copy is signed off.
+> **FUB note-logging — CLOSED 2026-09-25** (`scripts/n8n-add-property-leased-note-logging.mjs`).
+> Same four-note shape as everywhere else in this estate: `Send SMS` / `Send
+> Email` (already `onError: continueRegularOutput`) each feed an `X Send
+> Failed?` IF into a success or failure `FUB - Log Note` node, both terminal
+> and both reading pre-send data via the named reference
+> `$('Build Messages').first()` — safe because this workflow processes
+> exactly one lead per webhook call, no SplitInBatches (gotcha 11 does not
+> apply here). **Live-verified same day**, execution 48865: `FUB - Log Note
+> (SMS Sent)` and `FUB - Log Note (Email Sent)` both returned real FUB note
+> ids (3675, 3676) against test contact 2652. Backup
+> `n8n/BEFORE-property-leased-note-logging/`.
 
 **The new tenant is excluded entirely and receives NOTHING from this button.**
 Client decision 2026-09-22: Nicole handles move-in communication herself. They

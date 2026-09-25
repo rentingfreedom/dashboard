@@ -23,6 +23,11 @@
  *    happen and are NOT rolled back, because a lead whose booking is
  *    cancelled and who is suppressed is strictly better off than one who
  *    additionally received no notice, never the reverse.
+ * 4. FUB note-logging — CLOSED 2026-09-25
+ *    (`scripts/n8n-add-property-leased-note-logging.mjs`). Every SMS and
+ *    email send, success or failure, now writes a FUB Note — the same
+ *    four-note shape used across the rest of this estate. Live-verified the
+ *    same day against test contact 2652 (real FUB note ids returned).
  *
  * ── The n8n contract ─────────────────────────────────────────────────────
  * `POST {N8N_BASE}/webhook/property-leased-notify`, body:
