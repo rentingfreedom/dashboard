@@ -2,40 +2,45 @@
  * Executing the "property leased" action (Item 07, 3b) — cancel, suppress,
  * and notify, for one confirmed set of leads.
  *
- * ── Three actions per lead, and they are NOT equally ready today ───────────
+ * ── All three actions are real as of 2026-09-25 ─────────────────────────────
  * 1. CANCEL any live, future, still-`scheduled` showing — via `cancelBooking`,
  *    the same Cal.com call A-2 and the outreach table's Stop dialog already
- *    use. Solved.
+ *    use.
  * 2. SUPPRESS every future automated sequence — via `stopOutreach`
  *    (`scope: "all"`), the same suppression tab every other lead-facing send
- *    path already reads. Solved.
- * 3. NOTIFY the lead that the home is gone — this is a message type NOTHING
- *    in this estate sends today, on either side. Every other send in this
- *    system is performed by n8n, using credentials that live only in n8n's
- *    own credential store — nothing in this Next.js app has ever held a
- *    Twilio or Gmail credential, and that is deliberate (see
- *    `docs/n8n-workflows.md`'s FUB/Cal.com client headers for the same
- *    reasoning applied to those integrations). So this step POSTs to a NEW
- *    n8n webhook that does not exist yet. Until it is built, this call fails
- *    and is reported per lead as `notifyError` — cancel and suppress still
+ *    path already reads.
+ * 3. NOTIFY the lead that the home is gone — POSTs to a NEW n8n webhook,
+ *    `RentingFreedom Production - Property Leased Notify`
+ *    (`scripts/n8n-create-property-leased-notify.mjs`), built for this and
+ *    live-tested end to end on 2026-09-25 (both `messageState` branches, real
+ *    Twilio + Gmail sends, verified via the execution's own node output —
+ *    `status: "queued"` with no `error_code`, and a real Gmail message id
+ *    with a `SENT` label). **The copy is still a DRAFT**, not yet reviewed by
+ *    the client — good enough to prove the pipeline, not to send to a real
+ *    lead; see `scripts/property-leased-setup.mjs`. If the webhook call ever
+ *    fails (workflow deactivated, credential revoked, etc.) it is reported
+ *    per lead as `notifyError` rather than thrown — cancel and suppress still
  *    happen and are NOT rolled back, because a lead whose booking is
  *    cancelled and who is suppressed is strictly better off than one who
  *    additionally received no notice, never the reverse.
  *
- * ── The intended n8n contract, for whoever builds that workflow ────────────
+ * ── The n8n contract ─────────────────────────────────────────────────────
  * `POST {N8N_BASE}/webhook/property-leased-notify`, body:
  *   `{ personId, phone, email, propertyKey, propertyAddress, messageState }`
  * where `messageState` is `"booked"` (their showing was just cancelled — the
- * copy should say so) or `"general"` (every other case in the scope doc's
- * table, which all read as one message). Settings keys, matching this
- * estate's own convention of one key per template rather than hardcoding
- * copy in a node: `property_leased_sms_template`,
- * `property_leased_sms_cancel_note` (a sentence, inserted only for
- * `messageState: "booked"`), `property_leased_email_subject`,
- * `property_leased_email_body`. Every template must interpolate the
- * property address (a lead may have inquired on more than one property) and
- * must render through the existing `sms_footer` key for the SMS side, same
- * as every other lead-facing template.
+ * copy says so) or `"general"` (every other case in the scope doc's table,
+ * which all read as one message). Settings keys, matching this estate's own
+ * convention of one key per template rather than hardcoding copy in a node:
+ * `property_leased_sms_template`, `property_leased_sms_cancel_note`,
+ * `property_leased_email_subject`, `property_leased_email_body`,
+ * `property_leased_email_cancel_note`. Every template interpolates
+ * `{{property_address}}` and `{{cancel_note}}`; the SMS side renders through
+ * the existing `sms_footer` key, the email side does not
+ * (CAL_LINK_EMAIL_COPY_MARKER precedent). **Cancel-note spacing is added in
+ * the n8n Code node, not stored as leading/trailing whitespace in the
+ * Settings cell** — live testing caught that whitespace getting silently
+ * trimmed somewhere in the read path, producing "cancelled.Thank you" with
+ * no space.
  *
  * ── Re-plans on every chunk, exactly like verification release ────────────
  * The caller walks a confirmed list in chunks; each chunk re-fetches the

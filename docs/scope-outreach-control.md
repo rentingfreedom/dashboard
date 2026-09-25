@@ -245,34 +245,51 @@ component in this project** — the properties table uses the native `title=`
 attribute (see the override tooltip). Match that, and reuse the existing
 `_by` / `_at` pattern in the hover text.
 
-### 3b. "Property leased" — message and cancel — **CANCEL + SUPPRESS BUILT 2026-09-24, NOTIFY NOT YET**
+### 3b. "Property leased" — message and cancel — **ALL THREE ACTIONS BUILT AND LIVE-TESTED 2026-09-25**
 
 One action that, for a property: messages every lead with an open inquiry to say
 the home is gone, cancels any booked showings, and suppresses their sequences.
 
-> **Two of the three are real and live today; the third has no home yet.**
-> `src/lib/google/leased-property-repository.ts` (the plan — tenant exclusion,
-> trash exclusion, per-lead message state), `leased-property-execute.ts` (cancel +
-> suppress, chunked and paced, re-plans every chunk), the `leased-plan` /
-> `leased-execute` routes, and `PropertyLeasedDialog` (wired into `/properties`'s
-> row menu, admin only) are all built and pass `tsc`/`eslint`. **Not yet exercised
-> against the live app** — no dev server was reachable to click through it in the
-> session that built it.
+> **All three legs are real.** `src/lib/google/leased-property-repository.ts`
+> (the plan — tenant exclusion, trash exclusion, per-lead message state),
+> `leased-property-execute.ts` (cancel + suppress + notify, chunked and paced,
+> re-plans every chunk), the `leased-plan` / `leased-execute` routes, and
+> `PropertyLeasedDialog` (wired into `/properties`'s row menu, admin only) all
+> pass `tsc`/`eslint`. **Cancel and suppress not yet exercised against the live
+> app UI** — no dev server was reachable to click through the dialog in the
+> session that built them.
 >
-> **Notify is stubbed, not built.** Every message in this estate is sent by n8n
-> using credentials that live only in n8n's own store — nothing in this Next.js
-> app has ever held a Twilio or Gmail credential, and this is a message type
-> nothing sends today on either side. `leased-property-execute.ts`'s header
-> documents the exact contract for a NEW webhook,
-> `POST {N8N_BASE}/webhook/property-leased-notify`, and
-> `scripts/property-leased-setup.mjs` creates the four Settings keys the copy
-> will live in (`property_leased_sms_template`,
-> `property_leased_sms_cancel_note`, `property_leased_email_subject`,
-> `property_leased_email_body`) — **created BLANK, not yet run against the live
-> sheet, and the copy itself has not been written or signed off.** Until that
-> workflow exists, executing this action cancels and suppresses for real but
-> reports `notified: false` for everyone, which the dialog shows per lead rather
-> than hiding.
+> **Notify — `RentingFreedom Production - Property Leased Notify`
+> (`scripts/n8n-create-property-leased-notify.mjs`), created and
+> LIVE-TESTED 2026-09-25.** Webhook `POST /webhook/property-leased-notify`,
+> one item per call (the dashboard's own paced execute loop, not a poll —
+> unlike every other new workflow in this estate, it had to ship ACTIVE
+> rather than inactive-then-preview, because an inactive webhook workflow has
+> no live endpoint at all to test against). Both `messageState` branches
+> (`general` and `booked`) verified via real executions: Twilio returned
+> `status: "queued"` with no `error_code`, Gmail returned a real message id
+> with a `SENT` label, and the `sms_footer` / no-footer-on-email split both
+> confirmed correct.
+>
+> **A real bug caught by that first test run:** the cancel-note Settings
+> values were stored with their spacing baked in (a trailing space on the SMS
+> note, a leading space on the email note) — the read path silently trims it,
+> producing `"cancelled.Thank you"` with no space between sentences. Fixed by
+> having `Build Messages` `.trim()` whatever comes back and add the exact
+> space itself, rather than trusting invisible whitespace to survive a round
+> trip through Sheets. The workflow was deleted and recreated with the fix
+> (`scripts/n8n-create-property-leased-notify.mjs --delete <id>` then
+> `--apply` — it is brand new with zero real usage, so this was simpler than
+> patching a live node).
+>
+> `scripts/property-leased-setup.mjs` created the five Settings keys with
+> **DRAFT copy — not yet reviewed by the client.** Good enough to prove the
+> pipeline works; get real sign-off before this runs against a real lead.
+>
+> **No FUB note-logging yet** — "every lead-facing send writes a FUB Note" is
+> a real, repeated convention in this estate (2026-08-30) and this workflow
+> does not follow it. Documented as a deliberate gap in the workflow's own
+> header, not silently dropped — worth adding once the copy is signed off.
 
 **The new tenant is excluded entirely and receives NOTHING from this button.**
 Client decision 2026-09-22: Nicole handles move-in communication herself. They

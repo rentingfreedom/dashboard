@@ -8,18 +8,13 @@
  * Idempotent and additive: a key that already exists is NEVER overwritten, so
  * re-running can't clobber a value someone has tuned by hand.
  *
- * ── This is config for a workflow that does not exist yet ──────────────────
- * The dashboard side (the plan dialog, cancel-and-suppress execution) is
- * built and live. The actual SEND — a text and email telling a lead the home
- * is gone — is not: nothing in this estate has ever sent that message type,
- * and every send in this system is performed by n8n using credentials that
- * live only in n8n's own store. `src/lib/google/leased-property-execute.ts`
- * already POSTs to `{N8N_BASE}/webhook/property-leased-notify` per lead; it
- * 404s until that workflow is built. These four Settings rows are here so
- * whoever builds it has the exact keys ready, matching this estate's own
- * convention of one Settings key per template rather than hardcoded copy —
- * creating them now costs nothing (nothing reads them yet) and saves that
- * workflow's own setup step.
+ * ── Values are DRAFT copy, not client-signed-off ────────────────────────────
+ * `scripts/n8n-create-property-leased-notify.mjs` builds and activates the
+ * workflow that reads these. The copy below is a reasonable first draft, not
+ * yet reviewed by the client — treat it as "correct enough to test the
+ * pipeline end to end," and get real sign-off before this is used on a real
+ * lead. Matches this estate's own convention of one Settings key per
+ * template rather than hardcoded copy in the node.
  *
  * `messageState` in the webhook payload is `"booked"` (their showing was
  * JUST cancelled by this same action — the copy should say so) or
@@ -66,14 +61,18 @@ const sheets = google.sheets({ version: "v4", auth: new GoogleAuth({
 const SS = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
 
 const KEYS = [
-  ["property_leased_sms_template", "",
-   "SMS sent to every lead when {{property_address}} leases. {{cancel_note}} is empty for messageState=general, or property_leased_sms_cancel_note's value for messageState=booked. Renders through sms_footer like every other lead-facing template. COPY NOT YET WRITTEN — client sign-off needed before this ships."],
-  ["property_leased_sms_cancel_note", "",
-   "A short sentence, inserted into {{cancel_note}} in the SMS template only when the lead's own showing was just cancelled by this same action (messageState=booked)."],
-  ["property_leased_email_subject", "",
-   "Email subject for the same notice. Must interpolate {{property_address}}. COPY NOT YET WRITTEN."],
-  ["property_leased_email_body", "",
-   "Email body. Does NOT render sms_footer (CAL_LINK_EMAIL_COPY_MARKER precedent — a do-not-text footer is nonsense in an email). COPY NOT YET WRITTEN."],
+  ["property_leased_sms_template",
+   "Hi, we wanted to let you know that {{property_address}} has been leased and is no longer available. {{cancel_note}}Thank you for your interest. If you'd like help finding another rental, please reach out to nicole@rentingfreedom.com.",
+   "DRAFT COPY, not yet signed off by the client. SMS sent to every lead when {{property_address}} leases. {{cancel_note}} is empty for messageState=general, or property_leased_sms_cancel_note's value for messageState=booked. Renders through sms_footer like every other lead-facing template. Deliberately no em dash (GSM-7 segment cost, per SMS_FOOTER_MARKER's own lesson) -- keep it that way if this copy is edited."],
+  ["property_leased_sms_cancel_note", "Your scheduled showing has been cancelled. ",
+   "DRAFT COPY. A short sentence, inserted into {{cancel_note}} in the SMS template only when the lead's own showing was just cancelled by this same action (messageState=booked)."],
+  ["property_leased_email_subject", "{{property_address}} is no longer available",
+   "DRAFT COPY. Email subject for the same notice. Must interpolate {{property_address}}."],
+  ["property_leased_email_body",
+   "Hi,\n\nWe wanted to let you know that {{property_address}} has been leased and is no longer available.{{cancel_note}}\n\nThank you for your interest in Renting Freedom. If you'd like help finding another rental, please reach out to nicole@rentingfreedom.com.\n\n— Renting Freedom",
+   "DRAFT COPY. Email body. Does NOT render sms_footer (CAL_LINK_EMAIL_COPY_MARKER precedent — a do-not-text footer is nonsense in an email)."],
+  ["property_leased_email_cancel_note", " Your scheduled showing for this property has been cancelled.",
+   "DRAFT COPY. Inserted into {{cancel_note}} in the email body only when messageState=booked."],
 ];
 
 async function main() {
@@ -96,8 +95,8 @@ async function main() {
     console.log(`  ${existing.has(k) ? "· exists, untouched" : "+ ADD              "}  ${k} = ${JSON.stringify(v)}`);
   }
   console.log(
-    "\nNote: values are created BLANK on purpose — the copy has not been signed off. " +
-    "A blank template is a visible gap, not a message that quietly goes out wrong."
+    "\nNote: this is DRAFT copy, not yet reviewed by the client — good enough to test " +
+    "the pipeline, not to send to a real lead."
   );
 
   if (toAdd.length === 0) { console.log("\n✓ Nothing to do (idempotent)."); return done(0); }

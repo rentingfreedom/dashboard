@@ -1,0 +1,539 @@
+{
+  "updatedAt": "2026-09-25T18:36:29.132Z",
+  "createdAt": "2026-09-25T18:36:29.132Z",
+  "id": "3tUbcCzaBqYisAHr",
+  "name": "RentingFreedom Production - Property Leased Notify",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "pln-webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        200
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "property-leased-notify",
+        "options": {}
+      },
+      "webhookId": "3d657b79-9afd-41cd-b37a-4427a3c6aa09"
+    },
+    {
+      "id": "pln-read-settings",
+      "name": "Read Settings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        200
+      ],
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Settings",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000
+    },
+    {
+      "id": "pln-build-messages",
+      "name": "Build Messages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        200
+      ],
+      "parameters": {
+        "jsCode": "// PROPERTY_LEASED_NOTIFY_MARKER\n// One item in (via 'Read Settings', which this node ignores as its own\n// input), one item out. The webhook body is read by NAMED reference, not\n// $json/$input -- this node's immediate input is Settings' ~60 rows, not the\n// webhook payload (gotcha 19 / gotcha 12).\nconst body = ($('Webhook').first().json || {}).body || {};\n\nconst settingsRows = $('Read Settings').all().map((i) => i.json);\nconst settings = {};\nfor (const r of settingsRows) {\n  const k = String(r.key ?? '').trim();\n  if (k) settings[k] = String(r.value ?? '').trim();\n}\n\nconst personId = String(body.personId || '').trim();\nconst phone = String(body.phone || '').trim();\nconst email = String(body.email || '').trim();\nconst propertyAddress = String(body.propertyAddress || body.propertyKey || 'the property').trim();\nconst isBooked = String(body.messageState || '').trim().toLowerCase() === 'booked';\n\n// SMS_FOOTER_MARKER -- identical helper to every other lead-facing build\n// node in this estate, copied verbatim rather than re-derived.\nconst smsFooter = String(settings.sms_footer || '').trim();\nconst withFooter = (m) => {\n  const b = String(m ?? '');\n  if (!smsFooter || !b || b.includes(smsFooter)) return b;\n  return b + '\\n\\n' + smsFooter;\n};\n\n// Spacing is added HERE, in code, rather than trusted to a leading/trailing\n// space stored in the Settings cell -- live testing showed Google Sheets (or\n// whatever in the read path) silently trims that whitespace, producing\n// \"cancelled.Thank you\" with no space. .trim() first so it is immune to\n// however the value actually arrives, then the exact space this template\n// needs is added back explicitly.\nconst smsTemplate = settings.property_leased_sms_template || '';\nconst smsCancelNoteRaw = String(settings.property_leased_sms_cancel_note || '').trim();\nconst smsCancelPart = isBooked && smsCancelNoteRaw ? smsCancelNoteRaw + ' ' : '';\nconst smsRaw = smsTemplate\n  .replace(/\\{\\{property_address\\}\\}/g, propertyAddress)\n  .replace(/\\{\\{cancel_note\\}\\}/g, smsCancelPart);\nconst smsMessage = withFooter(smsRaw);\n\nconst emailSubjectTemplate = settings.property_leased_email_subject || '';\nconst emailBodyTemplate = settings.property_leased_email_body || '';\nconst emailCancelNoteRaw = String(settings.property_leased_email_cancel_note || '').trim();\nconst emailCancelPart = isBooked && emailCancelNoteRaw ? ' ' + emailCancelNoteRaw : '';\n\nconst emailSubject = emailSubjectTemplate.replace(/\\{\\{property_address\\}\\}/g, propertyAddress);\nconst emailBody = emailBodyTemplate\n  .replace(/\\{\\{property_address\\}\\}/g, propertyAddress)\n  .replace(/\\{\\{cancel_note\\}\\}/g, emailCancelPart);\n\nif (!smsTemplate) console.log('[property-leased-notify] property_leased_sms_template is empty -- SMS body will be blank');\nif (!emailBodyTemplate) console.log('[property-leased-notify] property_leased_email_body is empty -- email body will be blank');\n\nreturn [{ json: {\n  personId,\n  phone,\n  email,\n  from_number: settings.from_number || '',\n  propertyAddress,\n  messageState: body.messageState || '',\n  message: smsMessage,\n  subject: emailSubject,\n  emailBody,\n} }];"
+      }
+    },
+    {
+      "id": "pln-has-phone",
+      "name": "Has Phone?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        672,
+        100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ !!$json.phone }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "pln-send-sms",
+      "name": "Send SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        896,
+        60
+      ],
+      "credentials": {
+        "twilioApi": {
+          "id": "jP1l69eHLQAJsyBz",
+          "name": "Twilio account"
+        }
+      },
+      "parameters": {
+        "from": "={{ $json.from_number }}",
+        "to": "={{ $json.phone }}",
+        "message": "={{ $json.message }}",
+        "options": {}
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "pln-has-email",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        672,
+        320
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ !!$json.email }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "pln-send-email",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        896,
+        360
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "8F2JkQuOKIKFO18Z",
+          "name": "Gmail account"
+        }
+      },
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.emailBody }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "c9471031-92ac-4e23-854f-969ba92517a8"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Read Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Settings": {
+      "main": [
+        [
+          {
+            "node": "Build Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Messages": {
+      "main": [
+        [
+          {
+            "node": "Has Phone?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Phone?": {
+      "main": [
+        [
+          {
+            "node": "Send SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "c067ba64-6eac-4474-8e97-2a230340264e",
+  "activeVersionId": "c067ba64-6eac-4474-8e97-2a230340264e",
+  "versionCounter": 1,
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-09-25T18:36:29.132Z",
+      "createdAt": "2026-09-25T18:36:29.132Z",
+      "role": "workflow:owner",
+      "workflowId": "3tUbcCzaBqYisAHr",
+      "projectId": "STieulzSPBso8RKA",
+      "project": {
+        "updatedAt": "2026-06-12T01:53:40.035Z",
+        "createdAt": "2026-06-12T01:25:32.099Z",
+        "id": "STieulzSPBso8RKA",
+        "name": "Justin Artis <contact@rentingfreedom.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-09-25T18:36:29.132Z",
+    "createdAt": "2026-09-25T18:36:29.132Z",
+    "versionId": "c067ba64-6eac-4474-8e97-2a230340264e",
+    "workflowId": "3tUbcCzaBqYisAHr",
+    "nodes": [
+      {
+        "id": "pln-webhook",
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          200
+        ],
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "property-leased-notify",
+          "options": {}
+        },
+        "webhookId": "3d657b79-9afd-41cd-b37a-4427a3c6aa09"
+      },
+      {
+        "id": "pln-read-settings",
+        "name": "Read Settings",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.5,
+        "position": [
+          224,
+          200
+        ],
+        "parameters": {
+          "documentId": {
+            "__rl": true,
+            "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+            "mode": "id"
+          },
+          "sheetName": {
+            "__rl": true,
+            "value": "Settings",
+            "mode": "name"
+          },
+          "options": {}
+        },
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "B1NdndfWsQ3pFzEV",
+            "name": "Google Sheets account"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 15000
+      },
+      {
+        "id": "pln-build-messages",
+        "name": "Build Messages",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          448,
+          200
+        ],
+        "parameters": {
+          "jsCode": "// PROPERTY_LEASED_NOTIFY_MARKER\n// One item in (via 'Read Settings', which this node ignores as its own\n// input), one item out. The webhook body is read by NAMED reference, not\n// $json/$input -- this node's immediate input is Settings' ~60 rows, not the\n// webhook payload (gotcha 19 / gotcha 12).\nconst body = ($('Webhook').first().json || {}).body || {};\n\nconst settingsRows = $('Read Settings').all().map((i) => i.json);\nconst settings = {};\nfor (const r of settingsRows) {\n  const k = String(r.key ?? '').trim();\n  if (k) settings[k] = String(r.value ?? '').trim();\n}\n\nconst personId = String(body.personId || '').trim();\nconst phone = String(body.phone || '').trim();\nconst email = String(body.email || '').trim();\nconst propertyAddress = String(body.propertyAddress || body.propertyKey || 'the property').trim();\nconst isBooked = String(body.messageState || '').trim().toLowerCase() === 'booked';\n\n// SMS_FOOTER_MARKER -- identical helper to every other lead-facing build\n// node in this estate, copied verbatim rather than re-derived.\nconst smsFooter = String(settings.sms_footer || '').trim();\nconst withFooter = (m) => {\n  const b = String(m ?? '');\n  if (!smsFooter || !b || b.includes(smsFooter)) return b;\n  return b + '\\n\\n' + smsFooter;\n};\n\n// Spacing is added HERE, in code, rather than trusted to a leading/trailing\n// space stored in the Settings cell -- live testing showed Google Sheets (or\n// whatever in the read path) silently trims that whitespace, producing\n// \"cancelled.Thank you\" with no space. .trim() first so it is immune to\n// however the value actually arrives, then the exact space this template\n// needs is added back explicitly.\nconst smsTemplate = settings.property_leased_sms_template || '';\nconst smsCancelNoteRaw = String(settings.property_leased_sms_cancel_note || '').trim();\nconst smsCancelPart = isBooked && smsCancelNoteRaw ? smsCancelNoteRaw + ' ' : '';\nconst smsRaw = smsTemplate\n  .replace(/\\{\\{property_address\\}\\}/g, propertyAddress)\n  .replace(/\\{\\{cancel_note\\}\\}/g, smsCancelPart);\nconst smsMessage = withFooter(smsRaw);\n\nconst emailSubjectTemplate = settings.property_leased_email_subject || '';\nconst emailBodyTemplate = settings.property_leased_email_body || '';\nconst emailCancelNoteRaw = String(settings.property_leased_email_cancel_note || '').trim();\nconst emailCancelPart = isBooked && emailCancelNoteRaw ? ' ' + emailCancelNoteRaw : '';\n\nconst emailSubject = emailSubjectTemplate.replace(/\\{\\{property_address\\}\\}/g, propertyAddress);\nconst emailBody = emailBodyTemplate\n  .replace(/\\{\\{property_address\\}\\}/g, propertyAddress)\n  .replace(/\\{\\{cancel_note\\}\\}/g, emailCancelPart);\n\nif (!smsTemplate) console.log('[property-leased-notify] property_leased_sms_template is empty -- SMS body will be blank');\nif (!emailBodyTemplate) console.log('[property-leased-notify] property_leased_email_body is empty -- email body will be blank');\n\nreturn [{ json: {\n  personId,\n  phone,\n  email,\n  from_number: settings.from_number || '',\n  propertyAddress,\n  messageState: body.messageState || '',\n  message: smsMessage,\n  subject: emailSubject,\n  emailBody,\n} }];"
+        }
+      },
+      {
+        "id": "pln-has-phone",
+        "name": "Has Phone?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          672,
+          100
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "loose"
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ !!$json.phone }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "pln-send-sms",
+        "name": "Send SMS",
+        "type": "n8n-nodes-base.twilio",
+        "typeVersion": 1,
+        "position": [
+          896,
+          60
+        ],
+        "credentials": {
+          "twilioApi": {
+            "id": "jP1l69eHLQAJsyBz",
+            "name": "Twilio account"
+          }
+        },
+        "parameters": {
+          "from": "={{ $json.from_number }}",
+          "to": "={{ $json.phone }}",
+          "message": "={{ $json.message }}",
+          "options": {}
+        },
+        "onError": "continueRegularOutput"
+      },
+      {
+        "id": "pln-has-email",
+        "name": "Has Email?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          672,
+          320
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "loose"
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ !!$json.email }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "pln-send-email",
+        "name": "Send Email",
+        "type": "n8n-nodes-base.gmail",
+        "typeVersion": 2.1,
+        "position": [
+          896,
+          360
+        ],
+        "credentials": {
+          "gmailOAuth2": {
+            "id": "8F2JkQuOKIKFO18Z",
+            "name": "Gmail account"
+          }
+        },
+        "parameters": {
+          "resource": "message",
+          "operation": "send",
+          "sendTo": "={{ $json.email }}",
+          "subject": "={{ $json.subject }}",
+          "message": "={{ $json.emailBody }}",
+          "options": {
+            "appendAttribution": false
+          }
+        },
+        "onError": "continueRegularOutput",
+        "webhookId": "c9471031-92ac-4e23-854f-969ba92517a8"
+      }
+    ],
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "node": "Read Settings",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Read Settings": {
+        "main": [
+          [
+            {
+              "node": "Build Messages",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Messages": {
+        "main": [
+          [
+            {
+              "node": "Has Phone?",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Has Email?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Has Phone?": {
+        "main": [
+          [
+            {
+              "node": "Send SMS",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Has Email?": {
+        "main": [
+          [
+            {
+              "node": "Send Email",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "Justin Artis",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-09-25T18:36:29.338Z",
+        "id": 620,
+        "workflowId": "3tUbcCzaBqYisAHr",
+        "versionId": "c067ba64-6eac-4474-8e97-2a230340264e",
+        "event": "activated",
+        "userId": "dfa0fae0-e632-4870-855c-ea330141bca0"
+      }
+    ]
+  }
+}
