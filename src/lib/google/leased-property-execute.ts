@@ -31,7 +31,12 @@
  *
  * ── The n8n contract ─────────────────────────────────────────────────────
  * `POST {N8N_BASE}/webhook/property-leased-notify`, body:
- *   `{ personId, phone, email, propertyKey, propertyAddress, messageState }`
+ *   `{ personId, name, phone, email, propertyKey, propertyAddress, messageState }`
+ *   `name` added 2026-09-26 so the notice can greet the lead by first name
+ *   (`{{first_name}}` in the templates) -- n8n derives first name from it as
+ *   the first whitespace-delimited token, same convention as the access
+ *   test gate. A blank name renders "Hi ," -- accepted, matching the
+ *   cal-link-email precedent for the same gap.
  * where `messageState` is `"booked"` (their showing was just cancelled — the
  * copy says so) or `"general"` (every other case in the scope doc's table,
  * which all read as one message). Settings keys, matching this estate's own
@@ -210,6 +215,7 @@ async function actOnOne(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         personId: lead.personId,
+        name: lead.name,
         phone: lead.phone,
         email: lead.email,
         propertyKey,

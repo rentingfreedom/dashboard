@@ -286,6 +286,17 @@ the home is gone, cancels any booked showings, and suppresses their sequences.
 > **DRAFT copy — not yet reviewed by the client.** Good enough to prove the
 > pipeline works; get real sign-off before this runs against a real lead.
 >
+> **First-name greeting — CLOSED 2026-09-26**
+> (`scripts/n8n-add-property-leased-first-name.mjs`). Client request: add
+> the lead's first name after "Hi" on both channels. `leased-property-execute.ts`
+> now sends `name` in the webhook payload (from `LeasedPropertyLead.name`,
+> already resolved from FUB); `Build Messages` derives `firstName` as the
+> first whitespace-delimited token and substitutes `{{first_name}}` in the
+> SMS, the email subject and the email body. A blank name renders "Hi ," —
+> accepted, matching the identical, already-accepted gap under
+> `CAL_LINK_EMAIL_COPY_MARKER`. Live-verified same day, execution 48905,
+> real name "Andrew Merritt" → "Hi Andrew" on both channels.
+>
 > **FUB note-logging — CLOSED 2026-09-25** (`scripts/n8n-add-property-leased-note-logging.mjs`).
 > Same four-note shape as everywhere else in this estate: `Send SMS` / `Send
 > Email` (already `onError: continueRegularOutput`) each feed an `X Send
@@ -705,13 +716,51 @@ one call.
 | Timing of the send-off/tag relative to the 2nd nudge? | +4 ET-calendar-days after the task, then +1 more after the send-off. |
 | Multi-property booking-nudge handling? | "Whichever property hits second" — wait for every currently-stalled property, not the first to reach nudge 2. |
 
+### Outreach_Suppression wired in 2026-09-26 — send-off phase only
+
+Client decision 2026-09-26: yes, wire it in. `OUTREACH_SUPPRESSION_MARKER`'s
+existing helper block is reused **verbatim** — same match rules (person_id OR
+phone-last-10 OR email, blank/unparseable `expires_at` = permanent), same
+unknown-scope-suppresses-nothing-but-logs-loudly behaviour — not a seventh
+re-derivation.
+
+- **Only the send-off (5b) checks it.** Task creation (5a) and tag+move (5c)
+  deliberately do NOT — a manually-stopped lead should still generate a
+  visible task for Nicole (that's information for staff, not outreach to the
+  lead), and moving a genuinely non-responsive lead to Cold is an internal
+  categorisation, not a message. Suppression only ever blocks the one thing
+  that is actually a send.
+- **Scope is per-track**, not always `"all"`: the ID track checks
+  `identity_reminders`, the booking track checks `booking_nudges` — each
+  scope also matches a blanket `"all"` row for free, since
+  `isSuppressed(scope, who)` already treats `"all"` as a wildcard. This is
+  the semantically right scope: the send-off is the tail end of exactly
+  those two ladders, so a suppression on either one already implies "don't
+  send this either."
+- **Checked AFTER responded, AFTER stage/trash** — same ordering discipline
+  as everywhere else this marker appears: a lead who already responded is
+  recorded as responded regardless of any suppression row, and a stage/trash
+  cancellation is the more specific, more useful reason to log.
+- **One new node**, `Read Outreach Suppression (Sendoff)`, spliced between
+  `FUB - Get Person (Sendoff)` and `Resolve Sendoff`, `executeOnce` (without
+  it `Resolve Sendoff` — `runOnceForEachItem` — would run once per
+  suppression ROW instead of once for the current lead, gotcha 4). Inserting
+  it ahead of `Resolve Sendoff` is gotcha 19 in the flesh: that node's own
+  FUB-person reference had to move from bare `$json` to
+  `$('FUB - Get Person (Sendoff)').first().json`, since its immediate input
+  is now the suppression read, not the FUB response.
+
+Workflow recreated with the fix (it was still zero-usage and inactive, so
+delete-and-recreate rather than a surgical PUT — same precedent as the
+go-forward-cutoff fix): new id `w8VkzN2V9TLFReXw`.
+
 ### Still open before this can be activated
 
 1. **Client sign-off on the send-off SMS/email copy** — it is DRAFT.
-2. **Whether to wire in `Outreach_Suppression`** before go-live (see 5b).
-3. **`followup_enabled` and the workflow's own active flag both need
+   "try and base with you" → "try and touch base with you" fixed 2026-09-26.
+2. **`followup_enabled` and the workflow's own active flag both need
    flipping** — deliberately two separate switches, neither touched yet.
-4. **No offline verifier exists for this build**, unlike most features this
+3. **No offline verifier exists for this build**, unlike most features this
    size in this estate (`*-verify.mjs`, typically 40–100+ assertions against
    the live deployed code). `followup-preview.mjs` is read-only and covers
    candidate detection only, not the send-off/tag phases (nothing can be due

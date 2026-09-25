@@ -1,7 +1,7 @@
 {
-  "updatedAt": "2026-09-25T20:20:31.051Z",
-  "createdAt": "2026-09-25T20:20:31.051Z",
-  "id": "24ZSshSO2T3HuHC9",
+  "updatedAt": "2026-09-25T20:36:50.489Z",
+  "createdAt": "2026-09-25T20:36:50.489Z",
+  "id": "w8VkzN2V9TLFReXw",
   "name": "RentingFreedom Production - No Response Follow-Up",
   "description": null,
   "active": false,
@@ -916,6 +916,41 @@
       "waitBetweenTries": 15000
     },
     {
+      "id": "fu-sendoff-read-suppression",
+      "name": "Read Outreach Suppression (Sendoff)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2090,
+        740
+      ],
+      "executeOnce": true,
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 15000,
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Outreach_Suppression",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "B1NdndfWsQ3pFzEV",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
       "id": "fu-sendoff-resolve",
       "name": "Resolve Sendoff",
       "type": "n8n-nodes-base.code",
@@ -926,7 +961,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const norm = (s) => String(s ?? '').trim().toLowerCase();\nconst TRASH_TAGS = ['permanent trash', 'no response trash', 'denied credit'];\nconst TRASH_STAGES = ['trash', 'permanent trash', 'cold rental lead 1 month hold'];\nfunction guardVerdict(person, allowedStages) {\n  if (!person || !person.id) return { ok: false, reason: 'person_not_found' };\n  const stage = norm(person.stage);\n  const tags = (person.tags || []).map(norm);\n  const hitTags = tags.filter(t => TRASH_TAGS.indexOf(t) !== -1);\n  if (hitTags.length) return { ok: false, reason: 'trash_tag:' + hitTags.join('/'), stage, tags: person.tags || [] };\n  if (TRASH_STAGES.indexOf(stage) !== -1) return { ok: false, reason: 'trash_stage:' + stage, stage, tags: person.tags || [] };\n  if (allowedStages.length && allowedStages.indexOf(stage) === -1) return { ok: false, reason: 'stage_not_allowed:' + stage, stage, tags: person.tags || [] };\n  return { ok: true, reason: '', stage, tags: person.tags || [] };\n}\nconst settingsRows = $('Read Settings').all().map(i => i.json);\nconst settings = {};\nfor (const r of settingsRows) { const k = String(r.key ?? '').trim(); if (k) settings[k] = String(r.value ?? '').trim(); }\nconst allowed = String(settings.allowed_stages || '').split(',').map(norm).filter(Boolean);\n\nconst d = $('Sendoff Loop').first().json; // batchSize 1\nconst resp = $json || {};\nconst person = (resp.people && resp.people[0]) ? resp.people[0] : resp;\n\n// Responded first -- a lead who responded but has since drifted stage should\n// still be recorded as responded, not cancelled; response is the better fact.\nconst track = String(d.track ?? '').trim();\nlet responded = false;\nif (track === 'id_verification') {\n  const ivRows = $('Read Identity Verifications').all().map(i => i.json);\n  responded = ivRows.some(r => String(r.lead_id ?? '').trim() === String(d.person_id ?? '').trim()\n                              && norm(r.status) === 'verified');\n} else {\n  const inqRows = $('Read Inquiries').all().map(i => i.json);\n  responded = inqRows.some(r => String(r.person_id ?? '').trim() === String(d.person_id ?? '').trim()\n                               && String(r.booked_at ?? '').trim());\n}\nif (responded) return [{ json: Object.assign({}, d, { outcome: 'responded' }) }];\n\nconst v = guardVerdict(person, allowed);\nif (!v.ok) return [{ json: Object.assign({}, d, { outcome: 'cancelled', cancel_reason: v.reason }) }];\n\nconst contactFirstName = String((person.firstName || '')).trim();\nconst inquiryAddress = String(d.driving_property_address || 'your rental inquiry').trim();\n\nconst smsRaw = String(settings.followup_sendoff_sms_template || '')\n  .replace(/\\{\\{contact_first_name\\}\\}/g, contactFirstName)\n  .replace(/\\{\\{inquiry_address\\}\\}/g, inquiryAddress);\nconst smsFooter = String(settings.sms_footer || '').trim();\nconst smsMessage = (!smsFooter || !smsRaw || smsRaw.includes(smsFooter)) ? smsRaw : (smsRaw + '\\n\\n' + smsFooter);\n\nconst emailSubject = String(settings.followup_sendoff_email_subject || '')\n  .replace(/\\{\\{contact_first_name\\}\\}/g, contactFirstName)\n  .replace(/\\{\\{inquiry_address\\}\\}/g, inquiryAddress);\nconst emailBody = String(settings.followup_sendoff_email_body || '')\n  .replace(/\\{\\{contact_first_name\\}\\}/g, contactFirstName)\n  .replace(/\\{\\{inquiry_address\\}\\}/g, inquiryAddress);\n\nconst phone = (person.phones && person.phones[0] && person.phones[0].value) || d.phone || '';\nconst email = (person.emails && person.emails[0] && person.emails[0].value) || d.email || '';\n\nreturn [{ json: Object.assign({}, d, {\n  outcome: 'send', has_phone: !!phone, has_email: !!email, phone: String(phone), email: String(email),\n  from_number: settings.from_number || '', message: smsMessage, subject: emailSubject, email_body: emailBody,\n}) }];"
+        "jsCode": "const norm = (s) => String(s ?? '').trim().toLowerCase();\nconst TRASH_TAGS = ['permanent trash', 'no response trash', 'denied credit'];\nconst TRASH_STAGES = ['trash', 'permanent trash', 'cold rental lead 1 month hold'];\nfunction guardVerdict(person, allowedStages) {\n  if (!person || !person.id) return { ok: false, reason: 'person_not_found' };\n  const stage = norm(person.stage);\n  const tags = (person.tags || []).map(norm);\n  const hitTags = tags.filter(t => TRASH_TAGS.indexOf(t) !== -1);\n  if (hitTags.length) return { ok: false, reason: 'trash_tag:' + hitTags.join('/'), stage, tags: person.tags || [] };\n  if (TRASH_STAGES.indexOf(stage) !== -1) return { ok: false, reason: 'trash_stage:' + stage, stage, tags: person.tags || [] };\n  if (allowedStages.length && allowedStages.indexOf(stage) === -1) return { ok: false, reason: 'stage_not_allowed:' + stage, stage, tags: person.tags || [] };\n  return { ok: true, reason: '', stage, tags: person.tags || [] };\n}\nconst supRows = $('Read Outreach Suppression (Sendoff)').all().map((i) => i.json || {});\nconst supUnreadable = supRows.some((r) => r && r.error);\nconst supLast10 = (v) => String(v ?? '').replace(/\\D/g, '').slice(-10);\nconst SUP_SCOPES = ['all', 'cal_link', 'identity', 'identity_reminders', 'booking_nudges', 'cal_reminders'];\nfor (const r of supRows) {\n  if (!r || r.error) continue;\n  const s = String(r.scope ?? '').trim().toLowerCase();\n  if (s && !SUP_SCOPES.includes(s)) {\n    console.log('[followup][outreach-suppression] UNKNOWN scope ' + JSON.stringify(r.scope) + ' on person ' + String(r.person_id ?? '?') + ' -- it suppresses NOTHING');\n  }\n}\nconst supActive = (r) => {\n  const exp = String(r.expires_at ?? '').trim();\n  if (!exp) return true;\n  const ms = Date.parse(exp);\n  if (!Number.isFinite(ms)) return true;\n  return ms > Date.now();\n};\nconst isSuppressed = (scope, who) => {\n  const pid = String(who.person_id ?? '').trim();\n  const ph = supLast10(who.phone);\n  const em = String(who.email ?? '').trim().toLowerCase();\n  return supRows.some((r) => {\n    if (!r || r.error) return false;\n    const s = String(r.scope ?? '').trim().toLowerCase();\n    if (s !== 'all' && s !== scope) return false;\n    const rid = String(r.person_id ?? '').trim();\n    const hit = (rid !== '' && pid !== '' && rid === pid)\n      || (ph !== '' && supLast10(r.phone) === ph)\n      || (em !== '' && String(r.email ?? '').trim().toLowerCase() === em);\n    if (!hit) return false;\n    return supActive(r);\n  });\n};\nconst settingsRows = $('Read Settings').all().map(i => i.json);\nconst settings = {};\nfor (const r of settingsRows) { const k = String(r.key ?? '').trim(); if (k) settings[k] = String(r.value ?? '').trim(); }\nconst allowed = String(settings.allowed_stages || '').split(',').map(norm).filter(Boolean);\n\nconst d = $('Sendoff Loop').first().json; // batchSize 1\n// Named reference, not bare $json -- Read Outreach Suppression (Sendoff) now\n// sits between FUB - Get Person (Sendoff) and this node (gotcha 19).\nconst resp = $('FUB - Get Person (Sendoff)').first().json || {};\nconst person = (resp.people && resp.people[0]) ? resp.people[0] : resp;\n\n// Responded first -- a lead who responded but has since drifted stage should\n// still be recorded as responded, not cancelled; response is the better fact.\nconst track = String(d.track ?? '').trim();\nlet responded = false;\nif (track === 'id_verification') {\n  const ivRows = $('Read Identity Verifications').all().map(i => i.json);\n  responded = ivRows.some(r => String(r.lead_id ?? '').trim() === String(d.person_id ?? '').trim()\n                              && norm(r.status) === 'verified');\n} else {\n  const inqRows = $('Read Inquiries').all().map(i => i.json);\n  responded = inqRows.some(r => String(r.person_id ?? '').trim() === String(d.person_id ?? '').trim()\n                               && String(r.booked_at ?? '').trim());\n}\nif (responded) return [{ json: Object.assign({}, d, { outcome: 'responded' }) }];\n\nconst v = guardVerdict(person, allowed);\nif (!v.ok) return [{ json: Object.assign({}, d, { outcome: 'cancelled', cancel_reason: v.reason }) }];\n\n// OUTREACH_SUPPRESSION_MARKER -- checked AFTER responded/stage-trash, same\n// ordering as the estate's own six existing check sites: a lead who already\n// responded is recorded as responded regardless, and a stage/trash cancel is\n// a more specific reason than a blanket suppression. Scope is per-track --\n// a suppression on booking_nudges (or identity_reminders, or all) also stops\n// THIS message, since it is the tail end of that same ladder.\nif (supUnreadable) return [{ json: Object.assign({}, d, { outcome: 'cancelled', cancel_reason: 'outreach_suppression_unreadable' }) }];\nconst suppressionScope = track === 'id_verification' ? 'identity_reminders' : 'booking_nudges';\nconst phoneForCheck = (person.phones && person.phones[0] && person.phones[0].value) || d.phone || '';\nconst emailForCheck = (person.emails && person.emails[0] && person.emails[0].value) || d.email || '';\nif (isSuppressed(suppressionScope, { person_id: d.person_id, phone: phoneForCheck, email: emailForCheck })) {\n  return [{ json: Object.assign({}, d, { outcome: 'cancelled', cancel_reason: 'outreach_suppressed' }) }];\n}\n\nconst contactFirstName = String((person.firstName || '')).trim();\nconst inquiryAddress = String(d.driving_property_address || 'your rental inquiry').trim();\n\nconst smsRaw = String(settings.followup_sendoff_sms_template || '')\n  .replace(/\\{\\{contact_first_name\\}\\}/g, contactFirstName)\n  .replace(/\\{\\{inquiry_address\\}\\}/g, inquiryAddress);\nconst smsFooter = String(settings.sms_footer || '').trim();\nconst smsMessage = (!smsFooter || !smsRaw || smsRaw.includes(smsFooter)) ? smsRaw : (smsRaw + '\\n\\n' + smsFooter);\n\nconst emailSubject = String(settings.followup_sendoff_email_subject || '')\n  .replace(/\\{\\{contact_first_name\\}\\}/g, contactFirstName)\n  .replace(/\\{\\{inquiry_address\\}\\}/g, inquiryAddress);\nconst emailBody = String(settings.followup_sendoff_email_body || '')\n  .replace(/\\{\\{contact_first_name\\}\\}/g, contactFirstName)\n  .replace(/\\{\\{inquiry_address\\}\\}/g, inquiryAddress);\n\nconst phone = (person.phones && person.phones[0] && person.phones[0].value) || d.phone || '';\nconst email = (person.emails && person.emails[0] && person.emails[0].value) || d.email || '';\n\nreturn [{ json: Object.assign({}, d, {\n  outcome: 'send', has_phone: !!phone, has_email: !!email, phone: String(phone), email: String(email),\n  from_number: settings.from_number || '', message: smsMessage, subject: emailSubject, email_body: emailBody,\n}) }];"
       }
     },
     {
@@ -1578,7 +1613,7 @@
           "appendAttribution": false
         }
       },
-      "webhookId": "b48d74f9-b370-40cb-b659-827c88fec688"
+      "webhookId": "039517a2-0144-4f0f-ae1d-1299366f48dc"
     },
     {
       "id": "fu-sendoff-email-failed",
@@ -2903,6 +2938,17 @@
       "main": [
         [
           {
+            "node": "Read Outreach Suppression (Sendoff)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Outreach Suppression (Sendoff)": {
+      "main": [
+        [
+          {
             "node": "Resolve Sendoff",
             "type": "main",
             "index": 0
@@ -3339,17 +3385,17 @@
   "meta": null,
   "nodeGroups": [],
   "pinData": null,
-  "versionId": "d2f06855-e5b4-4a62-8c2b-b29aafcbd9cc",
+  "versionId": "fe47b7cf-d4f7-43f5-90f8-d6ea76cd68a9",
   "activeVersionId": null,
   "versionCounter": 1,
   "triggerCount": 0,
   "sourceWorkflowId": null,
   "shared": [
     {
-      "updatedAt": "2026-09-25T20:20:31.051Z",
-      "createdAt": "2026-09-25T20:20:31.051Z",
+      "updatedAt": "2026-09-25T20:36:50.489Z",
+      "createdAt": "2026-09-25T20:36:50.489Z",
       "role": "workflow:owner",
-      "workflowId": "24ZSshSO2T3HuHC9",
+      "workflowId": "w8VkzN2V9TLFReXw",
       "projectId": "STieulzSPBso8RKA",
       "project": {
         "updatedAt": "2026-06-12T01:53:40.035Z",

@@ -336,6 +336,48 @@ function guardVerdict(person, allowedStages) {
 }
 `.trim();
 
+// OUTREACH_SUPPRESSION_MARKER -- copied verbatim from the estate's own
+// six existing enforcement points (n8n-add-outreach-suppression.mjs) so this
+// is the SAME behaviour, not a seventh re-derivation. Assumes GUARD_JS ran
+// first in the same Code node (reuses its `norm`, does not redeclare it).
+// Read node name is fixed at "Read Outreach Suppression (Sendoff)".
+const SUPPRESSION_JS = `
+const supRows = $('Read Outreach Suppression (Sendoff)').all().map((i) => i.json || {});
+const supUnreadable = supRows.some((r) => r && r.error);
+const supLast10 = (v) => String(v ?? '').replace(/\\D/g, '').slice(-10);
+const SUP_SCOPES = ['all', 'cal_link', 'identity', 'identity_reminders', 'booking_nudges', 'cal_reminders'];
+for (const r of supRows) {
+  if (!r || r.error) continue;
+  const s = String(r.scope ?? '').trim().toLowerCase();
+  if (s && !SUP_SCOPES.includes(s)) {
+    console.log('[followup][outreach-suppression] UNKNOWN scope ' + JSON.stringify(r.scope) + ' on person ' + String(r.person_id ?? '?') + ' -- it suppresses NOTHING');
+  }
+}
+const supActive = (r) => {
+  const exp = String(r.expires_at ?? '').trim();
+  if (!exp) return true;
+  const ms = Date.parse(exp);
+  if (!Number.isFinite(ms)) return true;
+  return ms > Date.now();
+};
+const isSuppressed = (scope, who) => {
+  const pid = String(who.person_id ?? '').trim();
+  const ph = supLast10(who.phone);
+  const em = String(who.email ?? '').trim().toLowerCase();
+  return supRows.some((r) => {
+    if (!r || r.error) return false;
+    const s = String(r.scope ?? '').trim().toLowerCase();
+    if (s !== 'all' && s !== scope) return false;
+    const rid = String(r.person_id ?? '').trim();
+    const hit = (rid !== '' && pid !== '' && rid === pid)
+      || (ph !== '' && supLast10(r.phone) === ph)
+      || (em !== '' && String(r.email ?? '').trim().toLowerCase() === em);
+    if (!hit) return false;
+    return supActive(r);
+  });
+};
+`.trim();
+
 // ── Phase A: ID-verification track detection ────────────────────────────
 
 const FIND_ID_TASK_JS = `
@@ -493,11 +535,14 @@ return out;
 
 const RESOLVE_SENDOFF_JS = `
 ${GUARD_JS}
+${SUPPRESSION_JS}
 ${SETTINGS_JS}
 const allowed = String(settings.allowed_stages || '').split(',').map(norm).filter(Boolean);
 
 const d = $('Sendoff Loop').first().json; // batchSize 1
-const resp = $json || {};
+// Named reference, not bare $json -- Read Outreach Suppression (Sendoff) now
+// sits between FUB - Get Person (Sendoff) and this node (gotcha 19).
+const resp = $('FUB - Get Person (Sendoff)').first().json || {};
 const person = (resp.people && resp.people[0]) ? resp.people[0] : resp;
 
 // Responded first -- a lead who responded but has since drifted stage should
@@ -517,6 +562,20 @@ if (responded) return [{ json: Object.assign({}, d, { outcome: 'responded' }) }]
 
 const v = guardVerdict(person, allowed);
 if (!v.ok) return [{ json: Object.assign({}, d, { outcome: 'cancelled', cancel_reason: v.reason }) }];
+
+// OUTREACH_SUPPRESSION_MARKER -- checked AFTER responded/stage-trash, same
+// ordering as the estate's own six existing check sites: a lead who already
+// responded is recorded as responded regardless, and a stage/trash cancel is
+// a more specific reason than a blanket suppression. Scope is per-track --
+// a suppression on booking_nudges (or identity_reminders, or all) also stops
+// THIS message, since it is the tail end of that same ladder.
+if (supUnreadable) return [{ json: Object.assign({}, d, { outcome: 'cancelled', cancel_reason: 'outreach_suppression_unreadable' }) }];
+const suppressionScope = track === 'id_verification' ? 'identity_reminders' : 'booking_nudges';
+const phoneForCheck = (person.phones && person.phones[0] && person.phones[0].value) || d.phone || '';
+const emailForCheck = (person.emails && person.emails[0] && person.emails[0].value) || d.email || '';
+if (isSuppressed(suppressionScope, { person_id: d.person_id, phone: phoneForCheck, email: emailForCheck })) {
+  return [{ json: Object.assign({}, d, { outcome: 'cancelled', cancel_reason: 'outreach_suppressed' }) }];
+}
 
 const contactFirstName = String((person.firstName || '')).trim();
 const inquiryAddress = String(d.driving_property_address || 'your rental inquiry').trim();
@@ -645,6 +704,19 @@ const nodes = [
   codeAll("fu-find-sendoff", "Find Sendoff Candidates", [1540, 820], FIND_SENDOFF_JS),
   splitInBatches("fu-sendoff-loop", "Sendoff Loop", [1760, 820]),
   fubGetPerson("fu-sendoff-get-person", "FUB - Get Person (Sendoff)", [1980, 740]),
+  // OUTREACH_SUPPRESSION_MARKER -- executeOnce is load-bearing: without it,
+  // Resolve Sendoff (runOnceForEachItem) would run once per SUPPRESSION ROW
+  // instead of once for the current lead (gotcha 4).
+  { id: "fu-sendoff-read-suppression", name: "Read Outreach Suppression (Sendoff)",
+    type: "n8n-nodes-base.googleSheets", typeVersion: 4.5, position: [2090, 740],
+    executeOnce: true, retryOnFail: true, maxTries: 5, waitBetweenTries: 15000,
+    onError: "continueRegularOutput", alwaysOutputData: true,
+    parameters: {
+      documentId: { __rl: true, value: SPREADSHEET_ID, mode: "id" },
+      sheetName: { __rl: true, value: "Outreach_Suppression", mode: "name" },
+      options: {},
+    },
+    credentials: SHEETS_CRED },
   codeEach("fu-sendoff-resolve", "Resolve Sendoff", [2200, 740], RESOLVE_SENDOFF_JS),
   boolIf("fu-sendoff-responded-if", "Responded? (Sendoff)", [2420, 740], "$json.outcome === 'responded'"),
   updateTrackingRow("fu-sendoff-mark-responded", "Update Tracking (Sendoff Responded)", [2640, 660],
@@ -780,7 +852,8 @@ const connections = {
     [{ node: "Find Tag Candidates", type: "main", index: 0 }],
     [{ node: "FUB - Get Person (Sendoff)", type: "main", index: 0 }],
   ] },
-  "FUB - Get Person (Sendoff)": { main: [[{ node: "Resolve Sendoff", type: "main", index: 0 }]] },
+  "FUB - Get Person (Sendoff)": { main: [[{ node: "Read Outreach Suppression (Sendoff)", type: "main", index: 0 }]] },
+  "Read Outreach Suppression (Sendoff)": { main: [[{ node: "Resolve Sendoff", type: "main", index: 0 }]] },
   "Resolve Sendoff": { main: [[{ node: "Responded? (Sendoff)", type: "main", index: 0 }]] },
   "Responded? (Sendoff)": { main: [
     [{ node: "Update Tracking (Sendoff Responded)", type: "main", index: 0 }],
