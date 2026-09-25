@@ -185,6 +185,16 @@ export async function getLeasedPropertyPlan(propertyKey: string): Promise<Leased
   // in-flight.ts's identical note).
   const eventTypeId = String(property.cal_event_type_id ?? "").trim();
   const bookingsForProperty = eventTypeId ? bookings.filter((b) => b.cal_event_type_id === eventTypeId) : [];
+  // KNOWN GAP, not fixed here: `who.phone`/`who.email` come from the
+  // Inquiries row snapshot, which in-flight.ts documents as going stale (a
+  // lead's phone is often added AFTER their inquiry). The `fub_person_id`
+  // arm is the reliable one and covers every booking created since
+  // CAL_BOOKINGS_PERSON_ID_MARKER; a booking older than that with no
+  // person id AND a lead whose contact info changed since their inquiry
+  // could be missed here, showing as "general" (no cancel attempted) when a
+  // live showing actually exists. Narrow — in-flight.ts's own cross-tab
+  // phone/email enrichment would close it, at the cost of reading
+  // Identity_Verifications too; worth doing if this ever misses a real one.
   const findBooking = (who: { personId: string; phone: string; email: string }): BookingRow | undefined => {
     const ph = last10(who.phone);
     const em = norm(who.email);
