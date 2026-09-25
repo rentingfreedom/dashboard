@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { MoreHorizontal, UserCheck, UserX, Lock, Unlock, PowerOff, Pencil, Trash2, RotateCcw, Eye, EyeOff } from "lucide-react";
+import { MoreHorizontal, UserCheck, UserX, Lock, Unlock, PowerOff, Pencil, Trash2, RotateCcw, Eye, EyeOff, Home } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,6 +17,7 @@ import { DeactivateDialog } from "./deactivate-dialog";
 import { DeleteDialog } from "./delete-dialog";
 import { AssignLockboxDialog } from "./assign-lockbox-dialog";
 import { OverrideConfirmDialog } from "./override-confirm-dialog";
+import { PropertyLeasedDialog } from "./property-leased-dialog";
 
 interface PropertyActionsProps {
   property: Property;
@@ -31,6 +32,7 @@ export function PropertyActions({ property, availableLockboxes, onRefresh, onEdi
   const [deactivateOpen, setDeactivateOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
+  const [leasedOpen, setLeasedOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [confirmTarget, setConfirmTarget] = useState<"vacant" | "occupied" | null>(null);
 
@@ -177,6 +179,14 @@ export function PropertyActions({ property, availableLockboxes, onRefresh, onEdi
                   Clear override
                 </DropdownMenuItem>
               )}
+              <DropdownMenuSeparator />
+              {/* Item 07, 3b. Admin only, unlike Stop/Pause on the outreach
+                  table — this can cancel a real showing and message several
+                  real customers in one click, with no per-sequence undo. */}
+              <DropdownMenuItem onClick={() => setLeasedOpen(true)}>
+                <Home className="h-4 w-4 mr-2 text-red-500" />
+                Property has leased…
+              </DropdownMenuItem>
             </>
           )}
           {/* Show anyway — only meaningful on an occupied home, and offered to
@@ -268,6 +278,11 @@ export function PropertyActions({ property, availableLockboxes, onRefresh, onEdi
         targetStatus={confirmTarget}
         onConfirm={handleConfirmOverride}
         loading={loading}
+      />
+      <PropertyLeasedDialog
+        property={leasedOpen ? property : null}
+        onOpenChange={(open) => setLeasedOpen(open)}
+        onDone={onRefresh}
       />
     </>
   );
