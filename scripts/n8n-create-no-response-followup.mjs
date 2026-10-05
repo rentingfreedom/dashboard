@@ -345,7 +345,13 @@ const SUPPRESSION_JS = `
 const supRows = $('Read Outreach Suppression (Sendoff)').all().map((i) => i.json || {});
 const supUnreadable = supRows.some((r) => r && r.error);
 const supLast10 = (v) => String(v ?? '').replace(/\\D/g, '').slice(-10);
-const SUP_SCOPES = ['all', 'cal_link', 'identity', 'identity_reminders', 'booking_nudges', 'cal_reminders'];
+// CAL_REMINDERS_SCOPE_SPLIT_MARKER (2026-09-28): kept in sync with the other
+// seven copies of this allowlist even though this workflow only ever passes
+// 'identity_reminders' or 'booking_nudges' -- an unmaintained copy here would
+// log a spurious "UNKNOWN scope" warning for a real cal_reminders_previsit/
+// postvisit suppression row, which is confusing even though it changes no
+// suppression decision.
+const SUP_SCOPES = ['all', 'cal_link', 'identity', 'identity_reminders', 'booking_nudges', 'cal_reminders_previsit', 'cal_reminders_postvisit'];
 for (const r of supRows) {
   if (!r || r.error) continue;
   const s = String(r.scope ?? '').trim().toLowerCase();

@@ -16,14 +16,14 @@ import { toast } from "sonner";
 import { fetchJson } from "@/lib/fetch-json";
 
 /**
- * The two actions that move a lead FORWARD, as opposed to stopping them.
+ * The actions that move a lead FORWARD, as opposed to stopping them.
  *
  * They share a dialog because they share a shape — one lead, one optional
- * property, one confirm, one POST — and because both can cause a real send,
- * which means both need the same "what will actually happen" preamble rather
- * than one of them quietly getting a thinner one.
+ * property, one confirm, one POST — and because all three can cause a real
+ * send, which means all three need the same "what will actually happen"
+ * preamble rather than one of them quietly getting a thinner one.
  */
-export type LeadActionKind = "mark_verified" | "restart_nudges";
+export type LeadActionKind = "mark_verified" | "restart_nudges" | "send_link";
 
 export interface LeadActionTarget {
   kind: LeadActionKind;
@@ -75,6 +75,20 @@ const COPY: Record<
     ],
     withReason: false,
   },
+  send_link: {
+    title: "Send booking link",
+    description:
+      "Delivers this lead's booking link for this property right now, instead of waiting for something else to trigger it.",
+    endpoint: "/api/outreach/send-link",
+    cta: "Send link",
+    busy: "Sending…",
+    effects: [
+      "One SMS and one email, for this property only.",
+      "Refused if they aren't ID-verified or waived yet — this can't be used to skip that step.",
+      "Refused if the link already went out, or this property is currently suppressed for them.",
+    ],
+    withReason: false,
+  },
 };
 
 export function LeadActionDialog({
@@ -103,15 +117,18 @@ export function LeadActionDialog({
         released?: number;
         swept?: boolean;
         skipped?: Record<string, string>;
+        sent?: boolean;
+        reason?: string;
       }>(copy.endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           personId: target.personId,
-          // For restart_nudges this scopes the action to the row the operator
-          // was looking at. For mark_verified the backend ignores it for
-          // filtering (verification is person-level, not per-property) — it
-          // is sent only as audit-trail context for which row was open.
+          // For restart_nudges and send_link this scopes the action to the
+          // row the operator was looking at. For mark_verified the backend
+          // ignores it for filtering (verification is person-level, not
+          // per-property) — it is sent only as audit-trail context for which
+          // row was open.
           propertyKey: target.propertyKey || undefined,
           ...(copy.withReason && reason ? { reason } : {}),
         }),
@@ -133,6 +150,19 @@ export function LeadActionDialog({
             `Booking nudges restarted for ${who}` +
               (skipped.length ? ` (${skipped.length} row(s) skipped)` : "")
           );
+        }
+      } else if (target.kind === "send_link") {
+        const REASON_COPY: Record<string, string> = {
+          already_delivered: "already delivered — nothing to send",
+          suppressed: "this property is currently suppressed for them — use Restart instead",
+          not_verified: "not yet ID-verified or waived",
+          no_inquiry: "no inquiry on file for this property",
+          send_failed: "the send could not be confirmed — check FUB",
+        };
+        if (res.sent) {
+          toast.success(`Booking link sent to ${who}.`);
+        } else {
+          toast.warning(`Nothing sent to ${who} — ${REASON_COPY[res.reason ?? ""] ?? res.reason ?? "unknown reason"}.`);
         }
       } else if (res.released) {
         toast.success(
@@ -174,7 +204,7 @@ export function LeadActionDialog({
             </ul>
           </div>
 
-          {target?.kind === "restart_nudges" &&
+          {(target?.kind === "restart_nudges" || target?.kind === "send_link") &&
           (target?.propertyAddress || target?.propertyKey) ? (
             <p className="text-xs text-gray-500 dark:text-gray-400">
               Applies to{" "}

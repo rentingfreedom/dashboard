@@ -100,7 +100,13 @@ const showingRow = (over = {}) => ({
   status: "code_sent", code_sent_at: ended(74), ...over,
 });
 
-const FOLLOWUPS = ["followup", "followup_1day_email", "followup_1day_sms", "followup_2day_email", "followup_2day_sms", "followup_3day_email", "followup_3day_sms"];
+// SHOWING_REVIEW_REMOVED_MARKER (item 1, 2026-09-28): 'showing' was dropped
+// from the day-0 `followup` rule's categories entirely (it was a pure
+// review-request email), so it no longer appears in a showing booking's
+// candidate steps at all -- not suppressed, not live, just absent. The
+// remaining 6 are unaffected: they still fire (minus the review-link
+// sentence, a copy-only change with no bearing on this gate).
+const FOLLOWUPS = ["followup_1day_email", "followup_1day_sms", "followup_2day_email", "followup_2day_sms", "followup_3day_email", "followup_3day_sms"];
 
 async function main() {
   console.log("═".repeat(72));
@@ -136,14 +142,14 @@ async function main() {
     // Rita's real shape: showing booking, NO Showings row at all.
     const r = run(code, { bookings: [booking()], showings: [showingRow({ booking_uid: "someone-else" })] });
     const sup = suppressedKeys(r);
-    eq("A2  no Showings row: all 7 follow-ups suppressed", sup.length, 7);
+    eq("A2  no Showings row: all 6 follow-ups suppressed", sup.length, 6);
     for (const k of FOLLOWUPS) ok(`A3.${k} suppressed`, sup.includes(k), sup.join(","));
-    ok("A4  the decision is logged per step", r.logs.filter((l) => /suppress/.test(l)).length >= 7);
+    ok("A4  the decision is logged per step", r.logs.filter((l) => /suppress/.test(l)).length >= 6);
   }
   {
     const r = run(code, { bookings: [booking()], showings: [showingRow()] });
     eq("A5  code_sent: NOTHING suppressed", suppressedKeys(r).length, 0);
-    eq("A6  code_sent: the follow-ups still go out", liveKeys(r).filter((k) => FOLLOWUPS.includes(k)).length, 7);
+    eq("A6  code_sent: the follow-ups still go out", liveKeys(r).filter((k) => FOLLOWUPS.includes(k)).length, 6);
   }
   {
     const r = run(code, { bookings: [booking()], showings: [showingRow({ status: "completed" })] });
@@ -156,7 +162,7 @@ async function main() {
   }
   for (const [n, st] of [["A9 ", "scheduled"], ["A10", "blocked_no_lockbox"], ["A11", "blocked_rejected"]]) {
     const r = run(code, { bookings: [booking()], showings: [showingRow({ status: st, code_sent_at: "" })] });
-    eq(`${n} status '${st}': suppressed`, suppressedKeys(r).length, 7);
+    eq(`${n} status '${st}': suppressed`, suppressedKeys(r).length, 6);
   }
   {
     // Reschedule repair can leave two rows for one uid; ANY delivered row

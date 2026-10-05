@@ -2,7 +2,7 @@
 
 import {
   useReactTable, getCoreRowModel, getFilteredRowModel, getSortedRowModel,
-  flexRender, createColumnHelper, type SortingState,
+  flexRender, createColumnHelper, type SortingState, type Column,
 } from "@tanstack/react-table";
 import { useState, useMemo } from "react";
 import { ArrowUpDown, MoreHorizontal, Ban } from "lucide-react";
@@ -20,14 +20,35 @@ import { ShowingStatusBadge } from "./showing-status-badge";
 import { CancelShowingDialog } from "./cancel-showing-dialog";
 import type { Showing } from "@/lib/types";
 
-/** A future, still-`scheduled` booking — the only one `/api/bookings/cancel` can act on. */
+/**
+ * A future booking `/api/bookings/cancel` can act on. The route itself never
+ * checks status — it cancels the Cal.com booking by uid regardless — so the
+ * gate here is purely "has this already happened or been resolved". A door
+ * code being out (`code_sent`) is not a reason to hide cancel: two-window
+ * codes (ACCESS_CODE_TWO_WINDOW_MARKER) can arrive up to 2h before the visit,
+ * a long window in which staff may still need to call off a showing. The
+ * dialog itself already warns that a sent code isn't revoked (gotcha 8).
+ */
 function isCancellable(s: Showing): boolean {
-  if (String(s.status).trim().toLowerCase() !== "scheduled") return false;
+  const status = String(s.status).trim().toLowerCase();
+  if (status !== "scheduled" && status !== "code_sent") return false;
   const ms = new Date(s.showing_time).getTime();
   return Number.isFinite(ms) && ms > Date.now();
 }
 
 const col = createColumnHelper<Showing>();
+
+/** Every column header renders through this, so sorting looks and behaves identically everywhere. */
+function sortableHeader<T>(label: string) {
+  return ({ column }: { column: Column<T, unknown> }) => (
+    <button
+      className="flex items-center gap-1 text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
+      onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+    >
+      {label} <ArrowUpDown className="h-3 w-3" />
+    </button>
+  );
+}
 
 function formatDateTime(v: string): string {
   if (!v) return "—";
@@ -52,6 +73,7 @@ export function ShowingsTable({ showings, onRefresh }: ShowingsTableProps) {
   const [sorting, setSorting] = useState<SortingState>([{ id: "showing_time", desc: true }]);
   const [globalFilter, setGlobalFilter] = useState("");
   const [showCancelled, setShowCancelled] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<"all" | "scheduled" | "code_sent">("all");
   const [cancelTarget, setCancelTarget] = useState<Showing | null>(null);
 
   // Cancelled showings are history, not work — hidden by default so the table
@@ -62,46 +84,44 @@ export function ShowingsTable({ showings, onRefresh }: ShowingsTableProps) {
     [showings]
   );
   const visibleShowings = useMemo(
-    () => (showCancelled ? showings : showings.filter((s) => s.status !== "cancelled")),
-    [showings, showCancelled]
+    () =>
+      showings.filter((s) => {
+        if (s.status === "cancelled" && !showCancelled) return false;
+        if (statusFilter !== "all" && s.status !== statusFilter) return false;
+        return true;
+      }),
+    [showings, showCancelled, statusFilter]
   );
 
   const columns = useMemo(() => [
     col.accessor("property_address", {
-      header: () => <span className="text-xs font-medium text-gray-500">Property Address</span>,
+      header: sortableHeader("Property Address"),
       cell: ({ getValue }) => (
         <span className="font-medium text-gray-900 dark:text-gray-100 text-sm">{getValue() || "—"}</span>
       ),
       size: 18,
     }),
     col.accessor("person_name", {
-      header: () => <span className="text-xs font-medium text-gray-500">Attendee Name</span>,
+      header: sortableHeader("Attendee Name"),
       cell: ({ getValue }) => (
         <span className="text-sm text-gray-700 dark:text-gray-300">{getValue() || "—"}</span>
       ),
       size: 18,
     }),
     col.accessor("showing_time", {
-      header: ({ column }) => (
-        <button
-          className="flex items-center gap-1 text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
-          onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-        >
-          Showing Time <ArrowUpDown className="h-3 w-3" />
-        </button>
-      ),
+      header: sortableHeader("Showing Time"),
       cell: ({ getValue }) => (
         <span className="text-xs text-gray-600 dark:text-gray-400">{formatDateTime(getValue())}</span>
       ),
       size: 16,
     }),
     col.accessor("status", {
-      header: () => <span className="text-xs font-medium text-gray-500">Status</span>,
+      header: sortableHeader("Status"),
       cell: ({ getValue }) => <ShowingStatusBadge status={getValue()} />,
       size: 10,
     }),
     col.accessor("access_code", {
-      header: () => <span className="text-xs font-medium text-gray-500">Access Code</span>,
+      header: sortableHeader("Access Code"),
       cell: ({ getValue }) => {
         const v = getValue();
         return v
@@ -111,7 +131,7 @@ export function ShowingsTable({ showings, onRefresh }: ShowingsTableProps) {
       size: 14,
     }),
     col.accessor("code_sent_at", {
-      header: () => <span className="text-xs font-medium text-gray-500">Code Sent</span>,
+      header: sortableHeader("Code Sent"),
       cell: ({ getValue }) => (
         <span className="text-xs text-gray-500 dark:text-gray-400">{formatDateTime(getValue())}</span>
       ),
@@ -183,6 +203,15 @@ export function ShowingsTable({ showings, onRefresh }: ShowingsTableProps) {
           onChange={(e) => setGlobalFilter(e.target.value)}
           className="h-8 w-64 text-sm"
         />
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value as "all" | "scheduled" | "code_sent")}
+          className="h-8 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 text-xs text-gray-700 dark:text-gray-300"
+        >
+          <option value="all">All statuses</option>
+          <option value="scheduled">Scheduled</option>
+          <option value="code_sent">Code Sent</option>
+        </select>
         {cancelledCount > 0 && (
           <label className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 select-none cursor-pointer">
             <input

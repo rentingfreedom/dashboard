@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireRole } from "@/lib/auth/roles";
 import { cancelBooking } from "@/lib/cal/client";
+import { markCancelledByStaff } from "@/lib/google/cal-bookings-repository";
+import { markRebookOffered } from "@/lib/google/showings-repository";
 import { restartBookingNudges } from "@/lib/google/outreach-repository";
 import { invalidateInFlightCache } from "@/lib/google/in-flight-repository";
 import { writeAuditLog } from "@/lib/google/audit-repository";
@@ -68,6 +70,14 @@ export async function POST(req: Request) {
         ? "Your tour has been cancelled — you're welcome to book another time."
         : "Your tour has been cancelled.");
 
+    // LEAD_CANCEL_MARKER: stamped BEFORE the Cal.com call so Immediate Sends'
+    // CANCELLED webhook handler can tell this apart from a lead cancelling
+    // their own showing — see cal-bookings-repository.ts.
+    await markCancelledByStaff(bookingUid);
+    // CANCEL_SMS_REBOOK_LINK_MARKER: stamped BEFORE the Cal.com call for the
+    // same reason — the Booking Handler's Build Cancel SMS reads it to decide
+    // whether the cancellation SMS includes a rebook link.
+    await markRebookOffered(bookingUid, Boolean(rebook));
     const cancelled = await cancelBooking(bookingUid, reason);
 
     /**

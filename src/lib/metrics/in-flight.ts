@@ -56,7 +56,8 @@ export interface InFlightInquiryRow extends InquiryRow {
  * These are the per-step `_sent` markers the Cron Poll writes as it works
  * through a booking. Reading them is reading STATE — what already went out —
  * which is a different thing from the per-step PROJECTION this module
- * deliberately refuses to do (see the `cal_reminders` note below). A
+ * deliberately refuses to do (see the `cal_reminders_previsit`/`_postvisit`
+ * note below). A
  * projection would be a second copy of the cron's rule table and would drift;
  * a sent-marker cannot drift, because the cron is the only writer.
  *
@@ -65,6 +66,9 @@ export interface InFlightInquiryRow extends InquiryRow {
  * apart, so it is the right source to copy from.
  */
 export interface InFlightBookingRow extends BookingRow {
+  /** Needed to replicate LATE_REMINDER_MARKER's "booked after the target time" check. */
+  created_at: string;
+  updated_at: string;
   reminder_24h_email_sent: string;
   reminder_24h_sms_sent: string;
   reminder_2h_email_sent: string;
@@ -93,6 +97,13 @@ export interface SuppressionRow {
   notes: string;
   phone: string;
   email: string;
+  /**
+   * OUTREACH_SUPPRESSION_PROPERTY_MARKER: blank = applies to every property
+   * this person has (the original, still-supported meaning); non-blank scopes
+   * the row to that one property_key. Read symmetrically by suppressionFor()
+   * here and by the four n8n enforcement points.
+   */
+  property_key: string;
 }
 
 /** The subset of a Showings row that decides whether a door code was delivered. */
@@ -120,6 +131,17 @@ export interface InFlightSettings {
   verificationEnabled: boolean;
   /** The live `allowed_stages` list, passed to the FUB client rather than hardcoded. */
   allowedStages: string[];
+  /**
+   * cal_reminder_24h_offset_hours / cal_reminder_2h_offset_hours /
+   * cal_reconfirm_offset_hours / cal_showing_reconfirm_offset_hours — the SAME
+   * four values `Find Due Notifications` reads, needed to tell "genuinely
+   * still pending" apart from "LATE_REMINDER_MARKER permanently skipped this"
+   * for the preVisit ladder cell.
+   */
+  reminder24hOffsetHours: number;
+  reminder2hOffsetHours: number;
+  reconfirmOffsetHours: number;
+  showingReconfirmOffsetHours: number;
 }
 
 export const DEFAULT_SETTINGS: InFlightSettings = {
@@ -130,6 +152,10 @@ export const DEFAULT_SETTINGS: InFlightSettings = {
   bookingReminderStartAt: "",
   verificationEnabled: true,
   allowedStages: [],
+  reminder24hOffsetHours: 24,
+  reminder2hOffsetHours: 2,
+  reconfirmOffsetHours: 48,
+  showingReconfirmOffsetHours: 1,
 };
 
 /**
@@ -171,7 +197,8 @@ export type SequenceKey =
   | "identity"
   | "identity_reminders"
   | "booking_nudges"
-  | "cal_reminders";
+  | "cal_reminders_previsit"
+  | "cal_reminders_postvisit";
 
 /** Mirrors the `scope` values the n8n suppression check understands. */
 export const SEQUENCE_KEYS: SequenceKey[] = [
@@ -179,15 +206,23 @@ export const SEQUENCE_KEYS: SequenceKey[] = [
   "identity",
   "identity_reminders",
   "booking_nudges",
-  "cal_reminders",
+  "cal_reminders_previsit",
+  "cal_reminders_postvisit",
 ];
 
+// CAL_REMINDERS_SCOPE_SPLIT_MARKER (2026-09-28): a single "Visit reminders &
+// follow-ups" scope couldn't stop just the post-visit nudge without also
+// silencing the pre-visit reminders that get a lead to the door. Split to
+// match the n8n side (`Find Due Notifications`, anchor 'start' vs 'end').
+// Post-visit is no longer review copy (SHOWING_REVIEW_REMOVED_MARKER) — it's
+// an "are you still interested? apply" nudge, so the label says that.
 export const SEQUENCE_LABELS: Record<SequenceKey, string> = {
   cal_link: "Booking link",
   identity: "ID verification",
   identity_reminders: "ID verification reminders",
   booking_nudges: "Booking nudges",
-  cal_reminders: "Visit reminders & follow-ups",
+  cal_reminders_previsit: "Pre-visit reminders",
+  cal_reminders_postvisit: "Post-visit follow-ups (want to apply?)",
 };
 
 export interface SequenceState {
@@ -326,8 +361,16 @@ export interface LadderDetail {
 export const LADDER_STAGES: (keyof LeadLadder)[][] = [
   ["identitySent", "identityNudge"],
   ["bookingLink", "bookingNudge"],
-  ["preVisit"],
-  ["doorCode"],
+  // Grouped, not sequential: ACCESS_CODE_TWO_WINDOW_MARKER can deliver a door
+  // code up to 2h before the visit, while a showing booked within that same
+  // window has its pre-visit reminders PERMANENTLY skipped by the late-booking
+  // guard (LATE_REMINDER_MARKER) — not sent, not failed, just skipped until the
+  // visit passes. That leaves `preVisit` sitting at "waiting" for the entire
+  // window, which used to blank out an already-complete `doorCode` as a later
+  // stage. Same stage means each cell still shows its own true state; only
+  // `postVisit` (which genuinely cannot happen before either resolves) gets
+  // masked while one of them is waiting.
+  ["preVisit", "doorCode"],
   ["postVisit"],
 ];
 
@@ -682,15 +725,24 @@ export function nextEtHour(afterMs: number, hourEt: number): string {
  * is matched permissively on person_id OR phone last-10 OR email, blank
  * `expires_at` is permanent and an UNPARSEABLE one is permanent too — "we
  * cannot tell when this ends" must never read as "resume messaging them".
+ *
+ * OUTREACH_SUPPRESSION_PROPERTY_MARKER: a row also has to clear the property
+ * check — blank `property_key` on the row applies to every property (the
+ * original meaning, unchanged), a non-blank value only applies when it
+ * matches `propertyKey`. Omitting `propertyKey` here (person-wide checks like
+ * identity/identity_reminders, which are never property-specific) matches
+ * every row regardless of its property_key — the pre-item-7 behaviour.
  */
 export function suppressionFor(
   rows: SuppressionRow[],
   who: { personId?: string; phone?: string; email?: string },
-  nowMs: number
+  nowMs: number,
+  propertyKey?: string
 ): SuppressionState {
   const pid = String(who.personId ?? "").trim();
   const ph = last10(who.phone);
   const em = norm(who.email);
+  const pkey = propertyKey !== undefined ? norm(propertyKey) : null;
 
   const hits = rows.filter((r) => {
     const rid = String(r.person_id ?? "").trim();
@@ -699,6 +751,8 @@ export function suppressionFor(
       (ph !== "" && last10(r.phone) === ph) ||
       (em !== "" && norm(r.email) === em);
     if (!matches) return false;
+    const rowProperty = norm(r.property_key);
+    if (pkey !== null && rowProperty !== "" && rowProperty !== pkey) return false;
     const exp = String(r.expires_at ?? "").trim();
     if (!exp) return true;
     const ms = parseTime(exp);
@@ -940,7 +994,7 @@ export function computeInFlight(input: InFlightInput): InFlightResult {
     const scoped = input.stageScope?.get(personId);
     const stage = scoped?.stage ?? "";
     const stageCategory: LeadCategory | "unknown" = scoped?.category ?? "unknown";
-    const suppression = suppressionFor(input.suppressions, { personId, phone, email }, nowMs);
+    const suppression = suppressionFor(input.suppressions, { personId, phone, email }, nowMs, propertyKey);
 
     const verRows = [
       ...(verByLead.get(personId) ?? []),
@@ -1091,25 +1145,42 @@ export function computeInFlight(input: InFlightInput): InFlightResult {
       });
     }
 
-    // 5. Visit reminders and post-visit follow-ups, driven by Cal Bookings.
+    // 5a/5b. Pre-visit reminders and post-visit follow-ups, driven by Cal
+    // Bookings — two independent sequences (CAL_REMINDERS_SCOPE_SPLIT_MARKER,
+    // 2026-09-28) so one can be stopped without the other.
     {
-      const suppressed = suppresses(suppression, "cal_reminders");
+      const suppressedPre = suppresses(suppression, "cal_reminders_previsit");
       sequences.push({
-        key: "cal_reminders",
-        label: SEQUENCE_LABELS.cal_reminders,
+        key: "cal_reminders_previsit",
+        label: SEQUENCE_LABELS.cal_reminders_previsit,
         sent: 0,
         max: null,
         lastSentAt: null,
-        // Per-step state lives in ~19 `_sent` columns on Cal Bookings. The page
+        // Per-step state lives in the `_sent` columns on Cal Bookings. The page
         // reports whether the sequence is live rather than projecting a step —
         // a per-step projection would be a second copy of the cron's rule table
         // and would drift the moment a rule changed.
-        nextSendAt: booked && !suppressed ? "around the visit" : null,
+        nextSendAt: booked && !suppressedPre ? "before the visit" : null,
         note: !booked
           ? "No booking."
-          : suppressed
+          : suppressedPre
           ? "Suppressed."
-          : "Reminders and follow-ups run around the visit.",
+          : "24h/2h/reconfirm reminders run before the visit.",
+      });
+
+      const suppressedPost = suppresses(suppression, "cal_reminders_postvisit");
+      sequences.push({
+        key: "cal_reminders_postvisit",
+        label: SEQUENCE_LABELS.cal_reminders_postvisit,
+        sent: 0,
+        max: null,
+        lastSentAt: null,
+        nextSendAt: booked && !suppressedPost ? "after the visit" : null,
+        note: !booked
+          ? "No booking."
+          : suppressedPost
+          ? "Suppressed."
+          : "Follow-ups asking if they still want to apply run after the visit.",
       });
     }
 
@@ -1141,6 +1212,36 @@ export function computeInFlight(input: InFlightInput): InFlightResult {
         booking.reconfirm_email_sent,
         booking.reconfirm_sms_sent,
       ].some(isTrue);
+
+    // LATE_REMINDER_MARKER, replicated for display only: a pre-event reminder
+    // whose target time had already passed when the booking was made is
+    // skipped PERMANENTLY, not merely delayed — so a showing booked inside
+    // its own reminder windows (common now that ACCESS_CODE_TWO_WINDOW_MARKER
+    // can deliver a door code as little as ~33 minutes out) sits at
+    // `preVisitSent === false` forever, never `visitPassed`, for its entire
+    // life before the visit. Without this check that reads as an indefinite
+    // "not due yet" hourglass for something that will never be sent.
+    // `offsetHours` per category mirrors `Find Due Notifications`'s RULES
+    // table exactly — the reminder/reconfirm keys that feed `preVisitSent`
+    // above, no more.
+    const preVisitOffsetsHoursFor: Record<string, number[]> = {
+      showing: [s.reminder24hOffsetHours, s.reminder2hOffsetHours, s.showingReconfirmOffsetHours],
+      walkthrough: [s.reminder24hOffsetHours, s.reminder2hOffsetHours, s.reconfirmOffsetHours],
+      consult: [s.reminder24hOffsetHours, s.reminder2hOffsetHours, s.reconfirmOffsetHours],
+    };
+    const preVisitPermanentlySkipped = (() => {
+      if (!booking || preVisitSent || visitMs === null) return false;
+      const offsets = preVisitOffsetsHoursFor[category];
+      if (!offsets) return false;
+      const createdMs = parseTime(booking.created_at);
+      const updatedMs = parseTime(booking.updated_at);
+      const bookedMs = Math.max(
+        createdMs ?? Number.NEGATIVE_INFINITY,
+        updatedMs ?? Number.NEGATIVE_INFINITY
+      );
+      if (!Number.isFinite(bookedMs)) return false;
+      return offsets.every((h) => bookedMs > visitMs - h * 3600000);
+    })();
 
     // The day of the LAST follow-up sent. 7-day exists only for consults, so a
     // showing's ladder tops out at 3 — this reports whichever is last rather
@@ -1206,6 +1307,14 @@ export function computeInFlight(input: InFlightInput): InFlightResult {
         ? cell("not_due", "No booking, so no pre-visit reminders.")
         : preVisitSent
         ? cell("complete", "Pre-visit reminders sent. Expand the row for which ones.")
+        : preVisitPermanentlySkipped
+        ? // LATE_REMINDER_MARKER: booked inside every pre-visit reminder's own
+          // window, so none of them was ever a real advance reminder — skipped
+          // permanently rather than fired late. Not "waiting": nothing here
+          // will ever send, and it must not block doorCode from showing its
+          // own true state (same stage, but this keeps the stage-stop loop
+          // from treating it as still-pending too).
+          cell("not_due", "Booked too close to the visit for any pre-visit reminder to fire — none will.")
         : visitPassed
         ? cell("failed", "The visit has passed and no pre-visit reminder was ever sent.")
         : cell("waiting", "Booked; pre-visit reminders are not due yet."),
@@ -1226,7 +1335,7 @@ export function computeInFlight(input: InFlightInput): InFlightResult {
               ? `The showing has passed and no code was delivered (status: ${showing.status || "blank"}).`
               : "The showing has passed and there is no Showings row at all — the Booking Handler may have crashed."
           )
-        : cell("waiting", "Code is minted about an hour before the showing."),
+        : cell("waiting", "Code is sent 2 hours before the showing, and again 1 hour before."),
 
       postVisit: !booking
         ? postVisitCell(undefined, false, "No booking, so no post-visit follow-ups.")
@@ -1310,7 +1419,11 @@ export function computeInFlight(input: InFlightInput): InFlightResult {
         : [],
       postVisitMessages: booking
         ? [
-            { label: "Day 0", sent: isTrue(booking.followup_sent) },
+            // Day 0 is a pure review-request email for `showing` bookings
+            // and is no longer sent (SHOWING_REVIEW_REMOVED_MARKER, item 1,
+            // 2026-09-28) -- omit it from a showing's ladder rather than
+            // display a line that can never turn ✅.
+            ...(isShowing ? [] : [{ label: "Day 0", sent: isTrue(booking.followup_sent) }]),
             { label: "Day 1 email", sent: isTrue(booking.followup_1day_email_sent) },
             { label: "Day 1 SMS", sent: isTrue(booking.followup_1day_sms_sent) },
             { label: "Day 2 email", sent: isTrue(booking.followup_2day_email_sent) },

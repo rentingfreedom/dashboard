@@ -25,6 +25,8 @@ import {
   RotateCcw,
   ChevronRight,
   ChevronDown,
+  PlusCircle,
+  Send,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -289,9 +291,17 @@ export interface OutreachTableProps {
   onStop: (lead: InFlightLead, mode: StopMode) => void;
   onRestart: (lead: InFlightLead) => void;
   onLeadAction: (lead: InFlightLead, kind: LeadActionKind) => void;
+  onAddInquiry: (lead: InFlightLead) => void;
 }
 
-export function OutreachTable({ leads, isAdmin, onStop, onRestart, onLeadAction }: OutreachTableProps) {
+export function OutreachTable({
+  leads,
+  isAdmin,
+  onStop,
+  onRestart,
+  onLeadAction,
+  onAddInquiry,
+}: OutreachTableProps) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -455,11 +465,23 @@ export function OutreachTable({ leads, isAdmin, onStop, onRestart, onLeadAction 
           const linkStranded = l.linkSent.trim().toLowerCase() === "skipped_outreach_suppressed";
 
           if (l.suppression.suppressed || linkStranded) {
+            // A suppressed lead is exactly who this action is FOR — the
+            // LEAD_CANCEL_MARKER scenario this feature was scoped for is
+            // "Nicole calls a suppressed lead and they want a different
+            // property" — so "Add property inquiry" has to stay reachable
+            // here, not only on an active row. Send-causing, so admin only,
+            // same as Restart.
             return isAdmin ? (
-              <Button size="sm" variant="outline" onClick={() => onRestart(l)} className="h-7 text-xs">
-                <Play className="h-3 w-3 mr-1" />
-                Restart
-              </Button>
+              <div className="flex items-center gap-1.5">
+                <Button size="sm" variant="outline" onClick={() => onRestart(l)} className="h-7 text-xs">
+                  <Play className="h-3 w-3 mr-1" />
+                  Restart
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => onAddInquiry(l)} className="h-7 text-xs">
+                  <PlusCircle className="h-3 w-3 mr-1" />
+                  Add inquiry…
+                </Button>
+              </div>
             ) : (
               <span className="text-[11px] text-gray-400 dark:text-gray-500">
                 {l.suppression.suppressed ? (
@@ -499,12 +521,30 @@ export function OutreachTable({ leads, isAdmin, onStop, onRestart, onLeadAction 
                     Mark ID verified by hand…
                   </DropdownMenuItem>
                 )}
+                {/* For an Active row that just hasn't gone out yet — distinct
+                    from Restart, which is for a row a suppression made inert.
+                    Admin only: it's a real send, same bar as Restart. */}
+                {!linkDelivered && isAdmin && (
+                  <DropdownMenuItem onClick={() => onLeadAction(l, "send_link")}>
+                    <Send className="h-4 w-4 mr-2 text-sky-500" />
+                    Send booking link…
+                  </DropdownMenuItem>
+                )}
                 {/* Admin only: this schedules up to four more sends, the same
                     reason Restart is admin only. */}
                 {linkDelivered && isAdmin && (
                   <DropdownMenuItem onClick={() => onLeadAction(l, "restart_nudges")}>
                     <RotateCcw className="h-4 w-4 mr-2 text-sky-500" />
                     Restart booking nudges…
+                  </DropdownMenuItem>
+                )}
+                {/* Always offered, regardless of this row's own state — it is
+                    for a DIFFERENT property, so today's ladder position here
+                    is irrelevant. Send-causing, so admin only. */}
+                {isAdmin && (
+                  <DropdownMenuItem onClick={() => onAddInquiry(l)}>
+                    <PlusCircle className="h-4 w-4 mr-2 text-emerald-500" />
+                    Add property inquiry…
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />
@@ -522,7 +562,7 @@ export function OutreachTable({ leads, isAdmin, onStop, onRestart, onLeadAction 
         },
       }),
     ],
-    [isAdmin, onStop, onRestart, onLeadAction, expanded]
+    [isAdmin, onStop, onRestart, onLeadAction, onAddInquiry, expanded]
   );
 
   const table = useReactTable({

@@ -215,7 +215,10 @@ export async function createBooking(input: CreateBookingInput): Promise<CreateBo
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      eventTypeId: input.eventTypeId,
+      // Cal.com's v2 /bookings endpoint requires an integer JSON number here —
+      // a string (which every caller has, since property.cal_event_type_id is
+      // a Sheets column) is rejected with "eventTypeId must be an integer number".
+      eventTypeId: Number(input.eventTypeId),
       start: input.start,
       attendee: input.attendee,
       ...(input.metadata ? { metadata: input.metadata } : {}),

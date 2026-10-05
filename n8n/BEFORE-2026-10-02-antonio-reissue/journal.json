@@ -1,0 +1,36 @@
+{
+  "started_at": "2026-10-02T19:53:42.233Z",
+  "person_id": "2926",
+  "old_session": "vs_1UMAYQBgJfPX83bq7HLFHlF5",
+  "steps": [
+    {
+      "step": "create_session",
+      "session_id": "vs_1UMCWaBgJfPX83bq4Iz0F0ls",
+      "live": true
+    },
+    {
+      "step": "append_row",
+      "landed": true
+    },
+    {
+      "step": "temp_workflow_created",
+      "id": "ZwLMp5rk3mVJfi9b"
+    },
+    {
+      "step": "send_sms",
+      "http": 200,
+      "sid": "SM14a5069518b7445503de057f2e55dde6",
+      "status": "queued",
+      "to": "+19087056743"
+    },
+    {
+      "step": "temp_workflow_deleted",
+      "ok": true
+    },
+    {
+      "step": "fub_note",
+      "id": 3989
+    }
+  ],
+  "finished_at": "2026-10-02T19:53:47.332Z"
+}

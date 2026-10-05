@@ -61,6 +61,7 @@
  */
 import { getLeasedPropertyPlan, type LeasedPropertyLead } from "./leased-property-repository";
 import { cancelBooking } from "@/lib/cal/client";
+import { markCancelledByStaff } from "./cal-bookings-repository";
 import { stopOutreach } from "./outreach-repository";
 import { writeAuditLog } from "./audit-repository";
 
@@ -177,6 +178,9 @@ async function actOnOne(
   // irreversible half and the one that actually stops a door code.
   if (lead.hasCancelableBooking && lead.bookingUid) {
     try {
+      // LEAD_CANCEL_MARKER: stamped BEFORE the Cal.com call, same reasoning
+      // as /api/bookings/cancel — see cal-bookings-repository.ts.
+      await markCancelledByStaff(lead.bookingUid);
       await cancelBooking(
         lead.bookingUid,
         "This property has been leased and is no longer available. We're sorry for the inconvenience."

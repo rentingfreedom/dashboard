@@ -231,8 +231,16 @@ if (!DEPLOYED) {
   ok("cancel node is isolated", cancelNode.onError, "continueRegularOutput");
   okTrue("cancel node pins cal-api-version 2024-08-13 (proved live 2026-09-01)",
     (cancelNode.parameters.headerParameters?.parameters ?? []).some((p) => p.name === "cal-api-version" && p.value === "2024-08-13"));
-  okTrue("cancel node resolves the uid per item, not by a stale named ref",
-    /\{\{ \$json\.booking_uid \}\}/.test(cancelNode.parameters.url));
+  // LEAD_CANCEL_MARKER (2026-09-29) inserted `Stamp Cancelled By Staff`
+  // between `Rejected?` and this node, which replaced its immediate input
+  // with the Sheets update response -- bare `$json.booking_uid` would now
+  // read the wrong thing (gotcha 19). It was repointed at
+  // `$('Rejected?').item`, NOT `.first()` -- `.item` follows n8n's real
+  // pairedItem graph and stays correct per batch iteration (gotcha 11's own
+  // resolution), where `.first()` would silently be item 0 forever.
+  okTrue("cancel node resolves the uid via $('Rejected?').item, never the stale .first()",
+    cancelNode.parameters.url.includes("$('Rejected?').item.json.booking_uid")
+      && !cancelNode.parameters.url.includes(".first()"));
 
   if (access.nodes.some((n) => n.name === "Check Access Rejection")) {
     const a = access.connections;

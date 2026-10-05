@@ -146,15 +146,15 @@ const STEPS: Step[] = [
   },
   {
     lines: ["Door", "code"],
-    detail: "Door code — sent 60 minutes before the showing. 1 message.",
-    count: "1×",
+    detail: "Door code — sent 2 hours before the showing, and again 1 hour before (same code). Up to 2 messages.",
+    count: "2×",
     zone: "walkthrough",
     repeating: false,
   },
   {
     lines: ["Post-visit", "follow-ups"],
     detail:
-      "Post-visit follow-ups — day 0, 1, 2, 3 and 7, includes the review request. 5 messages (SMS + email).",
+      "Post-visit follow-ups — day 0, 1, 2, 3 and 7. Walkthrough/consult include a review request; self-guided showings no longer do. Up to 5 messages (SMS + email).",
     count: "5×",
     zone: "post",
     repeating: true,

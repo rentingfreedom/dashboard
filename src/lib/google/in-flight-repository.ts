@@ -68,7 +68,9 @@ async function readSuppressions(): Promise<SuppressionRow[]> {
   try {
     const objs = await objectsOf(SUPPRESSION);
     return objs.map((o) =>
-      pick<SuppressionRow>(o, ["person_id", "scope", "reason", "set_by", "set_at", "expires_at", "notes", "phone", "email"])
+      pick<SuppressionRow>(o, [
+        "person_id", "scope", "reason", "set_by", "set_at", "expires_at", "notes", "phone", "email", "property_key",
+      ])
     );
   } catch (err) {
     console.warn(`[in-flight] ${SUPPRESSION} unavailable:`, err instanceof Error ? err.message : err);
@@ -111,6 +113,13 @@ async function readSettings(): Promise<InFlightSettings> {
       bookingReminderMax: num("cal_booking_reminder_max", DEFAULT_SETTINGS.bookingReminderMax),
       bookingReminderHourEt: num("cal_booking_reminder_hour_et", DEFAULT_SETTINGS.bookingReminderHourEt),
       bookingReminderStartAt: String(get("cal_booking_reminder_start_at") ?? ""),
+      reminder24hOffsetHours: num("cal_reminder_24h_offset_hours", DEFAULT_SETTINGS.reminder24hOffsetHours),
+      reminder2hOffsetHours: num("cal_reminder_2h_offset_hours", DEFAULT_SETTINGS.reminder2hOffsetHours),
+      reconfirmOffsetHours: num("cal_reconfirm_offset_hours", DEFAULT_SETTINGS.reconfirmOffsetHours),
+      showingReconfirmOffsetHours: num(
+        "cal_showing_reconfirm_offset_hours",
+        DEFAULT_SETTINGS.showingReconfirmOffsetHours
+      ),
       allowedStages: String(get("allowed_stages") ?? "")
         .split(",")
         .map((x) => x.trim())
@@ -155,6 +164,7 @@ async function fetchTabs(): Promise<RawTabs> {
       pick<InFlightBookingRow>(o, [
         "booking_uid", "cal_event_type_id", "event_category", "status", "is_test",
         "fub_person_id", "invitee_name", "invitee_phone", "invitee_email", "start_time",
+        "created_at", "updated_at",
         "reminder_24h_email_sent", "reminder_24h_sms_sent",
         "reminder_2h_email_sent", "reminder_2h_sms_sent",
         "reconfirm_email_sent", "reconfirm_sms_sent",

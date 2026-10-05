@@ -5,6 +5,7 @@ import { getPropertyByKey } from "@/lib/google/properties-repository";
 import { createBooking } from "@/lib/cal/client";
 import { writeAuditLog } from "@/lib/google/audit-repository";
 import { invalidateInFlightCache } from "@/lib/google/in-flight-repository";
+import { recordBookingInquiry } from "@/lib/google/manual-inquiry-repository";
 
 const schema = z.object({
   personId: z.string().trim().min(1, "personId is required"),
@@ -18,6 +19,13 @@ const schema = z.object({
   /** Required: this booking's metadata.phone is the ONLY carrier of identity for the door code. */
   attendeePhone: z.string().trim().min(7, "A phone number is required so the door code can be texted"),
   reason: z.string().trim().max(500).optional(),
+  /**
+   * OUTREACH_SUPPRESSION_PROPERTY_MARKER: lift any suppression covering THIS
+   * property so the pre/post-visit reminder cron isn't silently inert for a
+   * booking that just happened. Never affects whether the booking itself, its
+   * confirmation, or the door code go out — those never check suppression.
+   */
+  liftSuppression: z.boolean().optional(),
 });
 
 /**
@@ -135,8 +143,37 @@ export async function POST(req: Request) {
       notes: d.reason ?? "",
     });
 
+    // Best-effort, deliberately AFTER the real booking above — a bookkeeping
+    // failure here must never look like the booking itself failed. Without
+    // this, a manually booked lead had no Inquiries row at all: invisible on
+    // /outreach, and their booking-nudge sequence read "no link delivered
+    // yet" forever despite already being on the calendar.
+    let inquiryTracked = false;
+    let suppressionLifted = false;
+    let inquiryError: string | undefined;
+    try {
+      const inqResult = await recordBookingInquiry(
+        {
+          personId: d.personId,
+          propertyKey: d.propertyKey,
+          propertyAddress: property.street_address || property.property_key,
+          calLink: property.cal_link ?? "",
+          phone: phone,
+          email: d.attendeeEmail,
+          liftSuppression: Boolean(d.liftSuppression),
+          reason: d.reason,
+        },
+        auth.user.actorLabel
+      );
+      inquiryTracked = true;
+      suppressionLifted = inqResult.suppressionLifted;
+    } catch (err) {
+      inquiryError = err instanceof Error ? err.message : String(err);
+      console.error("[POST /api/showings/manual] recordBookingInquiry failed:", err);
+    }
+
     invalidateInFlightCache();
-    return NextResponse.json({ ok: true, ...booking });
+    return NextResponse.json({ ok: true, ...booking, inquiryTracked, suppressionLifted, inquiryError });
   } catch (err) {
     console.error("[POST /api/showings/manual]", err);
     return NextResponse.json(

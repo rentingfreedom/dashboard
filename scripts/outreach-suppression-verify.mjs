@@ -126,12 +126,27 @@ console.log("═".repeat(74));
 console.log(`OUTREACH SUPPRESSION — VERIFY${JS_DIR ? `   (jsCode from ${JS_DIR})` : "   (live deployed code)"}`);
 console.log("═".repeat(74));
 
-// ── A. One matcher, six copies, proven identical ───────────────────────────
-console.log("\nA. The injected matcher · present, and byte-identical everywhere");
+// ── A. Two matchers, proven identical within their own group ───────────────
+// OUTREACH_SUPPRESSION_PROPERTY_MARKER (item 7): four of the six nodes now
+// carry a property-aware isSuppressed(scope, who, propertyKey); `identity`
+// and `identity_reminders` stay on the original 2-arg matcher by design — ID
+// verification is a fact about the person, not a property. A regex that only
+// matched the old signature would report the four patched nodes as broken.
+console.log("\nA. The injected matcher · present, and byte-identical within its own group");
 const helperOf = (code) => {
-  const m = code.match(/const supRows = [\s\S]*?\nconst isSuppressed = \(scope, who\) => \{[\s\S]*?\n\};/);
+  const m = code.match(/const supRows = [\s\S]*?\nconst isSuppressed = \(scope, who(?:, propertyKey)?\) => \{[\s\S]*?\n\};/);
   return m ? m[0] : null;
 };
+const PROPERTY_SCOPED_NODES = new Set([
+  "UbO0l29GtILMm1sP/Check & Build Message",
+  "JDsKrVRHf9TEVj7j/Resolve Inquiry",
+  "5UvuzQwLjCB4D25A/Find Due Nudges",
+  "3hGnl6mPnu2AMbZ1/Find Due Notifications",
+]);
+const PERSON_WIDE_NODES = new Set([
+  "L13GUyrWbjSJwn8p/Check Guards",
+  "R3rhuCYEGoBFArBa/Find Due Reminders",
+]);
 const bodies = new Map();
 for (const [wf, node] of TARGETS) {
   const code = codeOf(wf, node);
@@ -139,8 +154,19 @@ for (const [wf, node] of TARGETS) {
   const h = helperOf(code);
   okTrue(`${node} has the isSuppressed matcher`, !!h);
   if (h) bodies.set(`${wf}/${node}`, h);
+  const key = `${wf}/${node}`;
+  if (PROPERTY_SCOPED_NODES.has(key)) {
+    okTrue(`${node} carries the property-scoped matcher (3-arg)`, /isSuppressed = \(scope, who, propertyKey\)/.test(code));
+    okTrue(`${node} carries OUTREACH_SUPPRESSION_PROPERTY_MARKER`, code.includes("OUTREACH_SUPPRESSION_PROPERTY_MARKER"));
+  } else if (PERSON_WIDE_NODES.has(key)) {
+    okTrue(`${node} keeps the person-wide matcher (2-arg) — ID verification is not property-specific`,
+      /isSuppressed = \(scope, who\) => \{/.test(code));
+  }
 }
-ok("isSuppressed is ONE implementation across all six nodes", new Set(bodies.values()).size, 1);
+const propertyScopedBodies = new Set([...bodies].filter(([k]) => PROPERTY_SCOPED_NODES.has(k)).map(([, v]) => v));
+const personWideBodies = new Set([...bodies].filter(([k]) => PERSON_WIDE_NODES.has(k)).map(([, v]) => v));
+ok("the property-scoped matcher is ONE implementation across its 4 nodes", propertyScopedBodies.size, 1);
+ok("the person-wide matcher is ONE implementation across its 2 nodes", personWideBodies.size, 1);
 
 // ── A2. The matcher's own behaviour, from each node's deployed code ────────
 console.log("\nA2. Matcher behaviour · run from each node's own code");
@@ -474,6 +500,73 @@ console.log("\nE. Cron Poll · suppresses invitee steps only, with a live sentin
       unread.some((i) => i.json.hasDue && (i.json.recipient ?? "invitee") !== "invitee"));
   }
 
+  // ── E2. CAL_REMINDERS_SCOPE_SPLIT_MARKER (2026-09-28) — previsit and
+  // postvisit are INDEPENDENTLY suppressible. SUP_ALL above uses scope
+  // "all", which matches regardless of the split and would stay green even
+  // if the two scopes were merged back into one — this section is the one
+  // that actually exercises the split.
+  console.log("\nE2. cal_reminders split — previsit and postvisit act independently");
+  {
+    const future = new Date(Date.now() + 90 * 60000).toISOString(); // pre-visit due window
+    const past = new Date(Date.now() - 74 * 3600000).toISOString(); // visit long over
+    const pastEnd = new Date(Date.now() - 73 * 3600000).toISOString();
+
+    const preRow = {
+      booking_uid: "uid-pre", row_number: 5, event_category: "consult", status: "scheduled",
+      property_address: "130 Sandtrap Rd", invitee_name: "Jane Smith", invitee_first_name: "Jane",
+      invitee_email: "jane@example.com", invitee_phone: "+18035550000",
+      fub_person_id: "2900", host_name: "Justin",
+      start_time: future, end_time: future, is_test: "false",
+      created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z",
+    };
+    const postRow = {
+      booking_uid: "uid-post", row_number: 6, event_category: "showing", status: "scheduled",
+      property_address: "130 Sandtrap Rd", invitee_name: "Jane Smith", invitee_first_name: "Jane",
+      invitee_email: "jane@example.com", invitee_phone: "+18035550000",
+      fub_person_id: "2900", host_name: "Justin",
+      start_time: past, end_time: pastEnd, is_test: "false",
+      created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z",
+    };
+    const splitSettings = [
+      { key: "cal_reminders_enabled", value: "true" },
+      { key: "cal_consult_enabled", value: "true" },
+      { key: "cal_showing_enabled", value: "true" },
+      { key: "cal_reminder_2h_offset_hours", value: "2" },
+      { key: "cal_host_sms_offset_hours", value: "2" },
+      { key: "cal_reconfirm_base_url", value: "https://rf/reconfirm" },
+    ];
+    const goSplit = (sup) => run(code, {
+      "Read Settings (Cron)": splitSettings,
+      "Read Showings": [{ booking_uid: "uid-post", status: "code_sent", code_sent_at: past }],
+      [READ_NODE]: sup,
+    }, [preRow, postRow]);
+
+    const previsitSup = [{ person_id: "2900", scope: "cal_reminders_previsit", expires_at: "" }];
+    const postvisitSup = [{ person_id: "2900", scope: "cal_reminders_postvisit", expires_at: "" }];
+
+    const splitBase = tryRun("split baseline", () => goSplit([]));
+    const withPreSup = tryRun("split previsit-only suppressed", () => goSplit(previsitSup));
+    const withPostSup = tryRun("split postvisit-only suppressed", () => goSplit(postvisitSup));
+
+    if (splitBase && withPreSup && withPostSup) {
+      const preSteps = (r) => r.filter((i) => i.json.hasDue && i.json.booking_uid === "uid-pre" && (i.json.recipient ?? "invitee") === "invitee");
+      const postSteps = (r) => r.filter((i) => i.json.hasDue && i.json.booking_uid === "uid-post" && (i.json.recipient ?? "invitee") === "invitee");
+
+      okTrue("split: baseline has due pre-visit invitee steps", preSteps(splitBase).length > 0);
+      okTrue("split: baseline has due post-visit invitee steps", postSteps(splitBase).length > 0);
+
+      ok("split: previsit-only suppression stamps the PRE-visit steps",
+        preSteps(withPreSup).every((i) => i.json.suppress_outreach === true), true);
+      ok("split: previsit-only suppression does NOT touch post-visit steps",
+        postSteps(withPreSup).some((i) => i.json.suppress_outreach === true), false);
+
+      ok("split: postvisit-only suppression stamps the POST-visit steps",
+        postSteps(withPostSup).every((i) => i.json.suppress_outreach === true), true);
+      ok("split: postvisit-only suppression does NOT touch pre-visit steps",
+        preSteps(withPostSup).some((i) => i.json.suppress_outreach === true), false);
+    }
+  }
+
   // The sentinel pair, and the gotcha-19 argument for where it sits.
   const w = WF.get("3hGnl6mPnu2AMbZ1");
   const C = w.connections;
@@ -489,6 +582,167 @@ console.log("\nE. Cron Poll · suppresses invitee steps only, with a live sentin
   okDeployTrue("the mark node reaches back via $('Build Message').item (gotcha 11/19)",
     String(mark?.parameters?.jsonBody ?? "").includes("$('Build Message').item.json.range"));
   okDeploy("the mark node cannot abort the batch", mark?.onError, "continueRegularOutput");
+}
+
+// ── F. Property scoping (item 7, OUTREACH_SUPPRESSION_PROPERTY_MARKER) ─────
+// The confirmed live bug this whole marker exists to fix: pausing outreach on
+// ONE property silently suppressed every other property the same lead had
+// inquired on, and restarting one released all of them. Each of the four
+// patched nodes gets a two-property fixture: a suppression scoped to property
+// A must skip A's row/booking and leave B's alone, while a BLANK property_key
+// row (the original, still-supported meaning) must suppress both — same as
+// before item 7.
+console.log("\nF. Property scoping · a stop on one property leaves the others alone");
+const SUP_PROP_A = [{ person_id: "2900", scope: "all", expires_at: "", property_key: "prop-a" }];
+const SUP_BLANK = [{ person_id: "2900", scope: "all", expires_at: "", property_key: "" }];
+
+// F1 — the sweep, two Inquiries rows for the same person on properties A/B.
+{
+  const code = codeOf("UbO0l29GtILMm1sP", "Check & Build Message");
+  const person = {
+    id: 2900, name: "Jane Smith", firstName: "Jane", stage: "Tenant Still Looking For Rental",
+    phones: [{ value: "8035550000" }], emails: [{ value: "jane@example.com" }], tags: [],
+  };
+  const inquiries = [
+    { person_id: "2900", event_id: "eA", link_sent: "false", match_status: "matched",
+      cal_link: "https://cal.com/rf/a", property_address: "A St", property_key: "prop-a",
+      inquired_at: new Date().toISOString() },
+    { person_id: "2900", event_id: "eB", link_sent: "false", match_status: "matched",
+      cal_link: "https://cal.com/rf/b", property_address: "B St", property_key: "prop-b",
+      inquired_at: new Date().toISOString() },
+  ];
+  const go = (sup) => run(code, {
+    "FUB - Get Person": [{ people: [person] }],
+    "Read Text Log": [],
+    "Read Settings": [
+      { key: "allowed_stages", value: "Tenant Still Looking For Rental" },
+      { key: "sms_template", value: "Book {{property_address}}: {{cal_link}}" },
+    ],
+    "Read Inquiries": inquiries,
+    [READ_NODE]: sup,
+  });
+  const propA = tryRun("sweep property-scoped", () => go(SUP_PROP_A));
+  if (propA) {
+    const propertiesOf = (r) => r.filter((i) => !i.json.skipped).map((i) => i.json.enrichedCalLink ? i.json : i.json);
+    const sent = propA.filter((i) => i.json.skipped === false).map((i) => i.json.property_address);
+    ok("sweep: property-A-scoped stop skips A", sent.includes("A St"), false);
+    ok("sweep: property-A-scoped stop still sends B", sent.includes("B St"), true);
+  }
+  const blank = tryRun("sweep blank-property (person-wide)", () => go(SUP_BLANK));
+  if (blank) {
+    const sent = blank.filter((i) => i.json.skipped === false);
+    ok("sweep: a BLANK-property stop still suppresses every property", sent.length, 0);
+  }
+}
+
+// F2 — the inquiry flow, one event on property A while a stop covers only B.
+{
+  const code = codeOf("JDsKrVRHf9TEVj7j", "Resolve Inquiry");
+  const go = (sup) => run(code, {
+    "FUB - Get Event": [{ events: [{
+      id: 1668, personId: 2900, type: "Property Inquiry", created: new Date().toISOString(),
+      property: { street: "130 Sandtrap Rd", city: "Columbia" }, source: "Zillow",
+    }] }],
+    "FUB - Get Person": [{
+      id: 2900, name: "Jane Smith", firstName: "Jane", stage: "Tenant Still Looking For Rental",
+      phones: [{ value: "8035550000" }], emails: [{ value: "jane@example.com" }], tags: [],
+    }],
+    "Read Properties": [{
+      property_key: "prop-a", street_address: "130 Sandtrap Rd",
+      cal_link: "https://cal.com/rf/a", status: "vacant", active: "TRUE",
+    }],
+    "Read Inquiries": [],
+    "Read Settings": [
+      { key: "allowed_stages", value: "Tenant Still Looking For Rental" },
+      { key: "sms_template", value: "Book {{property_address}}: {{cal_link}}" },
+      { key: "identity_verification_enabled", value: "false" },
+    ],
+    "Read Identity Verifications": [],
+    [READ_NODE]: sup,
+  })[0].json;
+  const otherProp = tryRun("inquiry: stop on a DIFFERENT property", () =>
+    go([{ person_id: "2900", scope: "all", expires_at: "", property_key: "prop-b" }]));
+  if (otherProp) okTrue("inquiry: this property's own row still sends", otherProp.send_now);
+  const sameProp = tryRun("inquiry: stop on THIS property", () =>
+    go([{ person_id: "2900", scope: "all", expires_at: "", property_key: "prop-a" }]));
+  if (sameProp) ok("inquiry: this property's own stop DOES suppress it", sameProp.link_sent, "skipped_outreach_suppressed");
+}
+
+// F3 — booking nudges, two Inquiries rows on properties A/B for one person.
+{
+  const code = codeOf("5UvuzQwLjCB4D25A", "Find Due Nudges");
+  const linkSentAt = new Date(Date.now() - 2 * 86400000).toISOString();
+  const rowFor = (key) => ({
+    person_id: "2900", event_id: `e-${key}`, link_sent: "true", link_sent_at: linkSentAt,
+    cal_link: `https://cal.com/rf/${key}`, property_key: key,
+    property_address: key, booked_at: "",
+    booking_reminder_count: "0", booking_reminder_last_at: "",
+    phone: "8035550000", email: "jane@example.com",
+  });
+  const go = (sup) => run(code, {
+    "Read Properties": [
+      { property_key: "prop-a", cal_event_type_id: "111" },
+      { property_key: "prop-b", cal_event_type_id: "112" },
+    ],
+    "Read Cal Bookings": [],
+    "Read Settings": [
+      { key: "cal_booking_reminder_max", value: "4" },
+      { key: "cal_booking_reminder_start_at", value: "2026-01-01T00:00:00.000Z" },
+    ],
+    "Read Inquiries": [rowFor("prop-a"), rowFor("prop-b")],
+    [READ_NODE]: sup,
+  });
+  const propA = tryRun("nudges property-scoped", () => go(SUP_PROP_A));
+  if (propA) {
+    const due = propA.filter((i) => i.json.due).map((i) => i.json.property_key);
+    ok("nudges: property-A-scoped stop skips A", due.includes("prop-a"), false);
+    ok("nudges: property-A-scoped stop still nudges B", due.includes("prop-b"), true);
+  }
+}
+
+// F4 — the cal reminders cron, two bookings on different event types/properties.
+{
+  const code = codeOf("3hGnl6mPnu2AMbZ1", "Find Due Notifications");
+  const start = new Date(Date.now() + 90 * 60000).toISOString();
+  const rowFor = (uid, etid) => ({
+    booking_uid: uid, row_number: 5, event_category: "consult", status: "scheduled",
+    property_address: "some address", invitee_name: "Jane Smith", invitee_first_name: "Jane",
+    invitee_email: "jane@example.com", invitee_phone: "+18035550000",
+    fub_person_id: "2900", host_name: "Justin", cal_event_type_id: etid,
+    start_time: start, end_time: start, is_test: "false",
+    created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z",
+  });
+  const go = (sup) => run(code, {
+    "Read Settings (Cron)": [
+      { key: "cal_reminders_enabled", value: "true" },
+      { key: "cal_consult_enabled", value: "true" },
+      { key: "cal_reminder_2h_offset_hours", value: "2" },
+      { key: "cal_host_sms_offset_hours", value: "2" },
+      { key: "cal_reconfirm_base_url", value: "https://rf/reconfirm" },
+    ],
+    "Read Showings": [
+      { booking_uid: "uidA", status: "code_sent" },
+      { booking_uid: "uidB", status: "code_sent" },
+    ],
+    "Read Properties (Cron)": [
+      { property_key: "prop-a", cal_event_type_id: "111" },
+      { property_key: "prop-b", cal_event_type_id: "112" },
+    ],
+    [READ_NODE]: sup,
+  }, [rowFor("uidA", "111"), rowFor("uidB", "112")]);
+
+  okTrue("cron: resolves cal_event_type_id -> property_key via the new node",
+    code.includes("Read Properties (Cron)"));
+
+  const propA = tryRun("cron property-scoped", () => go(SUP_PROP_A));
+  if (propA) {
+    const invA = propA.filter((i) => i.json.hasDue && i.json.booking_uid === "uidA" && (i.json.recipient ?? "invitee") === "invitee");
+    const invB = propA.filter((i) => i.json.hasDue && i.json.booking_uid === "uidB" && (i.json.recipient ?? "invitee") === "invitee");
+    ok("cron: property-A-scoped stop suppresses uidA (event type 111 -> prop-a)",
+      invA.every((i) => i.json.suppress_outreach === true), true);
+    ok("cron: property-A-scoped stop leaves uidB alone",
+      invB.some((i) => i.json.suppress_outreach === true), false);
+  }
 }
 
 console.log("\n" + "═".repeat(74));

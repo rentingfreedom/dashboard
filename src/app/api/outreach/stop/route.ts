@@ -14,6 +14,12 @@ const schema = z.object({
   expiresAt: z.string().trim().optional(),
   notes: z.string().trim().max(1000).optional(),
   /**
+   * OUTREACH_SUPPRESSION_PROPERTY_MARKER (item 7). Omit/blank = applies to
+   * every property this person has — unchanged pre-item-7 meaning. Present =
+   * this one property only.
+   */
+  propertyKey: z.string().trim().max(120).optional(),
+  /**
    * Optional FUB disposition. A trash tag already suppresses every send path,
    * so tag-and-stage IS a stop — folding it in here rather than giving it its
    * own button stops two controls both meaning "stop" from competing.
@@ -66,6 +72,7 @@ export async function POST(req: Request) {
         email: parsed.data.email,
         expiresAt: expiresAt || "",
         notes: parsed.data.notes,
+        propertyKey: parsed.data.propertyKey || undefined,
       },
       auth.user.actorLabel
     );

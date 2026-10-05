@@ -9,18 +9,12 @@ import { Button } from "@/components/ui/button";
 import { Search, X } from "lucide-react";
 import { toast } from "sonner";
 import { fetchJson } from "@/lib/fetch-json";
-import { cn } from "@/lib/utils";
 import type { FubPersonSummary } from "@/lib/fub/client";
 import type { BookableProperty } from "@/lib/google/manual-booking-repository";
 
 interface DaySlots {
   date: string;
   slots: string[];
-}
-
-function todayLocalDate(): string {
-  const d = new Date();
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 }
 
 function fmtTime(iso: string): string {
@@ -75,21 +69,18 @@ export function AddManualBookingDialog({
 
   // Property + time
   const [propertyKey, setPropertyKey] = useState("");
-  const [mode, setMode] = useState<"available" | "custom">("available");
   const [loadingSlots, setLoadingSlots] = useState(false);
   const [slotsError, setSlotsError] = useState<string | null>(null);
   const [days, setDays] = useState<DaySlots[]>([]);
   const [selectedDate, setSelectedDate] = useState("");
   const [selectedSlot, setSelectedSlot] = useState("");
-  const [customDate, setCustomDate] = useState(todayLocalDate());
-  const [customTime, setCustomTime] = useState("09:00");
 
   // Attendee + submit
   const [attendeeEmail, setAttendeeEmail] = useState("");
   const [attendeePhone, setAttendeePhone] = useState("");
   const [reason, setReason] = useState("");
+  const [liftSuppression, setLiftSuppression] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -101,16 +92,13 @@ export function AddManualBookingDialog({
     setPersonQuery("");
     setSelectedPerson(null);
     setPropertyKey("");
-    setMode("available");
     setDays([]);
     setSelectedDate("");
     setSelectedSlot("");
-    setCustomDate(todayLocalDate());
-    setCustomTime("09:00");
     setAttendeeEmail("");
     setAttendeePhone("");
     setReason("");
-    setConfirming(false);
+    setLiftSuppression(true);
 
     fetchJson<{ people: FubPersonSummary[]; properties: BookableProperty[]; fubConfigured: boolean }>(
       "/api/showings/manual/options"
@@ -159,9 +147,9 @@ export function AddManualBookingDialog({
     setPersonQuery("");
   }
 
-  // Load available slots when the property or mode changes.
+  // Load available slots when the property changes.
   useEffect(() => {
-    if (mode !== "available" || !propertyKey) {
+    if (!propertyKey) {
       setDays([]);
       setSelectedDate("");
       setSelectedSlot("");
@@ -184,7 +172,7 @@ export function AddManualBookingDialog({
       })
       .catch((err) => setSlotsError(err instanceof Error ? err.message : "Failed to load available times"))
       .finally(() => setLoadingSlots(false));
-  }, [propertyKey, mode]);
+  }, [propertyKey]);
 
   const daysWithSlots = days.filter((d) => d.slots.length > 0);
   const timesForSelectedDate = days.find((d) => d.date === selectedDate)?.slots ?? [];
@@ -195,13 +183,7 @@ export function AddManualBookingDialog({
   const showableProperties = properties.filter((p) => p.showable);
   const otherProperties = properties.filter((p) => !p.showable);
 
-  /** The resolved start time, whichever mode is active, or null if incomplete. */
-  const resolvedStart: string | null = useMemo(() => {
-    if (mode === "available") return selectedSlot || null;
-    if (!customDate || !customTime) return null;
-    const iso = new Date(`${customDate}T${customTime}:00`).toISOString();
-    return Number.isFinite(new Date(iso).getTime()) ? iso : null;
-  }, [mode, selectedSlot, customDate, customTime]);
+  const resolvedStart: string | null = selectedSlot || null;
 
   const canSubmit =
     Boolean(selectedPerson) &&
@@ -214,7 +196,11 @@ export function AddManualBookingDialog({
     if (!selectedPerson || !property || !resolvedStart) return;
     setSaving(true);
     try {
-      await fetchJson("/api/showings/manual", {
+      const res = await fetchJson<{
+        inquiryTracked: boolean;
+        suppressionLifted: boolean;
+        inquiryError?: string;
+      }>("/api/showings/manual", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -222,35 +208,30 @@ export function AddManualBookingDialog({
           personName: selectedPerson.name,
           propertyKey,
           start: resolvedStart,
-          custom: mode === "custom",
           attendeeEmail: attendeeEmail.trim(),
           attendeePhone: attendeePhone.trim(),
           reason: reason.trim() || undefined,
+          liftSuppression,
         }),
       });
       toast.success(
         `Booking created for ${selectedPerson.name || "the lead"} at ${property.address}. ` +
           "The Showings row will appear in a few seconds, once n8n processes Cal.com's webhook."
       );
+      if (res.inquiryError) {
+        toast.warning(
+          `The booking succeeded, but it could not be tracked as an inquiry on /outreach: ${res.inquiryError}`
+        );
+      } else if (res.suppressionLifted) {
+        toast.success(`Outreach suppression for ${property.address} was lifted.`);
+      }
       onOpenChange(false);
       onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create the booking");
     } finally {
       setSaving(false);
-      setConfirming(false);
     }
-  }
-
-  function handleSubmitClick() {
-    if (!canSubmit) return;
-    // Only a custom time needs the second confirm — the "available" mode only
-    // ever offers times Cal.com itself reports as free.
-    if (mode === "custom" && !confirming) {
-      setConfirming(true);
-      return;
-    }
-    handleCreate();
   }
 
   return (
@@ -375,85 +356,47 @@ export function AddManualBookingDialog({
             </NativeSelect>
           </div>
 
-          {/* Time — available vs custom */}
+          {/* Time */}
           <div>
-            <div className="flex items-center gap-1 rounded-md bg-gray-100 p-0.5 text-xs dark:bg-gray-800">
-              <button
-                type="button"
-                onClick={() => setMode("available")}
-                className={cn(
-                  "flex-1 rounded px-2 py-1 font-medium",
-                  mode === "available"
-                    ? "bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-gray-100"
-                    : "text-gray-500 dark:text-gray-400"
-                )}
-              >
-                Available times
-              </button>
-              <button
-                type="button"
-                onClick={() => setMode("custom")}
-                className={cn(
-                  "flex-1 rounded px-2 py-1 font-medium",
-                  mode === "custom"
-                    ? "bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-gray-100"
-                    : "text-gray-500 dark:text-gray-400"
-                )}
-              >
-                Custom time
-              </button>
-            </div>
-
-            {mode === "available" ? (
-              <div className="mt-2 space-y-2">
-                {!propertyKey ? (
-                  <p className="text-xs text-gray-400 dark:text-gray-500">Pick a property first.</p>
-                ) : loadingSlots ? (
-                  <p className="text-xs text-gray-400 dark:text-gray-500">Loading Cal.com availability…</p>
-                ) : slotsError ? (
-                  <p className="text-xs text-red-600 dark:text-red-400">{slotsError}</p>
-                ) : daysWithSlots.length === 0 ? (
-                  <p className="text-xs text-amber-700 dark:text-amber-400">
-                    No availability in the next 14 days. Use Custom time instead.
-                  </p>
-                ) : (
-                  <div className="grid grid-cols-2 gap-2">
-                    <NativeSelect
-                      value={selectedDate}
-                      onChange={(e) => {
-                        setSelectedDate(e.target.value);
-                        const first = days.find((d) => d.date === e.target.value)?.slots[0];
-                        setSelectedSlot(first ?? "");
-                      }}
-                    >
-                      {daysWithSlots.map((d) => (
-                        <option key={d.date} value={d.date}>
-                          {fmtDate(d.date)}
-                        </option>
-                      ))}
-                    </NativeSelect>
-                    <NativeSelect value={selectedSlot} onChange={(e) => setSelectedSlot(e.target.value)}>
-                      {timesForSelectedDate.map((s) => (
-                        <option key={s} value={s}>
-                          {fmtTime(s)}
-                        </option>
-                      ))}
-                    </NativeSelect>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="mt-2 space-y-2">
-                <div className="grid grid-cols-2 gap-2">
-                  <Input type="date" value={customDate} onChange={(e) => setCustomDate(e.target.value)} />
-                  <Input type="time" value={customTime} onChange={(e) => setCustomTime(e.target.value)} />
-                </div>
-                <p className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
-                  This bypasses Cal.com&rsquo;s own availability — it can land on a time that is already
-                  booked or outside normal hours. You will be asked to confirm before it is created.
+            <Label className="text-xs font-medium text-gray-600 dark:text-gray-400">Time</Label>
+            <div className="mt-1 space-y-2">
+              {!propertyKey ? (
+                <p className="text-xs text-gray-400 dark:text-gray-500">Pick a property first.</p>
+              ) : loadingSlots ? (
+                <p className="text-xs text-gray-400 dark:text-gray-500">Loading Cal.com availability…</p>
+              ) : slotsError ? (
+                <p className="text-xs text-red-600 dark:text-red-400">{slotsError}</p>
+              ) : daysWithSlots.length === 0 ? (
+                <p className="text-xs text-amber-700 dark:text-amber-400">
+                  No availability in the next 14 days for this property. This could be because all
+                  slots are booked or because the calendar is not set up properly.
                 </p>
-              </div>
-            )}
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  <NativeSelect
+                    value={selectedDate}
+                    onChange={(e) => {
+                      setSelectedDate(e.target.value);
+                      const first = days.find((d) => d.date === e.target.value)?.slots[0];
+                      setSelectedSlot(first ?? "");
+                    }}
+                  >
+                    {daysWithSlots.map((d) => (
+                      <option key={d.date} value={d.date}>
+                        {fmtDate(d.date)}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                  <NativeSelect value={selectedSlot} onChange={(e) => setSelectedSlot(e.target.value)}>
+                    {timesForSelectedDate.map((s) => (
+                      <option key={s} value={s}>
+                        {fmtTime(s)}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Attendee contact — required, editable regardless of what FUB has on file. */}
@@ -499,30 +442,40 @@ export function AddManualBookingDialog({
               className="mt-1"
             />
           </div>
-        </div>
 
-        {confirming && (
-          <div className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300">
-            <div className="font-medium">
-              This time is outside Cal.com&rsquo;s own availability for this property.
-            </div>
-            <div className="mt-1">
-              {property?.address} · {resolvedStart ? new Date(resolvedStart).toLocaleString() : ""}
-            </div>
-            <div className="mt-1">A real booking will still be created and the lead notified.</div>
+          {/* This booking is tracked as an Inquiries row so it shows up on
+              /outreach and the booking-nudge sequence correctly reads
+              "booked" instead of nagging someone already on the calendar.
+              The checkbox only affects the PRE/POST-visit reminder cron for
+              this one property — the booking, its confirmation, and the door
+              code are never gated on suppression, with or without it. */}
+          <div className="rounded border border-gray-200 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-800/50">
+            <label className="flex items-start gap-2 text-xs text-gray-700 dark:text-gray-300">
+              <input
+                type="checkbox"
+                checked={liftSuppression}
+                onChange={(e) => setLiftSuppression(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                Also lift any outreach suppression for this property
+                <span className="block text-gray-500 dark:text-gray-400">
+                  The booking, confirmation and door code always go out regardless. This only
+                  decides whether the 24h/2h reminders and post-visit follow-ups run for THIS
+                  property — leaving it unchecked keeps them off if this lead was previously
+                  stopped here.
+                </span>
+              </span>
+            </label>
           </div>
-        )}
+        </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             Cancel
           </Button>
-          <Button onClick={handleSubmitClick} disabled={!canSubmit || saving}>
-            {saving
-              ? "Creating…"
-              : confirming
-              ? "Yes, book outside availability"
-              : "Create booking"}
+          <Button onClick={handleCreate} disabled={!canSubmit || saving}>
+            {saving ? "Creating…" : "Create booking"}
           </Button>
         </DialogFooter>
       </DialogContent>

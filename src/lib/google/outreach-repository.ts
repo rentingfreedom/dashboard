@@ -1,10 +1,22 @@
 import { readSheet, appendRow, updateSpecificColumns, rowsToObjects } from "./sheets-client";
 import { writeAuditLog } from "./audit-repository";
 import { invalidateInFlightCache } from "./in-flight-repository";
-import { SEQUENCE_KEYS, type SequenceKey } from "@/lib/metrics/in-flight";
+import { SEQUENCE_KEYS, type SequenceKey, suppressionFor, type SuppressionRow } from "@/lib/metrics/in-flight";
+import { isPersonVerified, isPersonWaived } from "./identity-status";
 
 const SUPPRESSION = "Outreach_Suppression";
 const INQUIRIES = "Inquiries";
+
+/**
+ * `send-cal-link-after-verification` (`UbO0l29GtILMm1sP`) is webhook-triggered
+ * ONLY — there is no cron scanning for `link_sent = false` rows. Every
+ * function in this file that flips a row back to `false` must re-POST this
+ * webhook itself, or the reset is cosmetic: the row sits eligible but nothing
+ * ever actually delivers it until some unrelated event happens to replay the
+ * sweep for that person.
+ */
+const SWEEP_WEBHOOK =
+  "https://automation.rentingfreedom.com/webhook/send-cal-link-after-verification";
 
 /** `all` plus the five sequence keys — the scopes the n8n check understands. */
 export type SuppressionScope = "all" | SequenceKey;
@@ -24,6 +36,13 @@ export interface StopOutreachInput {
   /** ISO. Empty means permanent. */
   expiresAt?: string;
   notes?: string;
+  /**
+   * OUTREACH_SUPPRESSION_PROPERTY_MARKER (item 7, 2026-09-29). Blank/omitted
+   * = applies to every property this person has, the original behaviour.
+   * Non-blank scopes the stop to one Inquiries row's property_key, so
+   * stopping outreach about one property never silences another.
+   */
+  propertyKey?: string;
 }
 
 /**
@@ -60,6 +79,7 @@ export async function stopOutreach(input: StopOutreachInput, actor: string): Pro
     notes: input.notes ?? "",
     phone: input.phone ?? "",
     email: input.email ?? "",
+    property_key: input.propertyKey ?? "",
   };
   if (!values.person_id && !values.phone && !values.email) {
     throw new Error("A suppression needs at least one of person_id, phone or email to match on.");
@@ -75,7 +95,7 @@ export async function stopOutreach(input: StopOutreachInput, actor: string): Pro
     action: "outreach.stopped",
     entity_type: "lead",
     entity_id: values.person_id || values.phone || values.email,
-    property_key: "",
+    property_key: values.property_key,
     before_json: "",
     after_json: JSON.stringify(values),
     source: "dashboard",
@@ -94,7 +114,11 @@ export interface RestartOutreachInput {
 
 export interface RestartOutreachResult {
   expired: number;
+  /** Blanket rows cloned onto other properties before being expired, so they stay exactly as suppressed as before. */
+  split: number;
   inquiriesReset: number;
+  /** True if the sweep webhook was re-POSTed to actually deliver the reset link(s). */
+  swept: boolean;
 }
 
 /**
@@ -126,21 +150,80 @@ export async function restartOutreach(
   const now = new Date().toISOString();
   const personId = String(input.personId ?? "").trim();
 
+  // Read Inquiries once, up front — used both to build the split list below
+  // and for step 2's reset pass, which used to re-read the same tab.
+  const inqRows = await readSheet(INQUIRIES);
+  const { headers: inqHeaders, objects: inqObjects } = rowsToObjects(inqRows);
+
   // 1. Expire the matching suppression rows.
+  //
+  // OUTREACH_SUPPRESSION_PROPERTY_MARKER (item 7): when `propertyKey` is
+  // given (a per-row Restart), only rows scoped to THIS property or blank
+  // (person-wide) are candidates — never a different property's own row.
+  // Omitting `propertyKey` (the explicit "restart everywhere" action) keeps
+  // the original behaviour: every matching-scope row for the person,
+  // regardless of property.
   const supRows = await readSheet(SUPPRESSION);
   const { headers: supHeaders, objects: supObjects } = rowsToObjects(supRows);
+  const restartPropertyKey = input.propertyKey ? norm(input.propertyKey) : null;
+
+  // OUTREACH_SUPPRESSION_INDIVIDUAL_MARKER (2026-09-30): every inquiry needs
+  // individual autonomy — restarting one property must never silently free a
+  // different one. A blank/person-wide suppression row covers every property
+  // by definition, so simply expiring it under a property-scoped restart
+  // would release everything it was blocking, not just the one requested.
+  // Confirmed live 2026-09-30: restarting a brand-new Hume inquiry expired
+  // the one blanket row covering this person, and Goshen — which had its own
+  // separate, still-unexpired inquiry — went active with it.
+  //
+  // Fix: before expiring a blanket row under a property-scoped restart,
+  // CLONE it onto every OTHER property this person has an Inquiries row for
+  // (excluding the one being restarted), so those stay exactly as suppressed
+  // as they were. Only an explicit "restart everywhere" (no propertyKey) is
+  // allowed to clear a blanket row outright — same principle already applied
+  // to scope two lines below ("restarting one sequence must not silently
+  // lift a blanket stop").
+  const otherPersonProperties = new Set<string>();
+  if (restartPropertyKey !== null) {
+    for (const row of inqObjects) {
+      if (String(row.person_id ?? "").trim() !== personId) continue;
+      const pk = norm(row.property_key);
+      if (!pk || pk === restartPropertyKey) continue;
+      otherPersonProperties.add(pk);
+    }
+  }
+
   let expired = 0;
+  let split = 0;
   for (const row of supObjects) {
     if (String(row.person_id ?? "").trim() !== personId) continue;
     const scope = String(row.scope ?? "").trim().toLowerCase();
     // Restarting one sequence must not silently lift a blanket stop. Only an
     // explicit "all" restart clears an "all" row.
     if (input.scope !== "all" && scope !== input.scope) continue;
+    const rowProperty = norm(row.property_key);
+    if (restartPropertyKey !== null && rowProperty !== "" && rowProperty !== restartPropertyKey) continue;
     const exp = String(row.expires_at ?? "").trim();
     if (exp) {
       const ms = new Date(exp).getTime();
       if (Number.isFinite(ms) && ms <= Date.now()) continue; // already expired
     }
+
+    if (restartPropertyKey !== null && rowProperty === "" && otherPersonProperties.size) {
+      for (const pk of otherPersonProperties) {
+        const cloneNotes = `${row.notes ?? ""}${row.notes ? " | " : ""}split from blanket suppression when ${actor} restarted ${restartPropertyKey} ${now}`;
+        await appendRow(
+          SUPPRESSION,
+          supHeaders.map((h) => {
+            if (h === "property_key") return pk;
+            if (h === "notes") return cloneNotes;
+            return row[h] ?? "";
+          })
+        );
+        split++;
+      }
+    }
+
     const rowIndex = parseInt(row._rowIndex!);
     await updateSpecificColumns(
       SUPPRESSION,
@@ -154,14 +237,71 @@ export async function restartOutreach(
   // 2. Hand any rows this feature made inert back to the sweep.
   let inquiriesReset = 0;
   if (input.scope === "all" || input.scope === "cal_link") {
-    const inqRows = await readSheet(INQUIRIES);
-    const { headers: inqHeaders, objects: inqObjects } = rowsToObjects(inqRows);
     for (const row of inqObjects) {
       if (String(row.person_id ?? "").trim() !== personId) continue;
       if (input.propertyKey && String(row.property_key ?? "").trim() !== input.propertyKey) continue;
       if (String(row.link_sent ?? "").trim().toLowerCase() !== "skipped_outreach_suppressed") continue;
       await updateSpecificColumns(INQUIRIES, parseInt(row._rowIndex!), { link_sent: "false" }, inqHeaders);
       inquiriesReset++;
+    }
+  }
+
+  // Flipping the stamp to `false` only makes the row ELIGIBLE. The sweep is
+  // webhook-triggered only, so without re-POSTing it here the row sits
+  // "waiting to be sent" indefinitely — exactly the gap this dialog's own
+  // copy ("will be handed back to the sweep, which will send it") already
+  // promised was not happening.
+  //
+  // ── Bare "false" counts too, not just the stamp ───────────────────────
+  // `inquiriesReset` only counts rows THIS function just flipped from
+  // `skipped_outreach_suppressed`. But n8n's sweep (`Check & Build Message`)
+  // never writes that stamp at all — it just silently drops a suppressed row
+  // from its output and leaves `link_sent` exactly as it found it. Only the
+  // REAL inquiry flow (`Resolve Inquiry`) writes the stamp; a row created by
+  // the dashboard's own `createManualInquiry`/`recordBookingInquiry` sits at
+  // plain `link_sent = "false"` when suppressed, with no marker at all.
+  // Confirmed live 2026-09-30 (Test OutreachB / Goshen): suppression lifted
+  // correctly, but `inquiriesReset` stayed 0 and nothing was ever swept.
+  //
+  // ── Why this still can't become a verification bypass ─────────────────
+  // The sweep trusts `link_sent = false` unconditionally — it has never
+  // consulted verification (docs/n8n-workflows.md, "ID verification on/off
+  // switch"). Re-POSTing it for a lead who still needs to complete
+  // verification would hand them their booking link without ever verifying.
+  // `isPersonVerified`/`isPersonWaived` is what keeps this narrow: a `false`
+  // row this function is willing to sweep must belong to a person who is
+  // already cleared one way or the other.
+  const personPropertyRows = inqObjects.filter(
+    (row) =>
+      String(row.person_id ?? "").trim() === personId &&
+      (!input.propertyKey || String(row.property_key ?? "").trim() === input.propertyKey)
+  );
+  const hasUndelivered = personPropertyRows.some(
+    (row) => String(row.link_sent ?? "").trim().toLowerCase() !== "true"
+  );
+
+  let swept = false;
+  const shouldSweep =
+    (input.scope === "all" || input.scope === "cal_link") &&
+    hasUndelivered &&
+    ((await isPersonVerified(personId, "")) || (await isPersonWaived(personId, "")));
+  if (shouldSweep) {
+    try {
+      const res = await fetch(SWEEP_WEBHOOK, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uri: `https://api.followupboss.com/v1/people?id=${personId}` }),
+      });
+      swept = res.ok;
+      if (!res.ok) {
+        console.error(`[restartOutreach] sweep webhook -> ${res.status} ${await res.text()}`);
+      }
+    } catch (err) {
+      console.error("[restartOutreach] sweep webhook failed:", err);
+      // Not thrown: the suppression lift and the stamp reset already
+      // succeeded and must not be rolled back over a delivery hiccup — the
+      // row is still correctly `link_sent = false` and will go out the next
+      // time anything replays the sweep for this person.
     }
   }
 
@@ -173,13 +313,122 @@ export async function restartOutreach(
     entity_id: personId,
     property_key: input.propertyKey ?? "",
     before_json: "",
-    after_json: JSON.stringify({ scope: input.scope, expired, inquiriesReset }),
+    after_json: JSON.stringify({ scope: input.scope, expired, split, inquiriesReset, swept }),
     source: "dashboard",
     notes: "",
   });
 
   invalidateInFlightCache();
-  return { expired, inquiriesReset };
+  return { expired, split, inquiriesReset, swept };
+}
+
+export interface SendBookingLinkInput {
+  personId: string;
+  propertyKey: string;
+}
+
+export type SendBookingLinkReason =
+  | "sent"
+  | "already_delivered"
+  | "suppressed"
+  | "not_verified"
+  | "no_inquiry"
+  | "send_failed";
+
+export interface SendBookingLinkResult {
+  sent: boolean;
+  reason: SendBookingLinkReason;
+}
+
+/**
+ * Deliver one lead's booking link for one property RIGHT NOW, for an Active
+ * (not currently suppressed/stranded) row that simply hasn't gone out yet —
+ * distinct from `restartOutreach`, which is for a row a suppression made
+ * inert. That distinction is real: a plain undelivered row can sit that way
+ * for reasons with nothing to do with suppression (the sweep/gate POST from
+ * `createManualInquiry` failing on a network hiccup, say — its own comment
+ * notes "a later replay ... will still pick it up" without anything actually
+ * doing the replaying), and an operator staring at "Active" with no link sent
+ * had no way to force that replay except by going through Restart, which
+ * requires a suppression to lift.
+ *
+ * ── Same verification guard as `restartOutreach`, for the same reason ────
+ * The sweep trusts `link_sent = false` unconditionally — it has never
+ * consulted verification. This function must not become a way to hand a
+ * still-gated lead their booking link, so it refuses unless the person is
+ * already verified or waived.
+ */
+export async function sendBookingLinkNow(
+  input: SendBookingLinkInput,
+  actor: string
+): Promise<SendBookingLinkResult> {
+  const personId = String(input.personId ?? "").trim();
+  const propertyKey = String(input.propertyKey ?? "").trim();
+  if (!personId || !propertyKey) {
+    throw new Error("sendBookingLinkNow needs a person_id and a property_key.");
+  }
+
+  const { objects: inqObjects } = rowsToObjects(await readSheet(INQUIRIES));
+  const row = inqObjects.find(
+    (r) => String(r.person_id ?? "").trim() === personId && String(r.property_key ?? "").trim() === propertyKey
+  );
+  if (!row) return { sent: false, reason: "no_inquiry" };
+  if (String(row.link_sent ?? "").trim().toLowerCase() === "true") {
+    return { sent: false, reason: "already_delivered" };
+  }
+
+  const { objects: supObjects } = rowsToObjects(await readSheet(SUPPRESSION));
+  const rows = supObjects.map(
+    (o) =>
+      ({
+        person_id: o.person_id,
+        scope: o.scope,
+        reason: o.reason,
+        set_by: o.set_by,
+        set_at: o.set_at,
+        expires_at: o.expires_at,
+        notes: o.notes,
+        phone: o.phone,
+        email: o.email,
+        property_key: o.property_key,
+      }) as SuppressionRow
+  );
+  const state = suppressionFor(rows, { personId, phone: row.phone, email: row.email }, Date.now(), propertyKey);
+  if (state.suppressed && (state.scopes.includes("all") || state.scopes.includes("cal_link"))) {
+    return { sent: false, reason: "suppressed" };
+  }
+
+  const cleared = (await isPersonVerified(personId, row.phone ?? "")) || (await isPersonWaived(personId, row.phone ?? ""));
+  if (!cleared) return { sent: false, reason: "not_verified" };
+
+  let sent = false;
+  try {
+    const res = await fetch(SWEEP_WEBHOOK, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ uri: `https://api.followupboss.com/v1/people?id=${personId}` }),
+    });
+    sent = res.ok;
+    if (!res.ok) console.error(`[sendBookingLinkNow] sweep webhook -> ${res.status} ${await res.text()}`);
+  } catch (err) {
+    console.error("[sendBookingLinkNow] sweep webhook failed:", err);
+  }
+
+  await writeAuditLog({
+    timestamp: new Date().toISOString(),
+    actor,
+    action: "outreach.link_sent_manually",
+    entity_type: "lead",
+    entity_id: personId,
+    property_key: propertyKey,
+    before_json: "",
+    after_json: JSON.stringify({ sent }),
+    source: "dashboard",
+    notes: "",
+  });
+
+  if (sent) invalidateInFlightCache();
+  return { sent, reason: sent ? "sent" : "send_failed" };
 }
 
 const PROPERTIES = "Properties";
@@ -389,9 +638,6 @@ export interface MarkVerifiedResult {
   swept: boolean;
 }
 
-const VERIFY_SWEEP_WEBHOOK =
-  "https://automation.rentingfreedom.com/webhook/send-cal-link-after-verification";
-
 /**
  * Record that a human verified this lead's ID, and release their booking link(s).
  *
@@ -472,7 +718,7 @@ export async function markVerifiedManually(
   let swept = false;
   if (released > 0) {
     try {
-      const res = await fetch(VERIFY_SWEEP_WEBHOOK, {
+      const res = await fetch(SWEEP_WEBHOOK, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ uri: `https://api.followupboss.com/v1/people?id=${personId}` }),

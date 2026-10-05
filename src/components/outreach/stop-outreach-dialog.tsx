@@ -32,23 +32,36 @@ export interface StopTarget {
   personName: string;
   phone: string;
   email: string;
+  /**
+   * OUTREACH_SUPPRESSION_PROPERTY_MARKER (item 7). The row this Stop/Pause
+   * was opened from. Defaults the dialog to scoping the suppression to THIS
+   * property only — a lead with more than one open inquiry must be stoppable
+   * on one without silencing the others.
+   */
+  propertyKey: string;
+  propertyAddress: string;
   /** Which sequences would actually be stopped, for the preview. */
   liveSequences: { key: string; label: string; note: string }[];
   /**
-   * A future, still-scheduled self-guided tour, or null.
+   * EVERY future, still-scheduled self-guided tour this PERSON has — across
+   * every property, not just the row this dialog was opened from.
    *
    * Cancelling lives HERE rather than in its own menu item: stopping outreach
-   * and calling off the tour are one intention, and making them two clicks
-   * invites doing only the first.
+   * and calling off the tour(s) are one intention, and making them separate
+   * clicks invites doing only the first. Confirmed live 2026-09-30: stopping
+   * outreach "Everywhere" for a lead with two scheduled tours only offered to
+   * cancel the one tied to the row that was clicked — the other silently
+   * stayed booked. Scoping which of these to actually cancel to the chosen
+   * "Where" (this property vs. everywhere) is the dialog's job below.
    */
-  tour: {
+  tours: {
     bookingUid: string;
     startTime: string;
     propertyKey: string;
     propertyAddress: string;
     /** Already dispatched — it cannot be recalled (gotcha 8). */
     codeAlreadySent: boolean;
-  } | null;
+  }[];
 }
 
 /**
@@ -71,7 +84,8 @@ const SCOPES = [
   { value: "identity_reminders", label: "ID verification reminders only" },
   { value: "cal_link", label: "Booking link only" },
   { value: "booking_nudges", label: "Booking nudges only" },
-  { value: "cal_reminders", label: "Visit reminders & follow-ups only" },
+  { value: "cal_reminders_previsit", label: "Pre-visit reminders only" },
+  { value: "cal_reminders_postvisit", label: "Post-visit follow-ups only (want to apply?)" },
 ];
 
 /**
@@ -125,9 +139,22 @@ export function StopOutreachDialog({
   const [moveToCold, setMoveToCold] = useState(false);
   const [cancelTour, setCancelTour] = useState(true);
   const [confirming, setConfirming] = useState(false);
+  // OUTREACH_SUPPRESSION_PROPERTY_MARKER: defaults to scoping the stop to the
+  // row it was opened from — the safe default after the confirmed live bug
+  // where a stop/restart on one property silently affected every other
+  // property this lead had inquired on.
+  const [everywhere, setEverywhere] = useState(false);
 
   const mode = target?.mode ?? "stop";
   const isPause = mode === "pause";
+  // OUTREACH_SUPPRESSION_PROPERTY_MARKER: identity/identity_reminders stay
+  // person-wide by design — ID verification is a fact about the PERSON, not a
+  // property, and the n8n side (Check Guards / Find Due Reminders) was never
+  // patched to read property_key for these two scopes. Scoping the row to one
+  // property here would silently do nothing different in production while
+  // making the dashboard claim it did.
+  const scopeIsPersonWide = scope === "identity" || scope === "identity_reminders";
+  const scopedToProperty = !everywhere && !scopeIsPersonWide;
 
   const affected =
     target?.liveSequences.filter((s) => scope === "all" || s.key === scope) ?? [];
@@ -164,9 +191,16 @@ export function StopOutreachDialog({
   // route reads as permanent — a pause silently becoming a stop.
   const blocked = isPause && duration === "custom" && !customDate;
 
+  // Which of the person's tours are actually in scope: every one of them when
+  // stopping "Everywhere", or only this row's own property when scoped to it.
+  // A property-scoped stop must never reach out and cancel a tour on a
+  // DIFFERENT, untouched property.
+  const relevantTours =
+    target?.tours.filter((t) => everywhere || t.propertyKey === target.propertyKey) ?? [];
+
   // Only a permanent stop calls off a tour. A pause is temporary by
   // definition, and cancelling a showing is not.
-  const willCancelTour = !isPause && cancelTour && target?.tour != null;
+  const willCancelTour = !isPause && cancelTour && relevantTours.length > 0;
 
   async function handleStop() {
     if (!target || blocked) return;
@@ -181,6 +215,7 @@ export function StopOutreachDialog({
           reason,
           phone: target.phone,
           email: target.email,
+          ...(scopedToProperty ? { propertyKey: target.propertyKey || undefined } : {}),
           // Omitted entirely for a stop. The route treats an absent or empty
           // value as permanent, which is exactly what a stop means.
           ...(expiry ? { expiresAt: expiry.iso } : {}),
@@ -201,33 +236,51 @@ export function StopOutreachDialog({
       }
 
       /**
-       * The tour is cancelled AFTER the stop, and its failure is reported
-       * rather than thrown.
+       * Every relevant tour is cancelled AFTER the stop, one at a time, and a
+       * failure on one is reported without aborting the rest — the same
+       * "report, don't throw" precedent as the single-tour version, just
+       * applied per tour so one bad cancel doesn't strand the others.
        *
        * The stop is the reversible half; cancelling is not. Cancelling first
        * and then failing to stop would call off a real showing and leave the
        * nudges running, which is the worst of both.
        */
-      if (willCancelTour && target.tour) {
-        try {
-          await fetchJson("/api/bookings/cancel", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              bookingUid: target.tour.bookingUid,
-              reason: reason || undefined,
-              // Never offer a rebook from here: they are being stopped.
-              rebook: false,
-              personId: target.personId,
-              propertyKey: target.tour.propertyKey || undefined,
-            }),
-          });
-          toast.success("Their self-guided tour was cancelled");
-        } catch (err) {
+      if (willCancelTour && relevantTours.length > 0) {
+        let cancelled = 0;
+        const failures: string[] = [];
+        for (const tour of relevantTours) {
+          try {
+            await fetchJson("/api/bookings/cancel", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                bookingUid: tour.bookingUid,
+                reason: reason || undefined,
+                // Never offer a rebook from here: they are being stopped.
+                rebook: false,
+                personId: target.personId,
+                propertyKey: tour.propertyKey || undefined,
+              }),
+            });
+            cancelled++;
+          } catch (err) {
+            failures.push(
+              `${tour.propertyAddress || tour.propertyKey}: ${
+                err instanceof Error ? err.message : "unknown error"
+              }`
+            );
+          }
+        }
+        if (failures.length === 0) {
+          toast.success(
+            cancelled === 1
+              ? "Their self-guided tour was cancelled"
+              : `All ${cancelled} of their self-guided tours were cancelled`
+          );
+        } else {
           toast.warning(
-            `Outreach stopped, but the tour was NOT cancelled: ${
-              err instanceof Error ? err.message : "unknown error"
-            }`
+            `Outreach stopped. ${cancelled} of ${relevantTours.length} tour(s) cancelled; ` +
+              `the rest were NOT: ${failures.join("; ")}`
           );
         }
       }
@@ -240,6 +293,7 @@ export function StopOutreachDialog({
       setMoveToCold(false);
       setCancelTour(true);
       setConfirming(false);
+      setEverywhere(false);
       onDone();
     } catch (err) {
       toast.error(
@@ -281,6 +335,34 @@ export function StopOutreachDialog({
                   ))}
                 </NativeSelect>
               </div>
+
+              {/* OUTREACH_SUPPRESSION_PROPERTY_MARKER: which property this
+                  covers. Defaults to the row it was opened from — a lead with
+                  more than one open inquiry must be stoppable on one without
+                  silencing the others. ID verification has no per-property
+                  meaning in n8n, so it is always person-wide. */}
+              {scopeIsPersonWide ? (
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  ID verification applies to this lead across every property — it cannot be
+                  scoped to one.
+                </p>
+              ) : (
+                <div>
+                  <label className="text-xs font-medium text-gray-600 dark:text-gray-400">
+                    Where
+                  </label>
+                  <NativeSelect
+                    value={everywhere ? "everywhere" : "property"}
+                    onChange={(e) => setEverywhere(e.target.value === "everywhere")}
+                    className="mt-1 w-full"
+                  >
+                    <option value="property">
+                      Only {target?.propertyAddress || target?.propertyKey || "this property"}
+                    </option>
+                    <option value="everywhere">Everywhere — all of their properties</option>
+                  </NativeSelect>
+                </div>
+              )}
 
               {isPause && (
                 <div>
@@ -349,17 +431,22 @@ export function StopOutreachDialog({
                   "cancelled"` and `Find Ready Showings` opens with
                   `if (r.status !== 'scheduled') return false`. Promising a
                   code there would have been the opposite of the truth. */}
-              {target?.tour && !willCancelTour && (
+              {relevantTours.length > 0 && !willCancelTour && (
                 <p className="rounded border border-green-200 bg-green-50 p-2 text-xs text-green-800 dark:border-green-800 dark:bg-green-950/40 dark:text-green-300">
-                  Their tour stays booked and their access code will still be sent. Stopping
-                  outreach never strands a lead at a locked door.
+                  {relevantTours.length === 1
+                    ? "Their tour stays booked and their access code will still be sent."
+                    : `All ${relevantTours.length} of their tours stay booked and their access codes will still be sent.`}{" "}
+                  Stopping outreach never strands a lead at a locked door.
                 </p>
               )}
 
-              {/* The tour. Only on a permanent stop — a pause is temporary by
-                  definition and calling off a showing is not. */}
+              {/* The tour(s). Only on a permanent stop — a pause is temporary
+                  by definition and calling off a showing is not. Scoped to
+                  `relevantTours` — every tour when stopping Everywhere, only
+                  this property's when scoped to it, so a property-scoped stop
+                  can never reach out and cancel an untouched property's tour. */}
               {!isPause && (
-                target?.tour ? (
+                relevantTours.length > 0 ? (
                   <div className="rounded border border-amber-300 bg-amber-50 p-2 dark:border-amber-700 dark:bg-amber-950/40">
                     <label className="flex items-start gap-2 text-xs text-amber-900 dark:text-amber-200">
                       <input
@@ -369,10 +456,15 @@ export function StopOutreachDialog({
                         className="mt-0.5"
                       />
                       <span>
-                        Also cancel their self-guided tour
-                        <span className="block text-amber-800/80 dark:text-amber-300/80">
-                          {target.tour.propertyAddress || target.tour.propertyKey} ·{" "}
-                          {whenLabel(target.tour.startTime)}
+                        {relevantTours.length === 1
+                          ? "Also cancel their self-guided tour"
+                          : `Also cancel all ${relevantTours.length} of their self-guided tours`}
+                        <span className="mt-0.5 block space-y-0.5 text-amber-800/80 dark:text-amber-300/80">
+                          {relevantTours.map((t) => (
+                            <span key={t.bookingUid} className="block">
+                              {t.propertyAddress || t.propertyKey} · {whenLabel(t.startTime)}
+                            </span>
+                          ))}
                         </span>
                       </span>
                     </label>
@@ -448,22 +540,28 @@ export function StopOutreachDialog({
                 />
               </div>
         </div>
-        {confirming && target?.tour && (
+        {confirming && willCancelTour && relevantTours.length > 0 && (
           <div className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300">
-            <div className="font-medium">This cancels a real showing. It cannot be undone.</div>
-            <div className="mt-1">
-              {target.tour.propertyAddress || target.tour.propertyKey} ·{" "}
-              {whenLabel(target.tour.startTime)}
+            <div className="font-medium">
+              {relevantTours.length === 1
+                ? "This cancels a real showing. It cannot be undone."
+                : `This cancels ${relevantTours.length} real showings. It cannot be undone.`}
             </div>
-            <div className="mt-1">
-              {target.personName || "The lead"} will be emailed and texted straight away.
-            </div>
-            {target.tour.codeAlreadySent && (
-              <div className="mt-1 font-medium">
-                Their access code has already been sent and will still open the lockbox —
-                cancelling cannot recall it.
+            {relevantTours.map((t) => (
+              <div key={t.bookingUid} className="mt-1">
+                {t.propertyAddress || t.propertyKey} · {whenLabel(t.startTime)}
+                {t.codeAlreadySent && (
+                  <span className="block font-medium">
+                    Their access code has already been sent and will still open the lockbox —
+                    cancelling cannot recall it.
+                  </span>
+                )}
               </div>
-            )}
+            ))}
+            <div className="mt-1">
+              {target?.personName || "The lead"} will be emailed and texted straight away
+              {relevantTours.length > 1 ? " for each" : ""}.
+            </div>
           </div>
         )}
 
@@ -488,7 +586,9 @@ export function StopOutreachDialog({
                 ? "Pausing…"
                 : "Stopping…"
               : confirming
-              ? "Yes, stop and cancel the tour"
+              ? relevantTours.length > 1
+                ? `Yes, stop and cancel all ${relevantTours.length} tours`
+                : "Yes, stop and cancel the tour"
               : isPause
               ? "Pause outreach"
               : "Stop outreach"}

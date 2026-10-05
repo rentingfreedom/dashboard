@@ -308,6 +308,47 @@ the home is gone, cancels any booked showings, and suppresses their sequences.
 > (SMS Sent)` and `FUB - Log Note (Email Sent)` both returned real FUB note
 > ids (3675, 3676) against test contact 2652. Backup
 > `n8n/BEFORE-property-leased-note-logging/`.
+>
+> **No Nicole follow-up task exists here to remove — item 4, 2026-09-28.** Justin asked
+> to "remove the task for Nicole to FU w/ leads" in this workflow; reading the live
+> `RentingFreedom Production - Property Leased Notify` nodes shows it never created one
+> (no `POST /tasks` node anywhere in it — it only sends SMS/email and logs FUB notes).
+> So this was copy-only: `property_leased_sms_template` and `property_leased_email_body`
+> now tell the applicant to reach out to Nicole directly — "(843) 494-5244 or
+> nicolee@rentingfreedom.com" — replacing a stray hardcoded `nicole@rentingfreedom.com`
+> (missing the client's actual spelling). Client-specified contact values, not the FUB
+> user record's (`contact@rentingfreedom.com`, `8437371326`) — the two differ and the
+> client chose which to publish. `scripts/_oneoff-2026-09-28-leased-nicole-contact.mjs
+> --apply`, applied live 2026-09-28. Both templates are Settings values read at send
+> time, so the change is live on the very next real send with no workflow PUT needed.
+>
+> **GLOBAL NOTE, 2026-09-28: Nicole's contact info for lead-facing copy is
+> phone `843-494-5244`, email `nicolee@rentingfreedom.com`** — use this exact
+> spelling/format everywhere a message needs to hand a lead to her personally.
+> Do not confuse it with the FUB user record's `contact@rentingfreedom.com` /
+> `8437371326` (her CRM identity, used for `fub_nicole_user_id` task
+> assignment) or with the alert phones like `unmatched_inquiry_alert_phone`
+> (staff-facing, different number).
+>
+> **FINAL COPY, client-approved 2026-09-28** (`scripts/_oneoff-2026-09-28-nicole-contact-copy-approved.mjs`):
+> the phone format changed from `(843) 494-5244` to the client's own
+> `843-494-5244`, and the client supplied the **full final email body**
+> directly, dropping the "in Renting Freedom" / "— Renting Freedom"
+> boilerplate. Settings notes updated from `DRAFT COPY` to
+> `CLIENT-APPROVED 2026-09-28`.
+>
+> **The do-not-reply line — SMS only, confirmed, corrected same day.** SMS
+> gets it automatically at render time (`withFooter()` in `Build Messages`,
+> guarded against double-appending) — that was already true before this round
+> and needed no edit. The client's first draft of the final copy put the same
+> line into the EMAIL body as literal text too ("this number" makes no sense
+> in an email, which has none — flagged at the time); **the client corrected
+> this the same day** ("take out the 'don't reply...' from any emails, my bad
+> for the poor instructions") and it was removed from
+> `property_leased_email_body`. Emails in this estate never carry it, no
+> exceptions — matches `CAL_LINK_EMAIL_COPY_MARKER`'s existing precedent
+> exactly, so this settles back to the established rule rather than creating
+> a new one.
 
 **The new tenant is excluded entirely and receives NOTHING from this button.**
 Client decision 2026-09-22: Nicole handles move-in communication herself. They
@@ -432,7 +473,7 @@ risk worth taking for the convenience.
 | ~~Exact footer wording?~~ | **ANSWERED 2026-09-21**: `Please do not reply to this number - this mailbox is not monitored.` ASCII hyphen, deliberately — see above. |
 | Does a suppression expire or last forever? | Permanent is safer for the lead; expiring avoids a list that only grows. |
 | ~~Who can press stop?~~ | **ANSWERED 2026-09-21**: any dashboard user plus admins — in practice Nicole. Enforced in the route handler only; n8n never sees roles, so this is a one-line change later. |
-| Should a lead's own cancellation end their sequence? | Still unanswered from the 2026-09-20 discussion. |
+| ~~Should a lead's own cancellation end their sequence?~~ | **ANSWERED 2026-09-29 (Justin): yes.** When a lead cancels their own self-guided showing, suppress all further outreach and create a FUB task for Nicole, "Cancelled showing, give call". Built the same day — `LEAD_CANCEL_MARKER`, see `docs/n8n-workflows.md`. |
 | ~~Does a POST-SHOWING lead get the "property leased" message?~~ | **ANSWERED 2026-09-22: yes.** A lead who has already toured is told the home is gone, exactly like everyone earlier in the funnel. So the only exclusions from this button are the new tenant and the three trash tags. |
 
 ---
@@ -677,11 +718,14 @@ the open question below. Checked live at send time, not from a stale flag.
 Copy — client's verbatim text as the EMAIL body; a SHORT, separately-derived
 SMS (client confirmed 2026-09-26 this should not be the same wall of text on
 both channels, matching every other dual-channel template in this estate).
-Both are DRAFT, in Settings (`followup_sendoff_sms_template`,
-`followup_sendoff_email_subject`, `followup_sendoff_email_body`) —
-**not yet client-signed-off.** One known wording note, left verbatim
-pending sign-off: "try and base with you" is almost certainly meant to read
-"touch base with you".
+**CLIENT-APPROVED 2026-09-28**, in Settings (`followup_sendoff_sms_template`,
+`followup_sendoff_email_subject`, `followup_sendoff_email_body`) — the
+"try and base with you" → "try and touch base with you" typo fix
+(`_oneoff-2026-09-26-copy-fixes.mjs`) and the Nicole contact line
+(`843-494-5244` / `nicolee@rentingfreedom.com`, replacing a stray
+`nicole@rentingfreedom.com`, `_oneoff-2026-09-28-nicole-contact-copy-approved.mjs`)
+are both applied. **This does NOT itself flip `followup_enabled` or activate
+the workflow** — those are separate, deliberate steps.
 
 `{{contact_first_name}}` / `{{inquiry_address}}` are the estate's own
 placeholder convention (the client's `%...%` form translated). SMS renders
@@ -852,6 +896,41 @@ tag and move the lead to `Cold Rental Lead 1 month Hold`.
 | Is `[no response]` the existing `No Response Trash` tag? | A new tag name is invisible to every gate; the existing one blocks for 90 days. |
 | ~~Does a post-showing lead get the "property leased" message?~~ | **ANSWERED 2026-09-22: yes** — see Part 3, 3b. |
 
+> **This "Open questions" table is stale** — all three rows above were settled
+> 2026-09-26 (see "ALL ANSWERED 2026-09-26" earlier in this Part): responded =
+> booked a showing / verified ID, checked live; two independent tasks, not
+> one; `[no response]` is the existing `No Response Trash` tag. Left here
+> rather than deleted so the reasoning that led to each answer stays visible.
+
+### Offline verifier — `scripts/followup-verify.mjs` (2026-09-28, 85 assertions)
+
+Same shape as every other verifier in this estate: pulls the live jsCode from
+all eight Code nodes across the four phases (ID task, booking task, sendoff,
+tag) and runs it against synthetic data. Sends nothing, writes nothing.
+
+Sections A–H cover each phase's candidate-selection and guard/resolve logic
+independently — the four `Resolve *` guard functions are copy-pasted, not
+shared (n8n Code nodes can't import), so each is tested on its own rather than
+assumed to stay in sync. Section I checks deployed wiring: the workflow is
+currently inactive (expected — copy/activation gate), the gotcha-19 named
+reference in `Resolve Sendoff`, and that `Read Outreach Suppression (Sendoff)`
+sits between `FUB - Get Person (Sendoff)` and `Resolve Sendoff` in the graph.
+
+> **Found while writing it: the tag-dedup check in `Resolve Tag` is
+> UNREACHABLE under the default `followup_no_response_tag` value.** `No
+> Response Trash` is itself one of the guard's own `TRASH_TAGS`, so a lead who
+> already carries it is rejected by the guard (`outcome: cancelled`,
+> `trash_tag:...`) before `Resolve Tag` ever reaches the code that checks for
+> and skips a duplicate. The dedup only matters if `followup_no_response_tag`
+> is ever changed to a label the guard doesn't recognise as a trash tag — not
+> a bug (the guard rejecting an already-trashed lead is correct), but worth
+> knowing before "why didn't the dedup fire" comes up. Assertions G6/G7 pin
+> both halves: the default label hits the guard, a custom label hits the dedup.
+
+```bash
+node scripts/followup-verify.mjs
+```
+
 ## Part 6 — Disposition, cancellation and re-entry (requested 2026-09-23)
 
 Decided in conversation 2026-09-23. **4e's "insert into a loop" is superseded
@@ -864,37 +943,49 @@ cost.
 |---|---|---|
 | **Pause outreach…** | admin + user | **BUILT 2026-09-23.** A suppression with `expires_at`. |
 | **Stop outreach…** | admin + user | **BUILT.** Gains the FUB disposition section, 6b. |
-| **Cancel showing…** | admin + user | Only when a future `scheduled` booking exists. 6c. **NOT BUILT.** |
-| **Mark ID verified by hand…** | admin + user | **BUILT 2026-09-23.** 6d. Shown only to a lead with no delivered link. |
-| **Restart booking nudges…** | admin only | **BUILT 2026-09-23.** 6f. Shown only to a lead who holds a link. |
+| **Cancel showing…** | admin + user | Only when a future `scheduled` booking exists. 6c. **BUILT 2026-09-24** — see below, this row was stale. |
+| **Mark ID verified by hand…** | admin + user | **BUILT 2026-09-23.** 6d. Shown only to a lead with no delivered link. **Checked in dev as far as it will be checked — not exercised against live leads (client decision, 2026-09-28).** |
+| **Restart booking nudges…** | admin only | **BUILT 2026-09-23.** 6f. Shown only to a lead who holds a link. **Same: dev-checked, not exercised on live leads (2026-09-28).** |
 | **Restart** | admin only | As built. Can cause a send. |
 
-### Build status 2026-09-23
+### Build status — CORRECTED 2026-09-28, was stale from 2026-09-23
+
+> **The two rows below were wrong.** They read "NOT BUILT" and "the tour toggle
+> and second confirm remain" as of 2026-09-23, but commit `7f9ca34` (2026-09-24)
+> built both 6c and 6e in the same session, and `stop-outreach-dialog.tsx`
+> already has the tour-cancel toggle and its own second confirm (verified by
+> reading the deployed component, 2026-09-28). **Everything in this table is
+> now BUILT.**
 
 | Item | State |
 |---|---|
 | Pause, scope reorder, dark mode | **BUILT** — `4755d3a` |
-| 6d mark verified, 6f restart nudges | **BUILT** — `0dec4ff` |
+| 6d mark verified, 6f restart nudges | **BUILT** — `0dec4ff`. Dev-checked, not live-lead-tested (see table above). |
 | 6b Stop + FUB disposition | **BUILT** — `6806e84` |
-| 6c Cancel self-guided tour | **BUILT 2026-09-23** — no n8n patch needed; the rebook wording rides `cancellationReason` |
-| 6g Stop redesign | scope label **APPLIED**; the tour toggle and second confirm remain |
-| 6e Manual booking | **NOT BUILT** — Cal.com creation is unproven |
+| 6c Cancel self-guided tour | **BUILT** — `7f9ca34` (2026-09-24). No n8n patch needed; the rebook wording rides `cancellationReason`. |
+| 6g Stop redesign | **BUILT** — `c5ed00e` / `250dc76` (2026-09-24). Tour toggle and second confirm are in `stop-outreach-dialog.tsx`. |
+| 6e Manual booking | **BUILT** — `7f9ca34` (2026-09-24). Cal.com creation proved live against a throwaway event type before the UI was built on it. |
 
 **Nothing is deployed and nothing has run.** These are dashboard changes; the
-client triggers deploys from vercel.com.
+client triggers deploys from vercel.com. **Client decision, 2026-09-28: hold
+the deploy deliberately until the whole outreach-control effort (Parts 1–6,
+plus items 1–4 from the 2026-09-28 feedback round) is done**, rather than
+shipping it in pieces. This is not a blocker on anyone's list — it is the
+plan.
 
-**Three prerequisites before any of it works in production:**
+**Prerequisites before any of it works in production:**
 
-1. **`original_link_sent_at` must be added to the Inquiries tab.**
-   `node scripts/original-link-sent-at-setup.mjs --apply`. Dry-run 2026-09-23:
-   the grid is **exactly full at 17/17**, so the script issues an
-   `appendDimension` first. `restartBookingNudges` refuses to run without it —
-   deliberately, because `updateSpecificColumns` skips a missing column
-   **silently**, which would half-reset the row.
-2. **`FUB_API_KEY` must be set in the Vercel project.** 6b is the first FUB
-   write this app has ever made, and the read path has never deployed either.
-   Without it the disposition half fails and reports; the stop still happens.
-3. **The client must deploy.**
+1. ~~**`original_link_sent_at` must be added to the Inquiries tab.**~~
+   **DONE** — confirmed live on the `Inquiries` header row (18 columns,
+   `original_link_sent_at` last). `restartBookingNudges` refuses to run
+   without it, deliberately, because `updateSpecificColumns` skips a missing
+   column **silently**, which would half-reset the row.
+2. ~~**`FUB_API_KEY` must be set in the Vercel project.**~~ **CONFIRMED SET,
+   2026-09-28** — this had come up as an open question more than once; it is
+   answered and does not need re-asking. 6b is the first FUB write this app
+   has ever made, and the read path had never deployed either. Without it the
+   disposition half fails and reports; the stop still happens.
+3. **The client must deploy** — deliberately held, see above.
 
 > **6c turned out NOT to need an n8n patch**, which was the reason it was
 > deferred. Routing the rebook wording through `cancellationReason` — already
@@ -916,7 +1007,7 @@ client triggers deploys from vercel.com.
 > |---|---|
 > | Manually validated ID → stop ID nudges | Silences the nudges and leaves them **with no booking link** — "verify into silence" in a new costume. The right action is 6d: waive *and* release the link. Offer it as **"Mark ID verified manually"**. |
 > | Manually scheduled → stop booking nudges | Solved for free by 6e: a **real** Cal.com booking is seen by `hasBooked()` and the nudges stop by themselves. |
-> | Stop just the review messages | **Not expressible.** `cal_reminders` is one scope covering pre-visit reminders (24h/2h/reconfirm) **and** every post-visit follow-up. Stopping it also stops the reminders that get someone to the door. Splitting it into `cal_reminders_previsit` / `cal_reminders_postvisit` is an n8n change to `Find Due Notifications`, where the scope names are matched. **Open.** |
+> | Stop just the post-visit nudge | **DONE, 2026-09-28** — `CAL_REMINDERS_SCOPE_SPLIT_MARKER`. `cal_reminders` (one scope covering pre-visit reminders **and** every post-visit follow-up) is retired; `cal_reminders_previsit` and `cal_reminders_postvisit` are now independently stoppable. "Review" is no longer the right word for the post-visit side — `SHOWING_REVIEW_REMOVED_MARKER` already dropped the review-request language from it, so it's the "still want to apply?" nudge now, and the label says that. |
 >
 > The original trap still stands and is why the narrow options need their
 > "this will continue" list:
@@ -971,8 +1062,10 @@ shape the reapply-reroute already uses.
 
 > **The dashboard has never written to FUB.** `src/lib/fub/client.ts` is
 > read-only — one function, `fetchLeadStatuses`. This is a new capability and
-> needs **`FUB_API_KEY` set in the Vercel project** (confirmed with the client
-> 2026-09-23). Nothing in the app called FUB at all before the stage column.
+> needs **`FUB_API_KEY` set in the Vercel project.** Confirmed with the client
+> 2026-09-23, and **re-confirmed set 2026-09-28** after the question resurfaced
+> more than once — it is answered, stop re-asking it. Nothing in the app
+> called FUB at all before the stage column.
 
 **A stop WITHOUT a disposition leaves the lead in a valid stage**, suppressed
 but otherwise untouched. The table should mark where they stopped — a 🛑 in the
@@ -1086,10 +1179,12 @@ explicitly.**
 > sequence-insertion engine is a send button in search of a use case; the use
 > case the client actually has is one flag on one row.
 
-### 6e. Also noted — manual booking entry on `/showings`
+### 6e. Manual booking entry on `/showings` — BUILT 2026-09-24 (`7f9ca34`)
 
-Requested 2026-09-23, **not yet scoped**. A way to add a booking by hand from
-the `/showings` page, for a showing arranged off-platform.
+Requested 2026-09-23. A way to add a booking by hand from the `/showings`
+page, for a showing arranged off-platform. **This section was written while
+still scoping it; it now describes what was actually built**, corrected
+2026-09-28 — the "not yet scoped" framing below is stale.
 
 **It creates a REAL Cal.com booking** (client decision 2026-09-23), not a sheet
 row. The slot is held, Cal.com sends its own confirmation, and every existing
@@ -1104,9 +1199,10 @@ wiring.
 > booking form (`NUDGE_CAL_LINK_METADATA_MARKER`). A sheet-only row would have
 > had to fake what the API can simply be told.
 
-> New capability: nothing in this estate has ever CREATED a Cal.com booking.
-> Cancellation is proven (`POST /v2/bookings/{uid}/cancel`); creation is not.
-> Prove it against a throwaway event type first, as A-2 did for the cancel.
+> New capability: nothing in this estate had ever CREATED a Cal.com booking
+> before this. **Proved live against a throwaway event type before the UI was
+> built on it** (the same discipline A-2 used for the cancel), then shipped in
+> the same session, `7f9ca34`, 2026-09-24.
 
 ### 6f. Restart the booking loop — its own action, not only a side effect
 
@@ -1276,11 +1372,78 @@ than left orphaned.
 
 | Question | Why it matters |
 |---|---|
-| Split `cal_reminders` into pre-visit and post-visit scopes? | Nicole wants to stop the review messages without stopping the reminders that get someone to the door. Not expressible today. |
+| ~~Split `cal_reminders` into pre-visit and post-visit scopes?~~ | **ANSWERED 2026-09-28: yes, built.** `CAL_REMINDERS_SCOPE_SPLIT_MARKER` — see `docs/n8n-workflows.md`. |
 | ~~Does Nicole use the per-sequence scopes?~~ | **ANSWERED 2026-09-23: yes** — kept, as checkboxes with completed steps greyed out. |
 | ~~Re-anchor `link_sent_at`, or add `rebook_anchor_at`?~~ | **ANSWERED 2026-09-23: re-anchor**, plus a write-once `original_link_sent_at`. The premise for the separate column was wrong. |
 | ~~Which tags does the Stop disposition offer?~~ | **ANSWERED 2026-09-23: all three.** |
 | ~~Should a manual booking create a real Cal.com booking?~~ | **ANSWERED 2026-09-23: yes.** See 6e. |
+
+---
+
+## Moving a re-engaged lead to a different property — scoped, not built (2026-09-29)
+
+Raised alongside the lead-cancellation decision: once Nicole calls a lead
+whose showing got cancelled (the new `LEAD_CANCEL_MARKER` task) and they want
+to look at a **different** property, there is currently no way to (a) get
+`/outreach` to stop showing the old, dead engagement and (b) start a fresh
+inquiry flow for the new one. Two genuinely separate problems, and the first
+is **already solved**:
+
+### Half 1 — clearing the old suppression: already exists
+
+`restartOutreach()` (Part 6's "Restart" action, admin-only) already expires a
+person's suppression row by scope. A `scope: "all"` restart on this lead
+clears the exact row the new cancellation feature just wrote. **No new code
+needed** — use the existing Restart action.
+
+**Why lifting it is safe**, checked rather than assumed: the OLD property's
+`Inquiries` row is already inert on its own merits once a showing has been
+booked-and-cancelled — `booked_at` is set (so `Find Due Nudges` never nudges
+it again) and its `Cal Bookings` row is `status: cancelled` (so
+`Find Due Notifications` skips it and no code is minted). Lifting the
+person-wide suppression does not resurrect that dead row; it only un-blocks
+whatever comes next for that person.
+
+### Half 2 — a new inquiry for the new property: NOT built
+
+Nothing in this estate can currently manufacture a **new** `Inquiries` row
+except a real FUB `eventsCreated` "Property Inquiry" event — there is no
+manual path, unlike bookings (6e proved a manual Cal.com booking works, same
+philosophy needed here).
+
+**Proposed design**, following 6e's own precedent (a real, functioning
+artifact created by hand, not a synthetic shortcut):
+
+1. A new admin action — "Add property inquiry" — on the outreach table's
+   per-lead menu (or reachable from the same place 6e's manual booking is).
+   Picker over Properties, same live-filtered style as 6e's event-type
+   picker.
+2. It appends a real `Inquiries` row: `property_key`/`property_address` from
+   the picked property, `cal_link` resolved the same way
+   `APPLICATION_INQUIRY_ROW_MARKER` already resolves it for an application
+   (`$items("Read Properties")`, no new address matcher), `link_sent =
+   false`, `inquired_at = now`, `event_id = "manual-<timestamp>-<personId>"`
+   (so it can never collide with a real FUB event id), `source = "manual"`,
+   `match_status = "matched"`, `phone`/`email` from the FUB person already on
+   hand.
+3. Since `computeInFlight` iterates `Inquiries` **rows**, not people (this is
+   the same design that already lets one lead appear once per property they
+   inquired on), the new row gets its own independent ladder entry on
+   `/outreach` for free — no new logic there.
+4. **The row still needs a push to actually send**, same as every
+   `_oneoff-*-repair.mjs` script already does: if the lead is already
+   verified, re-POST their FUB `uri` to the sweep webhook
+   (`/webhook/send-cal-link-after-verification`); if not yet verified, the
+   normal `peopleUpdated`/inquiry-event path would need triggering instead.
+   Given this lead almost certainly verified already (they'd booked a
+   showing before), the sweep re-POST is the common case.
+
+**Not yet built. Wants your go-ahead before it's built** — it's a genuinely
+new capability (n8n has never accepted a hand-created `Inquiries` row before),
+and the "which property, whose lead, does the client want a confirm step"
+shape deserves a quick look before it's wired up, the same way 6e's booking
+creation was proved live against a throwaway event type before any UI went on
+top of it.
 
 ---
 

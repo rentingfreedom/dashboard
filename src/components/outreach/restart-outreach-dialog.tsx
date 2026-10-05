@@ -49,7 +49,7 @@ export function RestartOutreachDialog({
     if (!target) return;
     setSaving(true);
     try {
-      const res = await fetchJson<{ expired: number; inquiriesReset: number }>(
+      const res = await fetchJson<{ expired: number; inquiriesReset: number; swept: boolean }>(
         "/api/outreach/restart",
         {
           method: "POST",
@@ -63,7 +63,11 @@ export function RestartOutreachDialog({
       );
       toast.success(
         `Outreach restarted — ${res.expired} suppression(s) lifted` +
-          (res.inquiriesReset ? `, ${res.inquiriesReset} link row(s) handed back to the sweep` : "")
+          (res.inquiriesReset
+            ? `, ${res.inquiriesReset} link row(s) ${
+                res.swept ? "sent" : "handed back to the sweep (delivery failed — will retry on its own)"
+              }`
+            : "")
       );
       onOpenChange(false);
       onDone();

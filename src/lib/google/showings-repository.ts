@@ -1,4 +1,4 @@
-import { readSheet, rowsToObjects } from "./sheets-client";
+import { readSheet, rowsToObjects, updateSpecificColumns } from "./sheets-client";
 import type { Showing, ShowingStatus } from "@/lib/types";
 
 const TAB = "Showings";
@@ -33,4 +33,36 @@ export async function listShowings(): Promise<Showing[]> {
 export async function getShowingByUid(uid: string): Promise<Showing | null> {
   const showings = await listShowings();
   return showings.find((s) => s.booking_uid === uid) ?? null;
+}
+
+/**
+ * Stamp `rebook_offered` on a Showings row BEFORE calling Cal.com's cancel
+ * API — same precedent as `markCancelledByStaff` (LEAD_CANCEL_MARKER):
+ * written first so it is guaranteed to exist by the time the CANCELLED
+ * webhook round-trips back, and best-effort so a failure here never blocks
+ * the actual cancellation.
+ *
+ * `Build Cancel SMS` (the Booking Handler's cancel branch) reads this to
+ * decide whether the cancellation text should include a rebook link — the
+ * dialog's "offer them another time" checkbox otherwise had no way to reach
+ * that SMS at all, since Cal.com's own cancellationReason text is shown to
+ * the invitee verbatim but is NOT what this custom SMS is built from.
+ */
+export async function markRebookOffered(bookingUid: string, offered: boolean): Promise<void> {
+  const uid = String(bookingUid ?? "").trim();
+  if (!uid) return;
+  try {
+    const rows = await readSheet(TAB);
+    const { headers, objects } = rowsToObjects(rows);
+    const row = objects.find((r) => String(r.booking_uid ?? "").trim() === uid);
+    if (!row?._rowIndex) return;
+    await updateSpecificColumns(
+      TAB,
+      parseInt(row._rowIndex),
+      { rebook_offered: offered ? "true" : "false" },
+      headers
+    );
+  } catch (err) {
+    console.error(`[markRebookOffered] could not stamp ${uid}:`, err);
+  }
 }

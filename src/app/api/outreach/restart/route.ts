@@ -18,9 +18,12 @@ const schema = z.object({
  * > sweep deliver a link. The UI must preview what will happen and confirm
  * > before calling this.
  *
- * What protects the customer is that this route does not send anything itself.
- * It restores state; n8n re-applies the trash tags, the stage gate, the phone
- * check and the suppression tab before any message goes out.
+ * What protects the customer is not that this route avoids sending — a
+ * `cal_link` restart does re-POST the sweep webhook, because leaving the row
+ * merely "eligible" with nothing to trigger delivery would make this button
+ * silently do nothing. It's that n8n re-applies the trash tags, the stage
+ * gate, the phone check and the suppression tab before any message actually
+ * goes out, regardless of what this route asks for.
  *
  * Admin-only, unlike `stop`. Stopping messages is safe in every direction;
  * starting them again can produce a send, so it sits behind the higher bar.

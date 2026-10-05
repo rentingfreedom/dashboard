@@ -292,7 +292,13 @@ async function main() {
     const find = d.nodes.find((n) => n.name === "Find Ready Showings");
     ok("D1  Find Ready Showings exists", Boolean(find));
     const code = find?.parameters?.jsCode ?? "";
-    ok("D2  it requires status === 'scheduled'", /r\.status\s*!==\s*'scheduled'/.test(code), code.slice(0, 120));
+    // ACCESS_CODE_TWO_WINDOW_MARKER (item 3, 2026-09-28) widened this from a
+    // single `status !== 'scheduled'` check to an explicit allowlist (a row
+    // can be "ready" twice now, once per window) — the property this
+    // assertion protects is still "a parked/blocked status is excluded",
+    // just expressed as a positive allowlist rather than a negative check.
+    ok("D2  status must be 'scheduled' or 'code_sent' — a parked/blocked status is excluded",
+      /\[\s*'scheduled',\s*'code_sent'\s*\]\.includes\(/.test(code), code.slice(0, 200));
 
     // Non-vacuous: actually run it over a parked row and a scheduled one.
     const soon = new Date(Date.now() + 30 * 60 * 1000).toISOString();

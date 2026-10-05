@@ -13,6 +13,9 @@ const SERVER_TO_SERVER_PATHS = [
   // redirects the cron to /sign-in with a 307 and the route's own shared-secret
   // check never runs — a nightly failure that looks nothing like an auth bug.
   "/api/metrics/funnel/snapshot",
+  // Called by n8n's Immediate Sends workflow when a lead cancels their own
+  // showing (LEAD_CANCEL_MARKER) — same reasoning as the two paths above.
+  "/api/outreach/auto-suppress",
 ];
 
 // Role/permission checks happen close to the resource (page and route handler

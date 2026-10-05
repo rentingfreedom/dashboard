@@ -34,13 +34,13 @@ workflows should read this file first.
 | ID | Name | Purpose |
 |---|---|---|
 | `gR6FWXMcc08ps8LT` | Cal.com Booking Handler | BOOKING_CREATED / RESCHEDULED / CANCELLED. Immediate code dispatch after reschedule. |
-| `ztUEx7Htu620SLbj` | Access Code Dispatch | Cron every 5 min + `/webhook/immediate-dispatch-showings`. |
+| `ztUEx7Htu620SLbj` | Access Code Dispatch | Cron every 5 min + `/webhook/immediate-dispatch-showings`. Sends the code at T-2h AND T-1h (same code, reused) — see ACCESS_CODE_TWO_WINDOW_MARKER. |
 | `UbO0l29GtILMm1sP` | FUB Phone Added → Send Text | Webhook `send-cal-link-after-verification`. **No longer phone-triggered** — it's the catch-up sweep over the Inquiries tab. |
 | `JDsKrVRHf9TEVj7j` | FUB Inquiry → Record + Send | Webhook `fub-inquiry-created`, driven by FUB `eventsCreated`. Records every property inquiry, sends that inquiry's own cal link. |
 | `L13GUyrWbjSJwn8p` | Identity Verification Gate | Webhook `phone-added-send-text`. The real FUB phone-added trigger: guards → Stripe Identity → verify SMS. Also hosts the stage-transition watcher, the reapply-reroute, the tag-expiry cleanup, and the **ungated** new inquiry-lead alert. |
 | `PHSdCWhovdbFDHlX` | Identity Verification Result Handler | Webhook `identity-verification-result`. On success, replays `UbO0l29GtILMm1sP`. |
-| `Ih8zMmNeUwKvITGf` | FUB New Lead → Cal Link | Webhook `new-lead-cal-link` (`peopleCreated`). **Legacy, inactive, archived.** |
-| `HwXpYAqwbG1zwGls` | FUB Address → Cal Link | Webhook `06b890ba-…` (`peopleUpdated`). **Legacy, inactive, archived, not test-gated.** |
+| ~~`Ih8zMmNeUwKvITGf`~~ | ~~FUB New Lead → Cal Link~~ | **DELETED 2026-09-28** — legacy, subsumed by the inquiry flow, client sign-off given. Backup: `n8n/BEFORE-legacy-workflow-deletion/`. |
+| ~~`HwXpYAqwbG1zwGls`~~ | ~~FUB Address → Cal Link~~ | **DELETED 2026-09-28** — legacy, the workflow that caused the original multi-property bug, client sign-off given. Backup: `n8n/BEFORE-legacy-workflow-deletion/`. |
 | `4bMsEAi18j4CPK8k` | DoorLoop Occupancy Sync | Hourly poll of DoorLoop Units + ACTIVE Leases → writes `status` to Properties. **ACTIVE.** `n8n/doorloop-occupancy-sync.json`. |
 | `X1lih7X05rpnTPmb` | Zillow Rental Application → Create FUB Person | Gmail Trigger on `no-reply@comet.zillow.com` → dedup-checks FUB by name → creates person + note → texts for a phone number. **ACTIVE, test-gated.** `n8n/fub-rental-application-flow.json`. |
 | `5LwTZS4dw5qmInL2` | Cal Reminder - Immediate Sends | Own Cal.com webhook `calcom-reminder-events`. **ACTIVE, test-gated.** `n8n/cal-reminder-immediate.json`. |
@@ -53,8 +53,8 @@ workflows should read this file first.
 | `PKdaOsoHatbuRTfZ` | Missed Access Code Sweep | Hourly. Reconciles Cal Bookings -> Showings and texts staff when a showing has, or will have, no door code. **ACTIVE since 2026-09-15.** `n8n/missed-code-sweep.json`. |
 | `87TEvHQzAv5rnuMT` | Funnel Daily Snapshot | Daily 23:30 UTC. One POST to the dashboard, which appends a `Funnel_Snapshots` row. Computes NOTHING itself and reads no Sheet. **ACTIVE since 2026-09-17.** |
 | `W6PoSadMxnoHwxhG` | Delete Property | Sheets `anyUpdate` poll (**every 5 min**) on the SAME tab → filter `active == "Delete"` → deletes the cal.com event type, the Google resource, and the sheet row. **ACTIVE.** |
-| `3tUbcCzaBqYisAHr` | Property Leased Notify | Webhook `property-leased-notify`. One item per call — invoked by the dashboard's own paced `leased-execute` loop, not a poll. Sends the "this home is gone" SMS + email for Item 07, 3b, greets the lead by first name, and logs every send to FUB. **ACTIVE, live-tested 2026-09-25 and 2026-09-26 (first name). Copy is still DRAFT, not client-signed-off.** |
-| `w8VkzN2V9TLFReXw` | No Response Follow-Up | Hourly. Part 5 — 2nd ID/booking reminder → Nicole phone-call task → +4d send-off SMS/email (checks `Outreach_Suppression`) → +1d No Response Trash tag + move to Cold. **INACTIVE, built and validated offline 2026-09-26. `followup_enabled` Settings key is FALSE. Copy is DRAFT, not client-signed-off. Not yet activated.** |
+| `3tUbcCzaBqYisAHr` | Property Leased Notify | Webhook `property-leased-notify`. One item per call — invoked by the dashboard's own paced `leased-execute` loop, not a poll. Sends the "this home is gone" SMS + email for Item 07, 3b, greets the lead by first name, and logs every send to FUB. **ACTIVE, live-tested 2026-09-25 and 2026-09-26 (first name). Copy CLIENT-APPROVED 2026-09-28.** |
+| `w8VkzN2V9TLFReXw` | No Response Follow-Up | Hourly. Part 5 — 2nd ID/booking reminder → Nicole phone-call task → +4d send-off SMS/email (checks `Outreach_Suppression`) → +1d No Response Trash tag + move to Cold. **INACTIVE, built and validated offline 2026-09-26. `followup_enabled` Settings key is FALSE. Copy CLIENT-APPROVED 2026-09-28. Not yet activated — activation is deliberately held until the whole outreach-control effort is deployed.** |
 
 ### Funnel Daily Snapshot — `87TEvHQzAv5rnuMT` (2026-09-16, ACTIVE since 2026-09-17)
 
@@ -196,11 +196,14 @@ pre-launch checklist; it is now the launch record. Full sequence and what it cau
    > excluded.)
 ### Still open after launch
 
-5. **Retire the two legacy workflows?** `Ih8zMmNeUwKvITGf` / `HwXpYAqwbG1zwGls`
-   both write `customCalLink` from the mutable Person record. Nothing reads that
-   field any more, so neither can misroute today. Retiring both is probably right;
-   wants sign-off. Retiring `HwXpYAqwbG1zwGls` would also free a `peopleUpdated`
-   webhook slot (both are currently full).
+5. ~~**Retire the two legacy workflows?**~~ **DELETED 2026-09-28**, client
+   sign-off given. `Ih8zMmNeUwKvITGf` (FUB New Lead → Cal Link) and
+   `HwXpYAqwbG1zwGls` (FUB Address → Cal Link) both wrote `customCalLink` from
+   the mutable Person record; nothing read that field any more, so neither
+   could misroute anything by the end. Backed up to
+   `n8n/BEFORE-legacy-workflow-deletion/` before deletion. Frees one
+   `peopleUpdated` webhook slot (was 2/2, now 1/2) for any future workflow
+   that needs one.
 6. ~~**Rejected-lead handling**~~ — **CLOSED 2026-09-01.** Client confirmed the
    process: Nicole applies one of the three trash tags, then moves the lead to
    `Cold Rental Lead 1 month Hold`. Both halves were already handled — the
@@ -452,14 +455,14 @@ If one appears it gets `match_status = unmatched`, no link, and one alert SMS.
 > from data, and survived months of review because nobody re-derived it. Re-derive before
 > acting on any "these need rows" list — adding a row provisions a cal.com event type and
 > a Google resource.
-### Legacy overlap — needs a decision
+### Legacy overlap — RESOLVED, both deleted 2026-09-28
 
-Both legacy workflows write `customCalLink` from the mutable Person record.
-`Ih8zMmNeUwKvITGf` (peopleCreated) is **subsumed** by the inquiry flow — a first
+Both legacy workflows wrote `customCalLink` from the mutable Person record.
+`Ih8zMmNeUwKvITGf` (peopleCreated) was **subsumed** by the inquiry flow — a first
 inquiry always produces an `eventsCreated` too. `HwXpYAqwbG1zwGls` (peopleUpdated)
-is what actively **caused** the original reported symptom, and is **not**
-test-gated. Nothing reads `customCalLink` any more, so neither can misroute today.
-See pre-launch item 5.
+was what actively **caused** the original reported symptom, and was **not**
+test-gated. Nothing had read `customCalLink` for months, so neither could misroute
+anything by the time they were deleted. See pre-launch item 5.
 
 ## Identity Verification Gate
 
@@ -1581,6 +1584,121 @@ cases. Its assertions were confirmed non-vacuous by making them fail on purpose.
 > **Run the preview immediately before flipping the switch**, not this paragraph.
 > The count was 0 on 2026-09-01 and will not stay 0.
 
+## A lead cancelling their own showing — `LEAD_CANCEL_MARKER` (2026-09-29, APPLIED)
+
+Client decision 2026-09-29 (Justin), closing the Part 3 open question from
+`docs/scope-outreach-control.md`: when a **lead** cancels their own
+self-guided showing — via Cal.com's own public reschedule/cancel link, never
+a cancellation this system initiates — suppress all further outreach to them
+and create a FUB task for Nicole, **"Cancelled showing, give call"**.
+
+### The hard part: telling "the lead did this" from "we did this"
+
+Three places in this estate already call Cal.com's cancel API: the
+dashboard's "Cancel showing" (6c, `/api/bookings/cancel`), the
+leased-property notify action (`leased-property-execute.ts`), and A-2's
+rejected-lead auto-cancel (`3hGnl6mPnu2AMbZ1`). All three fire the exact same
+`BOOKING_CANCELLED` webhook a lead's own cancellation does.
+
+**`cancellationReason` cannot carry the signal.** Cal.com shows it to the
+invitee verbatim (`cancelBooking`'s own docstring in `src/lib/cal/client.ts`
+already says so), so it must never contain a machine sentinel.
+
+**Fix: a new `cancelled_by` column on `Cal Bookings`**, stamped `"staff"`
+**before** calling Cal.com's cancel API by all three internal call sites. The
+webhook can only arrive once Cal.com has processed that same call, so the
+stamp is guaranteed to already exist by the time Immediate Sends reads it. A
+blank value means nobody on our side initiated it.
+
+```bash
+node scripts/cal-bookings-add-cancelled-by.mjs [--apply]          # the column
+node scripts/n8n-add-rejection-cancel-staff-stamp.mjs [--apply] [--revert --apply]   # A-2's half
+```
+
+- `src/lib/google/cal-bookings-repository.ts` — `markCancelledByStaff(bookingUid)`,
+  called from `/api/bookings/cancel` and `leased-property-execute.ts` before
+  their existing `cancelBooking()` calls. Best-effort: a failed stamp must
+  never block the actual cancellation.
+- A-2 (`3hGnl6mPnu2AMbZ1`): a new node, `Stamp Cancelled By Staff`, spliced
+  between `Rejected?`'s true branch and `Cal.com - Cancel Booking`.
+
+> **Gotcha 19, live here.** `Cal.com - Cancel Booking`'s `url` and `jsonBody`
+> read `$json.booking_uid` / `$json.reason` bare — its own immediate input,
+> which the new node's insertion replaces with the Sheets update response.
+> Both were repointed at `$('Rejected?').item.json...` — **`.item`, not
+> `.first()`** (gotcha 11): `Process Rejections` is a batch loop, so `.first()`
+> would silently resolve to item 0 forever. `rejection-cancel-verify.mjs`'s
+> assertion for this was tightened in the same change to require `.item` and
+> reject `.first()`, rather than deleted.
+
+### Detection and action — Immediate Sends (`5LwTZS4dw5qmInL2`)
+
+```
+Read Settings (Cancel) ─┬─> Build Cancellation Email    (existing)
+                        ├─> Build Staff Cancellation    (existing)
+                        └─> Classify Lead Cancellation  (NEW)
+                              -> Lead Cancelled Showing? (NEW, IF)
+                                  [true] ─┬─> Build Auto-Suppress Body -> POST Auto-Suppress
+                                          └─> Build Lead-Cancel Task Body -> FUB - Create Lead-Cancel Task
+```
+
+**`Classify Lead Cancellation` is chained DOWNSTREAM of `Read Settings
+(Cancel)`, not a third parallel sibling reading it independently.**
+`Build Nicole Immediate Email` already once raced its own parallel Settings
+read and lost (working only because n8n v1 happened to run the first-listed
+branch first) — chaining removes the race rather than trusting sibling order
+again.
+
+`Check Already Cancelled` is extended to also read the new `cancelled_by`
+column — it already reads every Cal Bookings column via `$input.all()` for
+the dedup check, so this costs no new Sheets request.
+
+Scoped to `category === 'showing'` only — a lead cancelling their own
+consult or walkthrough is out of scope for this decision.
+
+**Both actions fan out in parallel off the IF's true branch** (not chained),
+each `onError: continueRegularOutput`, so a failure in one never blocks the
+other:
+
+1. **`POST Auto-Suppress`** → a NEW dashboard route,
+   `/api/outreach/auto-suppress`. Same shared-secret pattern as
+   `/api/identity/create-session` and the Funnel Snapshot cron — reuses the
+   EXISTING n8n→dashboard mechanism (`x-internal-api-key`, credential
+   `RF Dashboard Internal API`) rather than inventing a second one. Calls the
+   existing `stopOutreach()` directly (`scope: "all"`, actor `"n8n (lead
+   cancelled)"`) — no new suppression-writing logic, just a new authenticated
+   caller of the one that already exists. Added to `SERVER_TO_SERVER_PATHS`
+   in `src/proxy.ts`.
+2. **`FUB - Create Lead-Cancel Task`** — same proven shape as
+   `APPLICATION_REVIEW_TASK_MARKER`'s `POST /tasks`: `type: 'Follow Up'`,
+   `assignedUserId` from `fub_nicole_user_id`, same-day ET `dueDate`. Title
+   from the new `lead_cancelled_task_name` Settings key (client's own
+   wording: "Cancelled showing, give call"). Skipped, not attempted, if the
+   booking carries no `fub_person_id` (nothing to attach a task to) or
+   `fub_nicole_user_id` is unset — logged, not thrown, matching this
+   workflow's existing isolation discipline.
+
+```bash
+node scripts/lead-cancel-setup.mjs [--apply]                       # lead_cancelled_task_name
+node scripts/n8n-add-lead-cancel-handling.mjs [--apply] [--revert --apply]
+```
+Backups `n8n/BEFORE-lead-cancel-handling/`, `n8n/BEFORE-rejection-cancel-staff-stamp/`.
+Applied and pushed live 2026-09-29 across both workflows. Offline-tested
+against the live deployed code (all three classification cases: lead
+cancels a showing, staff cancels a showing, lead cancels a consult) before
+being called done — `cal-booking-notify-verify.mjs`, `non-showing-skip-verify.mjs`
+and `rejection-cancel-verify.mjs` all still pass (73/73, one assertion
+tightened per the gotcha-19 note above). **Not yet observed on a real lead
+cancellation** — the next self-guided showing a lead cancels through their
+own Cal.com link is the live test.
+
+> **Restarting a suppressed lead already has a mechanism — `restartOutreach()`
+> (Part 6's "Restart" action).** A `scope: "all"` restart expires this exact
+> suppression row. Moving a re-engaged lead to a DIFFERENT property still
+> needs a way to create that new inquiry — open, not yet built; see the
+> "Moving a lead to a new property" note below Part 6 in
+> `docs/scope-outreach-control.md`.
+
 ## Per-category booking notifications (B, built 2026-09-01, APPLIED)
 
 Client request 2026-09-01, with routing confirmed the same day. Replaces the
@@ -1817,6 +1935,103 @@ stamped `blocked_no_lockbox` are not rewritten** and stay inert forever.
 > skipping every assertion after the crash point. Hence the `at()` accessor there.
 > Re-run it after any edit to the builder or the verifier.
 
+### Two-window access codes — `ACCESS_CODE_TWO_WINDOW_MARKER` (item 3, 2026-09-28)
+
+Client decision 2026-09-28: the door code goes out at **T-2h AND T-1h** before a
+self-guided showing, not once at T-60min. If either window has already passed by the
+time the showing is booked, that send happens immediately instead of waiting:
+
+| Booked | Behaviour |
+|---|---|
+| ≥ 2h before the showing | nothing at booking time; the cron sends at T-2h, then again at T-1h |
+| 1–2h before the showing | T-2h already passed → send immediately; the cron still owes T-1h |
+| < 1h before the showing | both windows already passed → send **once**, immediately, satisfying both |
+
+**Same Populife code both times — client decision, not a technical default.** The
+alternative (mint a fresh code per window) means twice the Populife API calls and two
+live codes on one lockbox at once for no benefit; reusing the first code for the
+reminder send is simpler and safer.
+
+**`status` / `access_code` / `access_code_id` / `code_sent_at` keep their EXISTING
+meaning** — stamped on the FIRST successful send, whichever window that is — so
+SHOWING_CODE_GATE's "was a code delivered" check, the Missed Access Code Sweep, and the
+`/outreach` doorCode cell are all untouched. Two NEW `Showings` columns,
+`code_sent_2h_at` / `code_sent_1h_at`, track which window has actually fired; a row can
+now be "ready" for the dispatch cron twice.
+
+**Booking Handler (`gR6FWXMcc08ps8LT`).** `Build Showing Row` computes `dueNow2h` /
+`dueNow1h` from `showing_time - now`; `isImmediate` (still the `Immediate? (Created)` IF
+condition, unchanged) is redefined to mean "at least one window is already due" — the
+old T-2h-due flag, just renamed in spirit. `Update Showings (Code Sent - Created)`
+stamps `code_sent_2h_at` unconditionally on that branch and `code_sent_1h_at` only when
+`dueNow1h` was also true.
+
+**Access Code Dispatch (`ztUEx7Htu620SLbj`).** `Find Ready Showings` now matches
+`status` in `{'scheduled','code_sent'}` (the first window firing already advances
+`status`, but the second can still be outstanding), and flags `need2h` / `need1h` per
+row. A new IF node, `Code Already Exists? (Cron)`, sits between `Calc Code Window
+(Cron)` and `Populife - Get Token (Cron)`: if the row already carries an `access_code`
+(the other window already fired), the Populife calls are skipped entirely and the true
+branch goes straight to `Build SMS (Cron)` — both branches converge on that one node,
+the same "sibling branches rejoin a shared downstream node" shape used everywhere else
+in this estate (every `Loop Back` merge is the same pattern).
+
+> **`Build SMS (Cron)` checks `row.access_code` BEFORE ever referencing `$('Populife -
+> Generate Code (Cron)')`.** That node does not run on the reuse branch, and referencing
+> a node that didn't execute throws in n8n (the same class of hazard gotcha 19 warns
+> about, just for a skipped branch rather than an inserted node). `Update Showings Row
+> (Cron)` was repointed to read `code`/`codeId` from `$('Build SMS (Cron)')` instead of
+> `Populife - Generate Code (Cron)` directly, since Build SMS always runs regardless of
+> which branch fired.
+
+> **A stamp already set from an earlier pass is preserved, never blanked.**
+> `code_sent_2h_at` / `code_sent_1h_at` are written as
+> `need?h ? now : ($('Find Ready Showings').first().json.code_sent_?h_at || '')` — if
+> this pass is only satisfying the 1h window, the 2h stamp from the earlier pass must
+> survive the Sheets `update` (which replaces whatever the mapped expression evaluates
+> to, not just the touched cell).
+
+The showing confirmation email also tells the lead when to expect the code —
+`SHOWING_CODE_TIMING_NOTE_MARKER` (item 2, 2026-09-28), in `Build Confirmation Email`
+(`5LwTZS4dw5qmInL2`): "You'll receive your door access code by text message 2 hours
+before your showing" if the showing is ≥2h out at booking time, or "...right away" if
+it's already inside that window. Nothing told the lead this before — confirmed by
+reading the live node before adding it.
+
+```bash
+node scripts/showings-add-two-window-codes.mjs [--apply]                          # 2 new Showings columns
+node scripts/n8n-add-two-window-access-codes-booking-handler.mjs [--apply] [--revert --apply]
+node scripts/n8n-add-two-window-access-codes-access-dispatch.mjs [--apply] [--revert --apply]
+node scripts/n8n-add-showing-code-timing-note.mjs [--apply] [--revert --apply]     # item 2, confirmation email
+node scripts/two-window-access-codes-verify.mjs [--js <dir>]      # 39 assertions (24 without the graph)
+node scripts/two-window-access-codes-mutations.mjs                # 5 mutations, proves the above
+```
+Backups `n8n/BEFORE-two-window-access-codes-booking-handler/`,
+`n8n/BEFORE-two-window-access-codes-access-dispatch/`,
+`n8n/BEFORE-showing-code-timing-note/`. Applied and pushed live 2026-09-28
+(`active=true` confirmed on both workflows post-PUT). **Not yet observed on a real
+booking** — the next self-guided showing booked ≥2h out is the live test for the
+two-send behaviour; watch for two Twilio sends with the same code, at T-2h and T-1h.
+
+> **`two-window-access-codes-verify.mjs` pulls the live `Find Ready Showings`,
+> `Build Showing Row` and `Build SMS (Cron)` jsCode plus the two Sheets nodes'
+> column expressions** (evaluated as real JS, not string-matched — each is exactly
+> one `={{ ... }}` expression, so a direct eval exercises the actual logic).
+> Section E is the one most likely to regress silently: a stamp from an earlier
+> pass must be PRESERVED when this pass only satisfies the other window, not
+> blanked by the Sheets `update` replacing the whole mapped value. Confirmed
+> non-vacuous by 5 mutations, each turning its named assertion red — including
+> removing the reuse check entirely (which the verifier catches by having the
+> Generate Code node stub THROW if referenced on the reuse branch, the exact
+> hazard the reuse logic exists to avoid).
+
+> **Not touched, deliberately: the Missed Access Code Sweep
+> (`PKdaOsoHatbuRTfZ`).** Its MISSED window already means "anything that is not
+> `code_sent`" after the showing has passed — unchanged by this, since `status` still
+> advances to `code_sent` on the first send exactly as before. If the FIRST send
+> succeeds but the second (reminder) send is somehow never picked up, the customer
+> already has a working code — correctly NOT a sweep finding.
+
 ### Booking / access code test gate
 
 Added 2026-07-31. Until then the Booking Handler and Access Code Dispatch were the only
@@ -1995,7 +2210,7 @@ go-forward-only limitation.
 | `L13GUyrWbjSJwn8p` Identity Gate | `Check Guards` | full policy **with** reapply-reroute (the only workflow that writes to FUB people) |
 | `UbO0l29GtILMm1sP` Sweep | `Check & Build Message` | suppress-only, `bail(trashBlock \|\| "stage_not_allowed")` |
 | `JDsKrVRHf9TEVj7j` Inquiry flow | `Resolve Inquiry` | suppress-only, `link_sent = "skipped_" + trashBlock` |
-| `Ih8zMmNeUwKvITGf` / `HwXpYAqwbG1zwGls` legacy | `Match & Resolve Cal Link` | suppress-only, early `{ skipped: true, reason: trashBlock }` |
+| ~~`Ih8zMmNeUwKvITGf` / `HwXpYAqwbG1zwGls` legacy~~ | ~~`Match & Resolve Cal Link`~~ | **Both workflows deleted 2026-09-28** — historical only |
 | `X1lih7X05rpnTPmb` Zillow | `Check Existing Match` | suppress-only against the matched *existing* person, driving `Existing Person Trashed?` → `Append Trash-Skipped Row` |
 
 Five of six are code-only patches. Only the Identity Gate gets new nodes.
@@ -3291,7 +3506,7 @@ send to", `skipped_no_code` means "they never got in".
 
 ```bash
 node scripts/n8n-add-showing-code-gate.mjs [--apply] [--revert --apply] [--emit-js <dir>]
-node scripts/showing-code-gate-verify.mjs [--js <dir>]     # 55 assertions (36 without the graph)
+node scripts/showing-code-gate-verify.mjs [--js <dir>]     # 57 assertions (live-run count, 2026-09-28)
 node scripts/showing-code-gate-mutations.mjs               # 10 mutations, proves the above
 ```
 Backup `n8n/BEFORE-showing-code-gate/`. **`--revert` does not rewrite rows already
@@ -3378,6 +3593,43 @@ scripts.
   for.
 - **Reconfirm/cancel links** point at `https://cal.com/booking/{uid}` rather than a
   bespoke deep link, to avoid inventing an unverified URL shape.
+
+### Review language removed from self-guided-showing follow-ups — `SHOWING_REVIEW_REMOVED_MARKER` (item 1, 2026-09-28)
+
+Client decision 2026-09-28: no more review requests for self-guided tours (SGT —
+`showing` category). **walkthrough and consult are OUT OF SCOPE and untouched** — they
+still get their review-request copy exactly as before.
+
+- **Day-0 `followup` email** was PURE review request for `showing`
+  ("Thank you for your Time! Please leave your Feedback!") with nothing else worth
+  keeping. `Find Due Notifications`'s `followup` rule drops `'showing'` from its
+  `categories` entirely, so a self-guided-showing lead never reaches this email again.
+  `Build Message`'s `followup` case no longer branches on `showing` (unreachable after
+  the rule change, so the dead branch was removed rather than left to confuse the next
+  reader).
+- **Day 1/2/3 emails** (`followup_1day_email`, `followup_2day_email`,
+  `followup_3day_email`) mixed an "are you still interested? apply here" nudge with a
+  "leave feedback" review-link sentence for `showing`. Only the review-link sentence is
+  stripped; the apply nudge is unchanged and still sends.
+- **Day 1/2/3 SMS** already had no review language for `showing` — untouched.
+
+`SHOWING_CODE_GATE_MARKER`'s `FOLLOWUP_KEYS` set still lists `'followup'` — left
+untouched, since it is now simply inert for `showing` (the rule can never select that
+category for it any more). No functional change, so no reason to edit it.
+
+```bash
+node scripts/n8n-remove-showing-review-messages.mjs [--apply] [--revert --apply]
+```
+Backup `n8n/BEFORE-showing-review-removal/`. Applied and pushed live 2026-09-28. **Not
+yet observed on a real send** — the next showing to reach day 0/1/2/3 post-visit is the
+live test; day 0 should never fire for it at all, and days 1–3 should arrive without a
+"leave feedback" link.
+
+> The `/outreach` page's post-visit ladder cell list, the message-loops diagram's
+> "Post-visit follow-ups" step, and the doorCode cell's waiting text were all updated in
+> the same change — see `src/lib/metrics/in-flight.ts` and
+> `src/components/outreach/message-loops-diagram.tsx`. A showing's `postVisitMessages`
+> list now omits "Day 0" entirely rather than showing a line that can never turn ✅.
 
 ## Cal.com Booking Reminders — `5UvuzQwLjCB4D25A` (2026-08-31)
 
@@ -4024,6 +4276,60 @@ Backup `n8n/BEFORE-outreach-suppression/`.
 
 Create/repair: `node scripts/outreach-suppression-setup.mjs --apply`.
 
+### `cal_reminders` split into pre-visit / post-visit — `CAL_REMINDERS_SCOPE_SPLIT_MARKER` (2026-09-28)
+
+**Client decision 2026-09-28: proceed with "stop just the post-visit nudge",
+scoped-but-open since Part 6.** A single `cal_reminders` scope covered both
+the pre-visit reminders (24h/2h/reconfirm — the ones that get a lead to the
+door) and every post-visit follow-up, so it could never be split. And by this
+point "the post-visit nudge" is no longer review copy at all —
+`SHOWING_REVIEW_REMOVED_MARKER` (item 1, same day) already dropped the
+review-request language from a showing's follow-ups; what's left is "are you
+still interested? apply here."
+
+`cal_reminders` is **retired, not kept as a legacy synonym** — nothing in
+this effort is deployed yet (client decision: hold the deploy until the whole
+outreach-control round is done), so there was no live suppression row using
+the old value to preserve compatibility for. Replaced by
+`cal_reminders_previsit` and `cal_reminders_postvisit`.
+
+**Two kinds of change across the same six nodes `OUTREACH_SUPPRESSION_MARKER`
+already touches:**
+
+1. **`SUP_SCOPES`** (the "is this scope real?" allowlist, used only to log a
+   loud warning on a typo) gets the two new values in **all six** nodes'
+   shared matcher, even though only one node's call site ever passes them —
+   because that matcher is asserted **byte-identical across all six**
+   (`outreach-suppression-verify.mjs` section A), and this allowlist sits
+   inside the byte-identical block.
+2. **Only `Find Due Notifications`** (`3hGnl6mPnu2AMbZ1`) has its **call
+   site** changed. The shared `isSuppressed` helper itself is untouched — the
+   call now picks a scope per rule: `anchor: 'start'` (24h/2h/reconfirm) →
+   `cal_reminders_previsit`; `anchor: 'end'` (the follow-ups) →
+   `cal_reminders_postvisit`. The other five nodes have no pre/post
+   distinction to make and are untouched beyond the allowlist.
+
+Dashboard side: `SequenceKey`/`SEQUENCE_KEYS`/`SEQUENCE_LABELS` in
+`src/lib/metrics/in-flight.ts` split the same way (two independent
+`SequenceState` entries instead of one), and `stop-outreach-dialog.tsx`'s
+scope dropdown offers "Pre-visit reminders only" and "Post-visit follow-ups
+only (want to apply?)" in place of the old single option.
+
+```bash
+node scripts/n8n-split-cal-reminders-scope.mjs [--apply] [--revert --apply]
+node scripts/outreach-suppression-verify.mjs      # 216 assertions (was 210)
+```
+Backup `n8n/BEFORE-cal-reminders-scope-split/`. Applied and pushed live
+2026-09-28 across all six workflows (`active=true` confirmed on every PUT).
+**Section E2 was added to `outreach-suppression-verify.mjs` in the same
+change** — the existing section E used a `scope: "all"` suppression row,
+which matches regardless of the split and would have stayed green even if
+`cal_reminders_previsit`/`_postvisit` had been silently merged back into one
+scope. E2 uses one suppression targeting only `cal_reminders_previsit` and a
+second targeting only `cal_reminders_postvisit`, against two separate
+bookings (one pre-visit-due, one long past its visit), and asserts each
+suppression touches only its own side.
+
 ## Backing Google Sheet
 
 - Spreadsheet ID: `1wo_G5EVfT80lUd-2FFi_TVrCQuiXTPrpdVIG1Tr_iuw`
@@ -4091,8 +4397,12 @@ body = {"name": w["name"], "nodes": w["nodes"], "connections": w["connections"],
   basic-auth credential `Iap4KzaMs92QWwSR` ("FUB Owner") — the n8n API won't hand the
   secret back, so the local copy is the only way to script against FUB.
 - **Not needed in Vercel.** Nothing in the Next.js app calls FUB; only n8n does.
-- Webhooks: max **2 per event type**. Current: `peopleUpdated` ×2 (**full** — Identity
-  Gate + legacy Address→Cal Link), `peopleCreated` ×1, `eventsCreated` ×1 (id 8).
+- Webhooks: max **2 per event type**. Current: `peopleUpdated` ×1 (Identity Gate),
+  `eventsCreated` ×1 (id 8). `peopleCreated` is now **empty** — its only subscriber
+  (id 6, `new-lead-cal-link`) and `peopleUpdated`'s second subscriber (id 5,
+  `06b890ba-…`) were both deleted 2026-09-28 alongside the n8n workflows they
+  pointed at (`Ih8zMmNeUwKvITGf` / `HwXpYAqwbG1zwGls`) — deleting the workflow does
+  **not** deregister the FUB-side webhook, so this needed its own cleanup step.
   Manage with `node scripts/fub-register-inquiry-webhook.mjs` (list / `--apply` /
   `--delete <id>`).
 - **A person created via the FUB API fires `peopleCreated` only, not `peopleUpdated`**
@@ -4301,7 +4611,9 @@ write nothing, and touch no n8n state.
 | `lockbox-park-verify.mjs` | **64** — item 1a: parking, the alert fan-out, the graph, and that a parked row is inert in the dispatch cron |
 | `non-showing-skip-verify.mjs` | **24** — consult/walkthrough skipped, showings untouched, classify() parity, no event-type collision |
 | `fub-status-verify.mjs` | **25** — the dashboard's FUB status column: rejected / progressed / active / out-of-scope, pinned to synthetic stages |
-| `showing-code-gate-verify.mjs` | **58** — item 1c: the 7 gated rules, the category clause, the sentinel allowlist, defer-don't-decide |
+| `showing-code-gate-verify.mjs` | **57** — item 1c: the 6 gated rules (day-0 `followup` dropped from showing entirely, item 1 2026-09-28), the category clause, the sentinel allowlist, defer-don't-decide |
+| `two-window-access-codes-verify.mjs` | **39** — item 3: T-2h/T-1h window selection, booking-time due flags, code reuse (never touches Generate Code on the reuse branch), and that an earlier pass's stamp survives a later one |
+| `followup-verify.mjs` | **85** — Part 5: all four phases' candidate selection and guard/resolve logic, the responded/cancelled/send precedence, per-track outreach suppression, and the tag-dedup-is-unreachable-by-default finding |
 | `delete-multirow-verify.mjs` | **36** — Delete Property multi-row: simulated deleteDimension, fail-closed guards, the `.item` rewrites |
 | `launch-audit.mjs` | all 12 workflows, 16 hard gates, 3 alert phones |
 

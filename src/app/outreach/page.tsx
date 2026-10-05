@@ -24,6 +24,10 @@ import {
   type LeadActionKind,
 } from "@/components/outreach/lead-action-dialog";
 import {
+  AddPropertyInquiryDialog,
+  type AddInquiryTarget,
+} from "@/components/outreach/add-property-inquiry-dialog";
+import {
   PIPELINE_ZONES,
   pipelineBars,
   pipelinePositionOf,
@@ -58,13 +62,14 @@ const isAbandoned = (l: InFlightLead): boolean => !l.active && !isSuppressed(l);
 type Position = { kind: "bar" | "zone"; key: string } | null;
 
 /**
- * The lead's self-guided tour, if one can still be called off.
+ * The lead's self-guided tour on THIS row's property, if one can still be
+ * called off.
  *
  * `findBooking` in the metrics module matches on IDENTITY and does not exclude
  * cancelled rows, so the status is checked here rather than assumed — without
  * it an already-cancelled tour would offer a live cancel control.
  */
-function cancellableTour(lead: InFlightLead): StopTarget["tour"] {
+function cancellableTour(lead: InFlightLead): StopTarget["tours"][number] | null {
   const b = lead.ladderDetail.booking;
   if (!b || !b.uid) return null;
   if (b.category.trim().toLowerCase() !== "showing") return null;
@@ -80,6 +85,29 @@ function cancellableTour(lead: InFlightLead): StopTarget["tour"] {
   };
 }
 
+/**
+ * EVERY cancellable tour this person has, across every property they've
+ * inquired on — not just the row the Stop dialog was opened from.
+ *
+ * Deliberately reads `result.leads` (the full, unfiltered set) rather than
+ * `rows`/`pool`: those are narrowed by the active filter pill and the
+ * pipeline-position click, so a second scheduled tour sitting in a filtered-out
+ * row would otherwise go uncounted — exactly the gap that made "stop
+ * everywhere" silently leave a sibling tour standing.
+ */
+function allCancellableTours(
+  allLeads: InFlightLead[],
+  personId: string
+): StopTarget["tours"] {
+  const out: StopTarget["tours"] = [];
+  for (const l of allLeads) {
+    if (l.personId !== personId) continue;
+    const t = cancellableTour(l);
+    if (t) out.push(t);
+  }
+  return out;
+}
+
 export default function OutreachPage() {
   const [result, setResult] = useState<InFlightResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -92,6 +120,7 @@ export default function OutreachPage() {
   const [stopTarget, setStopTarget] = useState<StopTarget | null>(null);
   const [restartTarget, setRestartTarget] = useState<RestartTarget | null>(null);
   const [leadAction, setLeadAction] = useState<LeadActionTarget | null>(null);
+  const [addInquiryTarget, setAddInquiryTarget] = useState<AddInquiryTarget | null>(null);
   const { isAdmin } = useRole();
 
   const load = useCallback(async (refresh = false) => {
@@ -343,10 +372,12 @@ export default function OutreachPage() {
               personName: lead.personName,
               phone: lead.phone,
               email: lead.email,
+              propertyKey: lead.propertyKey,
+              propertyAddress: lead.propertyAddress,
               liveSequences: lead.sequences
                 .filter((q) => q.nextSendAt !== null)
                 .map((q) => ({ key: q.key, label: q.label, note: q.note })),
-              tour: cancellableTour(lead),
+              tours: allCancellableTours(result?.leads ?? [], lead.personId),
             })
           }
           onLeadAction={(lead: InFlightLead, kind: LeadActionKind) =>
@@ -368,6 +399,16 @@ export default function OutreachPage() {
               linkStranded: lead.linkSent.toLowerCase() === "skipped_outreach_suppressed",
             })
           }
+          onAddInquiry={(lead: InFlightLead) =>
+            setAddInquiryTarget({
+              personId: lead.personId,
+              personName: lead.personName,
+              phone: lead.phone,
+              email: lead.email,
+              suppressed: lead.suppression.suppressed,
+              suppressionReason: lead.suppression.reason,
+            })
+          }
         />
       )}
 
@@ -384,6 +425,11 @@ export default function OutreachPage() {
       <RestartOutreachDialog
         target={restartTarget}
         onOpenChange={(open) => { if (!open) setRestartTarget(null); }}
+        onDone={() => load(true)}
+      />
+      <AddPropertyInquiryDialog
+        target={addInquiryTarget}
+        onOpenChange={(open) => { if (!open) setAddInquiryTarget(null); }}
         onDone={() => load(true)}
       />
     </div>
