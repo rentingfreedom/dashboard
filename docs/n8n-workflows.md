@@ -2032,6 +2032,33 @@ two-send behaviour; watch for two Twilio sends with the same code, at T-2h and T
 > succeeds but the second (reminder) send is somehow never picked up, the customer
 > already has a working code — correctly NOT a sweep finding.
 
+### The code note labelled UTC as ET — `ACCESS_NOTE_TZ_MARKER` (2026-10-08, APPLIED)
+
+`FUB - Note Code Sent (Cron)` in Access Code Dispatch wrote
+`(valid 2026-10-05 19:00-2026-10-05 21:00 ET)`. Those are `Calc Code Window (Cron)`'s
+`startDate`/`endDate`, **UTC by design** (Populife is sent `timeZone=0`, gotcha 7), with a
+hardcoded " ET" appended. For a 4 PM ET showing the real window is 3-5 PM ET and the note said
+7-9 PM. Found when Chrisann Lee (2928) reported a non-working code and staff read the note.
+**Cosmetic: the SMS and the Populife window were correct and did not cause her failure** (the
+root cause of that failure is undetermined; nothing server-side was wrong).
+
+Fix: the note converts the window to `America/New_York` and reads
+`(valid 3:00 PM–5:00 PM ET, Oct 5)`; a malformed window falls back to the raw values labelled
+**UTC**. Expression-only edit to that one node's `jsonBody`; nothing added or rewired.
+
+> **Never label a Calc Code Window value ET without converting it.** Same trap as gotcha 7.
+
+> **Known and left alone:** the SMS says "Valid from 4:00 PM through 4:15 PM" (the showing slot)
+> while the code works 3:00-5:00 PM. Harmless; changing it means editing `fmtShowingSlot` in
+> `Build SMS (Cron)` and re-running `two-window-access-codes-verify.mjs` and
+> `sms-footer-verify.mjs`. Awaiting a client decision.
+
+```bash
+node scripts/n8n-fix-access-note-window-tz.mjs [--apply] [--revert --apply]   # self-tests EDT, EST, midnight-UTC, garbage
+```
+Backup `n8n/BEFORE-access-note-window-tz/` (`--revert` needs `original-note-body.txt`).
+**Not yet observed on a real showing** — the next dispatch's FUB note is the live test.
+
 ### Booking / access code test gate
 
 Added 2026-07-31. Until then the Booking Handler and Access Code Dispatch were the only

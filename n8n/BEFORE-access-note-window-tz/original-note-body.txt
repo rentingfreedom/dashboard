@@ -1,0 +1,1 @@
+={{ JSON.stringify({ personId: Number($('Build SMS (Cron)').first().json.person_id || 0), body: 'Access code sent for showing at ' + $('Build SMS (Cron)').first().json.property_address + ': ' + $('Build SMS (Cron)').first().json.code + ' (valid ' + $('Calc Code Window (Cron)').first().json.startDate + '\u2013' + $('Calc Code Window (Cron)').first().json.endDate + ' ET)' }) }}
