@@ -280,6 +280,61 @@ async function main() {
        m.indexOf("[UPCOMING]") < m.indexOf("[MISSED]"), m);
   }
 
+  // ─────────────────── E. NO_PHONE_ALERT_MARKER ───────────────────────────
+  // Jeff Ramsden, 2026-10-09: bare-link booking, Showings.person_phone empty, the
+  // dispatch cron minted a code every 5 min and every Twilio send failed.
+  console.log("\nE. no_phone finding (2h alert)");
+  const np = (o = {}) => showing({ status: "scheduled", person_phone: "", ...o });
+  const fc = (out) => (out.length ? out[0].json.finding_count : 0);
+  const npOut = (startOffsetH, showingOpts = {}, extra = {}) =>
+    one({ bookings: [booking({ start_time: iso(startOffsetH * H), invitee_phone: "", ...(extra.b ?? {}) })],
+          showings: [np(showingOpts)], ...(extra.run ?? {}) });
+
+  {
+    const out = npOut(1.5);
+    ok("E1  UPCOMING 1.5h out, scheduled, no person_phone -> finding", out.length > 0 && out[0].json.finding_count === 1);
+    ok("E1b …worded as NO PHONE (what staff must do), not a generic kind",
+       /NO PHONE on this booking/.test(out[0]?.json?.message ?? ""), out[0]?.json?.message);
+    ok("E1c …and labelled UPCOMING", (out[0]?.json?.message ?? "").includes("[UPCOMING]"));
+  }
+  ok("E2  same booking WITH a person_phone -> NO finding (a healthy booking must not alert)",
+     npOut(1.5, { person_phone: "18435551234" }).length === 0);
+  ok("E3  3h out (outside the 2h window) -> NO finding",
+     npOut(3).length === 0);
+  ok("E4  status code_sent -> NO finding", npOut(1.5, { status: "code_sent" }).length === 0);
+  ok("E5  a too-short person_phone (3 digits) counts as no phone",
+     fc(npOut(1.5, { person_phone: "123" })) === 1);
+  ok("E6  the Showings phone is what matters: booking HAS invitee_phone, Showings does not -> finding",
+     fc(npOut(1.5, {}, { b: { invitee_phone: "18435551234" } })) === 1);
+  ok("E7  formatted phone '(843) 555-1234' is usable -> NO finding",
+     npOut(1.5, { person_phone: "(843) 555-1234" }).length === 0);
+  ok("E8  a TEST booking -> NO finding", npOut(1.5, {}, { b: { is_test: "TRUE" } }).length === 0);
+  ok("E9  a CANCELLED booking -> NO finding", npOut(1.5, {}, { b: { status: "cancelled" } }).length === 0);
+  ok("E10 a walkthrough (no door code) -> NO finding", npOut(1.5, {}, { b: { event_category: "walkthrough" } }).length === 0);
+  ok("E11 a showing already PAST is not no_phone (that is no_code_sent's job)",
+     !/NO PHONE/.test(npOut(-1)[0]?.json?.message ?? ""));
+  {
+    const widened = [...DEFAULT_SETTINGS, { key: "missed_code_nophone_hours", value: "4" }];
+    ok("E12 missed_code_nophone_hours=4 widens the window (3h out now alerts)",
+       fc(npOut(3, {}, { run: { settings: widened } })) === 1);
+    const junk = [...DEFAULT_SETTINGS, { key: "missed_code_nophone_hours", value: "soon" }];
+    ok("E13 a non-numeric value falls back to 2h, not to 0 or 'always'",
+       npOut(3, {}, { run: { settings: junk } }).length === 0 && fc(npOut(1.5, {}, { run: { settings: junk } })) === 1);
+  }
+  {
+    const sd = {};
+    const first = one({ bookings: [booking({ start_time: iso(1.5 * H), invitee_phone: "" })], showings: [np()], sd });
+    const again = one({ bookings: [booking({ start_time: iso(1.5 * H), invitee_phone: "" })], showings: [np()], sd });
+    ok("E14 dedupe: alerts once, not on every hourly tick", first.length > 0 && again.length === 0);
+  }
+  ok("E15 kill switch missed_code_sweep_enabled=false silences it too",
+     npOut(1.5, {}, { run: { settings: [...DEFAULT_SETTINGS.filter((s) => s.key !== "missed_code_sweep_enabled"),
+       { key: "missed_code_sweep_enabled", value: "false" }] } }).length === 0);
+  ok("E16 a parked blocked_no_lockbox row keeps its own kind, not no_phone",
+     !/NO PHONE/.test(npOut(1.5, { status: "blocked_no_lockbox" })[0]?.json?.message ?? ""));
+  ok("E17 with no Showings row at all, the missing-row kind wins",
+     /NO Showings row/.test(one({ bookings: [booking({ start_time: iso(1.5 * H), invitee_phone: "" })], showings: [] })[0]?.json?.message ?? ""));
+
   // ─────────────────── report ─────────────────────────────────────────────
   console.log("\n" + "─".repeat(72));
   if (failures.length === 0) { console.log(`✓ ${pass} assertions passed, 0 failures.`); return done(0); }

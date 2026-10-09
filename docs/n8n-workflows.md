@@ -3170,6 +3170,49 @@ three in one message to Nicole + Andrew.
 > behavioural assertions were confirmed non-vacuous by 10 mutations, each turning
 > its named assertion red.
 
+### A booking with no phone — `NO_PHONE_ALERT_MARKER` (2026-10-09, APPLIED)
+
+**Jeff Ramsden (FUB 2945) booked 1171 Dingle Rd on 2026-10-09 and never got a door code.**
+FUB created him by hand (`createdVia: Manually`, source "Zillow Rental Manager") with a phone
+and the address typed on his record, but **no inquiry event** — so no `Inquiries` row, so the
+sweep had no link to send. Nicole sent him the generic `cal.com/rentingfreedom/1171-dingle-rd`
+link by hand. A bare link carries no `metadata[fub_person_id]` / `metadata[phone]`, and the
+per-property booking form has no phone field, so `Showings.person_phone` stayed empty.
+Access Code Dispatch then minted a code on **24 consecutive 5-minute ticks** and every Twilio
+send failed for want of a `To` (the FUB failure note failed too: empty `personId`). The row
+stayed `scheduled`, which the sweep treats as normal for an UPCOMING booking, so nobody heard
+until the showing was MISSED. Nicole sent the code by hand.
+
+**Fix:** one new finding kind, `no_phone`, in `Find Missed Codes` (sweep `PKdaOsoHatbuRTfZ`):
+UPCOMING, status still `scheduled`, `Showings.person_phone` under 10 digits, and within
+`missed_code_nophone_hours` (Settings, default **2**, optional — non-numeric falls back to 2).
+Texts Nicole + Andrew through the sweep's existing recipients, dedupe and kill switch.
+Client decision 2026-10-09 (Justin): the alert only.
+
+> **It checks `Showings.person_phone`, not the Cal Bookings `invitee_phone`**, because
+> `Build SMS (Cron)` sends to `row.person_phone`. Checking the other copy could stay quiet
+> while the send still fails.
+
+> **Hourly sweep means the alert lands between T-2h and T-1h**, and a showing booked inside the
+> last hour may start before a tick sees it. Accepted. The dispatch cron was deliberately NOT
+> touched: it is the highest-consequence send path, and it still retries every 5 minutes and
+> re-mints a code for a phoneless row.
+
+> **Declined for now: a required phone field on the cal.com booking form.** It would let any
+> bare link give the cron a number to cross-check against FUB. Phone/name matching in FUB at
+> dispatch time was rejected: Jeff's booking had no phone to match, FUB had no email for him,
+> and a name-only match is the gotcha 17/23 class.
+
+```bash
+node scripts/n8n-add-no-phone-alert.mjs [--apply] [--revert --apply] [--emit-js <dir>]
+node scripts/missed-code-sweep-verify.mjs [--js <dir>]     # 68 assertions, section E is this
+```
+Backup `n8n/BEFORE-no-phone-alert/` (`--revert` restores `original-find-missed.js`). Applied
+2026-10-09; only `Find Missed Codes` changed, connections identical, `active=true`,
+`errorWorkflow` intact. Section E was confirmed red against the unpatched code. **Not yet
+observed on a real booking.** `missed-code-sweep-verify.mjs` A10 ("sweep is NOT active")
+has been stale since the sweep was activated 2026-09-15 and fails; not a regression.
+
 ## Sheets retry strategy
 
 **68 nodes across 13 workflows** standardised to `retryOnFail: true`, `maxTries: 5`,
@@ -4606,7 +4649,7 @@ write nothing, and touch no n8n state.
 
 | `funnel-metrics-verify.mjs` | **59 offline** — the four data rules, plus section G: the on/off cohort split |
 | `inquiry-alert-verify.mjs` | **36** — all three `Row Recorded?` wirings, fan-out |
-| `missed-code-sweep-verify.mjs` | **49** — the four finding kinds, both windows, dedupe, recipients, graph |
+| `missed-code-sweep-verify.mjs` | **68** — the five finding kinds (incl. `no_phone`), both windows, dedupe, recipients, graph; A10 is stale-red |
 | `error-workflow-verify.mjs` | **52** — the alarm's structure, throttle, confirm-before-alert, self-exclusion, and that every active workflow is attached |
 | `lockbox-park-verify.mjs` | **64** — item 1a: parking, the alert fan-out, the graph, and that a parked row is inert in the dispatch cron |
 | `non-showing-skip-verify.mjs` | **24** — consult/walkthrough skipped, showings untouched, classify() parity, no event-type collision |
