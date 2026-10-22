@@ -61,7 +61,7 @@ export function AddLockboxDialog({ open, onOpenChange, onSuccess }: AddLockboxDi
               className={errors.lock_id ? "border-red-400" : ""}
             />
             {errors.lock_id && <p className="text-xs text-red-500">{errors.lock_id.message}</p>}
-            <p className="text-xs text-muted-foreground">Enter the numeric lock ID from the Populife app or API.</p>
+            <p className="text-xs text-muted-foreground">Find the numeric lock ID at admin.populife.co → Devices.</p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="lb_lock_name">Lock Name</Label>
