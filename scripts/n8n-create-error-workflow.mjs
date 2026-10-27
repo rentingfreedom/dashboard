@@ -64,9 +64,18 @@
  * position never advanced — which is why a DNS blip on the Properties pollers
  * is harmless and self-heals. The 6-hour dedupe stopped that being a drip but
  * still spent a real 21:45 SMS on nothing. So the FIRST trigger failure for a
- * workflow is held, and it alerts only once it recurs within the hour, or
- * three times in a rolling day. The pollers tick every 5 minutes, so a
- * genuinely dead one confirms on its next tick.
+ * workflow is held. Since 2026-10-22 it alerts only once a single outage has
+ * kept it failing for 20 minutes, or four separate outages land in a rolling
+ * day — "recurred within the hour" fired on every short VPS network blip,
+ * because both pollers fail twice inside one 6-10 minute outage.
+ *
+ * ── All-clear (RECOVERY_MARKER, 2026-10-22) ──────────────────────────────
+ * A second trigger — a 5-minute schedule — runs `Check Recovery`, which sends
+ * one "all clear" SMS once an incident that actually alerted someone has gone
+ * 15 minutes with no failure of any kind. It means "nothing new has failed",
+ * not "it was fixed", and says so. Adding a schedule to this workflow is safe
+ * for the reason it was always activated: it is the error workflow, and no
+ * workflow (itself included) is attached to it.
  *
  * EXECUTION failures are deliberately untouched: those are the Rita-class
  * crashes where a customer is already affected, and they still alert on the
@@ -151,11 +160,13 @@ const REPEAT_MS  = 60 * 60 * 1000;      // same signature at most once per windo
 const TRIGGER_REPEAT_MS = 6 * 60 * 60 * 1000;  // trigger failures: see below
 
 // Confirm-before-alert, for TRIGGER failures only. See the long note at the
-// gate below — the short version is that a transient blip fails ONCE and a
-// dead poller fails every 5 minutes, so "did it happen again?" separates them.
-const TRIGGER_CONFIRM_MS  = 60 * 60 * 1000;       // a 2nd failure within this confirms
-const TRIGGER_DAY_MS      = 24 * 60 * 60 * 1000;  // rolling day for the count-based escape hatch
-const TRIGGER_DAY_CONFIRM = 3;                    // ...or this many in a day, however spaced
+// gate below — the short version is that a network blip makes a poller fail
+// for a few minutes and then heal, while a dead poller keeps failing, so "has
+// it been failing for a while?" separates them.
+const TRIGGER_EPISODE_GAP_MS = 30 * 60 * 1000;      // failures further apart than this are separate outages
+const TRIGGER_CONFIRM_SPAN_MS = 20 * 60 * 1000;     // one outage confirms once it has lasted this long
+const TRIGGER_DAY_MS      = 24 * 60 * 60 * 1000;    // rolling day for the episode-count escape hatch
+const TRIGGER_DAY_CONFIRM = 4;                      // ...or this many separate outages in a day
 
 const payload   = $input.first()?.json ?? {};
 const workflow  = payload.workflow ?? {};
@@ -200,6 +211,16 @@ for (const [k, t] of Object.entries(sd.seen)) {
 }
 sd.suppressed = Number.isFinite(sd.suppressed) ? sd.suppressed : 0;
 
+// RECOVERY_MARKER — every failure, held or sent, pushes back the all-clear.
+// 'Check Recovery' (on its own 5-minute schedule) sends "all clear" once an
+// incident that actually ALERTED someone has been quiet for a while. A held or
+// suppressed failure still counts as "not quiet": the system is not back to
+// normal just because we chose not to text about it.
+sd.lastFailureAt = now;
+if (sd.incident && typeof sd.incident === 'object') {
+  sd.incident.failures = (Number.isFinite(sd.incident.failures) ? sd.incident.failures : 0) + 1;
+}
+
 // Per-workflow history of TRIGGER failures, keyed on the workflow rather than
 // on the signature: a failing poller does not promise to fail with the same
 // error text twice, and "this poller keeps dying" is the thing worth knowing.
@@ -220,45 +241,70 @@ const signature = wfId + '::' + node + '::' + rawMsg.slice(0, 120);
 // Properties rows intact.
 //
 // The 6-hour dedupe below already stopped that becoming a drip, but it still
-// spent a real 21:45 SMS on nothing. So the first trigger failure for a
-// workflow is now HELD rather than sent, and an alert goes out only once the
-// failure proves itself durable:
-//   · another trigger failure for the same workflow within TRIGGER_CONFIRM_MS
-//   · or TRIGGER_DAY_CONFIRM of them in a rolling day, however spaced
+// spent a real 21:45 SMS on nothing. So trigger failures are HELD rather than
+// sent until the failure proves itself durable.
 //
-// The pollers tick every 5 minutes, so a genuinely dead one confirms on its
-// next tick — the alert is ~5 minutes later than before, not hours. A blip
-// that never recurs is never sent, which is the entire point.
+// 2026-10-22: "a second failure within the hour" was not durable enough. Two
+// short VPS network outages (10/20 21:10-21:26, 10/22 10:45-10:54 UTC) each
+// made BOTH Properties pollers fail twice, 5-7 minutes apart, inside a single
+// outage. That counted as confirmed and texted Nicole and Andrew about pollers
+// that healed themselves minutes later. So failures are now grouped into
+// EPISODES (failures more than TRIGGER_EPISODE_GAP_MS apart are separate
+// outages), and an alert goes out only when:
+//   · the current episode has lasted TRIGGER_CONFIRM_SPAN_MS (20 min), or
+//   · TRIGGER_DAY_CONFIRM (4) separate episodes have happened in a rolling day.
+//
+// The pollers tick every 5 minutes, so a genuinely dead one confirms after
+// ~20 minutes of failing instead of ~5. That is the price, and a dead
+// Properties poller only delays provisioning a new property. The longest
+// outage on record (16 min) still never alerts.
+//
+// The volume arm keeps a slow bleed from hiding: a poller that fails briefly
+// every few hours forever never builds a 20-minute episode, but it does build
+// four episodes in a day. It counts EPISODES, not failures — counting failures
+// would let one 10-minute outage (2-3 failures) confirm itself again.
 //
 // This CANNOT silence an execution failure: those are the Rita-class crashes
 // where a real customer is already affected, and they alert on the first one,
 // exactly as before. The gate is keyed on isTriggerFailure and nothing else.
 let triggerCount = 0;
+let episodeMins = 0;
 if (isTriggerFailure) {
   const wfKey = wfId || wfName;
   const hist = Array.isArray(sd.trigFails[wfKey]) ? sd.trigFails[wfKey] : [];
   hist.push(now);
+  hist.sort((a, b) => a - b);
   sd.trigFails[wfKey] = hist;
   triggerCount = hist.length;
 
-  // hist includes THIS failure, so a prior one exists iff length >= 2.
-  const prior = hist.length >= 2 ? hist[hist.length - 2] : null;
-  const confirmedByRecurrence = prior !== null && now - prior < TRIGGER_CONFIRM_MS;
-  const confirmedByVolume = hist.length >= TRIGGER_DAY_CONFIRM;
+  // Split the day's failures into episodes. hist includes THIS failure, so the
+  // last episode is the one we are in now.
+  let episodes = 0;
+  let episodeStart = hist[0];
+  for (let i = 0; i < hist.length; i++) {
+    if (i === 0 || hist[i] - hist[i - 1] > TRIGGER_EPISODE_GAP_MS) {
+      episodes += 1;
+      episodeStart = hist[i];
+    }
+  }
+  episodeMins = Math.round((now - episodeStart) / 60000);
+  const confirmedBySpan = now - episodeStart >= TRIGGER_CONFIRM_SPAN_MS;
+  const confirmedByVolume = episodes >= TRIGGER_DAY_CONFIRM;
 
-  if (!confirmedByRecurrence && !confirmedByVolume) {
+  if (!confirmedBySpan && !confirmedByVolume) {
     // Counted, not silently dropped: it rides along on the next delivered
     // alert as "+N others", the same contract every other suppression here has.
     sd.suppressed += 1;
-    console.log('[error-alert] HELD (first trigger failure for ' + wfName +
+    console.log('[error-alert] HELD (trigger failure for ' + wfName +
                 ' — awaiting confirmation) — ' + rawMsg.slice(0, 120) +
-                ' | failures for this workflow in 24h: ' + hist.length +
+                ' | this outage: ' + episodeMins + ' min | outages in 24h: ' + episodes +
+                ' | failures in 24h: ' + hist.length +
                 ' | suppressed this window: ' + sd.suppressed);
     return [];
   }
   console.log('[error-alert] trigger failure CONFIRMED for ' + wfName +
-              ' (' + hist.length + ' in 24h, ' +
-              (confirmedByRecurrence ? 'recurred within the hour' : 'volume threshold') + ')');
+              ' (' + hist.length + ' failures / ' + episodes + ' outages in 24h, ' +
+              (confirmedBySpan ? 'failing for ' + episodeMins + ' min' : 'outage-count threshold') + ')');
 }
 
 // Trigger failures get a LONGER repeat window than execution failures, so that
@@ -285,11 +331,19 @@ sd.suppressed = 0;
 sd.seen[signature] = now;
 sd.sentAt.push(now);
 
+// An alert is going out, so an incident is now open and someone is owed an
+// all-clear. Opened only HERE, never on a held/suppressed failure: nobody
+// needs to be told "all clear" about a problem they were never told about.
+if (!sd.incident || typeof sd.incident !== 'object') {
+  sd.incident = { openedAt: now, failures: 1, alerts: 0 };
+}
+sd.incident.alerts = (Number.isFinite(sd.incident.alerts) ? sd.incident.alerts : 0) + 1;
+
 const msg = rawMsg.length > 180 ? rawMsg.slice(0, 177) + '...' : rawMsg;
 // A confirmed trigger failure says so, and says how many. "trigger could not
 // run" read identically for a self-healing blip and a dead poller, which is
 // the ambiguity that made the alert hard to action at 21:45.
-const triggerLine = 'trigger failing repeatedly (' + triggerCount + ' in 24h)';
+const triggerLine = 'trigger failing repeatedly (' + triggerCount + ' in 24h, this outage ' + episodeMins + ' min)';
 let text = 'RF AUTOMATION FAILURE\\n' + wfName + '\\n' +
            (isTriggerFailure ? triggerLine : 'node: ' + node) + '\\n' + msg;
 if (alsoSuppressed > 0) {
@@ -319,6 +373,82 @@ if (out.length === 0) {
   return [];
 }
 console.log('[error-alert] alerting ' + out.length + ' recipient(s): ' + wfName + ' / ' + node);
+return out;
+`.trim();
+
+// ───────────────────────── the all-clear node ─────────────────────────────
+// RECOVERY_MARKER (2026-10-22). Runs on its own 5-minute schedule and shares
+// staticData with Build Failure Alert ('global' is per WORKFLOW, not per node).
+// Build Failure Alert opens an incident when it actually sends an alert and
+// stamps `lastFailureAt` on EVERY failure; this node closes the incident with
+// one "all clear" SMS once QUIET_MS has passed with no failure of any kind.
+//
+// "All clear" means "nothing has FAILED for 15 minutes", and the text says so.
+// It does not mean whatever failed has been repaired. A crashed webhook run is
+// not replayed by anything, so the message tells the reader to still check any
+// alert that involved a lead. Wording it as "fixed" would let a Rita-class
+// crash read as resolved.
+export const RECOVERY_JS = `
+// RECOVERY_MARKER
+// Fans out ONE ITEM PER RECIPIENT, same as Build Failure Alert (Twilio 21211).
+// n8n Code nodes cannot import, so RECIPIENTS / FROM_NUMBER are duplicated
+// here; error-workflow-verify.mjs asserts the two nodes agree.
+
+const RECIPIENTS = ['+18434945244', '+18038047847'];  // Nicole, Andrew
+const FROM_NUMBER = '+18548886242';
+
+const QUIET_MS = 15 * 60 * 1000;   // no failure of any kind for this long = all clear
+
+const sd  = $getWorkflowStaticData('global');
+const inc = sd.incident;
+if (!inc || typeof inc !== 'object') return [];   // nothing was alerted, nothing to clear
+
+const now  = Date.now();
+const last = Number.isFinite(sd.lastFailureAt) ? sd.lastFailureAt
+           : (Number.isFinite(inc.openedAt) ? inc.openedAt : null);
+if (last === null) {
+  // Unreadable state: close it silently rather than risk an all-clear every
+  // 5 minutes forever. The next real alert opens a fresh incident.
+  console.log('[recovery] incident had no timestamps - closed without sending');
+  delete sd.incident;
+  return [];
+}
+
+const quietMin = Math.floor((now - last) / 60000);
+if (now - last < QUIET_MS) {
+  console.log('[recovery] incident open, quiet for ' + quietMin + ' min - waiting for ' + (QUIET_MS / 60000));
+  return [];
+}
+
+// Close BEFORE building the message, so a Twilio failure below cannot make
+// this node re-send the all-clear on every tick.
+delete sd.incident;
+
+const fmt = (t) => new Date(t).toLocaleString('en-US', {
+  timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+});
+const failures = Number.isFinite(inc.failures) ? inc.failures : 0;
+const alerts   = Number.isFinite(inc.alerts) ? inc.alerts : 0;
+
+// ASCII only: an em dash or curly quote would re-encode the SMS as UCS-2 and
+// roughly double its segments (see SMS_FOOTER_MARKER in docs/n8n-workflows.md).
+const text = 'RF AUTOMATION ALL CLEAR\\n' +
+  'No new failures since ' + fmt(last) + ' ET (' + quietMin + ' min).\\n' +
+  failures + ' failure' + (failures === 1 ? '' : 's') + ' since ' +
+  (Number.isFinite(inc.openedAt) ? fmt(inc.openedAt) : 'the first alert') + ' ET, ' +
+  alerts + ' alert' + (alerts === 1 ? '' : 's') + ' sent.\\n' +
+  'Failed webhook runs are not retried - still check any alert that involved a lead.';
+
+const seen = new Set();
+const out  = [];
+for (const raw of RECIPIENTS) {
+  const digits = String(raw).replace(/\\D/g, '').slice(-10);
+  if (digits.length !== 10 || seen.has(digits)) continue;
+  seen.add(digits);
+  out.push({ json: { phone: raw, from_number: FROM_NUMBER, message: text, kind: 'recovery' } });
+}
+console.log('[recovery] ALL CLEAR sent to ' + out.length + ' recipient(s): ' + failures +
+            ' failures / ' + alerts + ' alerts, quiet ' + quietMin + ' min');
 return out;
 `.trim();
 
@@ -356,11 +486,31 @@ export const nodes = [
     },
     credentials: { twilioApi: CRED.twilio },
   },
+  {
+    id: "err-recovery-tick",
+    name: "Every 5 Minutes",
+    type: "n8n-nodes-base.scheduleTrigger",
+    typeVersion: 1.2,
+    position: [0, 220],
+    parameters: { rule: { interval: [{ field: "minutes", minutesInterval: 5 }] } },
+  },
+  {
+    id: "err-recovery",
+    name: "Check Recovery",
+    type: "n8n-nodes-base.code",
+    typeVersion: 2,
+    position: [240, 220],
+    parameters: { mode: "runOnceForAllItems", jsCode: RECOVERY_JS },
+  },
 ];
 
+// Check Recovery feeds the SAME Twilio node. It reads only $json, and both
+// build nodes emit the same { phone, from_number, message } shape.
 export const connections = {
   "Error Trigger": { main: [[{ node: "Build Failure Alert", type: "main", index: 0 }]] },
   "Build Failure Alert": { main: [[{ node: "Send Failure Alert", type: "main", index: 0 }]] },
+  "Every 5 Minutes": { main: [[{ node: "Check Recovery", type: "main", index: 0 }]] },
+  "Check Recovery": { main: [[{ node: "Send Failure Alert", type: "main", index: 0 }]] },
 };
 
 async function main() {
@@ -370,6 +520,7 @@ async function main() {
     if (!dir) { console.error("✗ --emit-js needs a directory"); return done(1); }
     mkdirSync(dir, { recursive: true });
     writeFileSync(resolve(dir, "Build Failure Alert.js"), BUILD_ALERT_JS);
+    writeFileSync(resolve(dir, "Check Recovery.js"), RECOVERY_JS);
     console.log(`✓ wrote jsCode to ${dir}`);
     return done(0);
   }
@@ -391,49 +542,93 @@ async function main() {
   }
 
   if (UPDATE_CODE) {
-    // Push BUILD_ALERT_JS onto the existing workflow, so this script stays the
-    // single source of truth rather than anyone hand-editing the live node.
-    // Only the one Code node's jsCode changes; every other node is resent
-    // verbatim and hashed either side, same discipline as the attach script.
+    // Sync the deployed workflow to the builder, so this script stays the
+    // single source of truth rather than anyone hand-editing the live nodes.
+    // Originally this only swapped Build Failure Alert's jsCode; since
+    // RECOVERY_MARKER it also adds nodes the builder has and the deployed copy
+    // lacks, and resends the builder's connections. A deployed node the
+    // builder does NOT define is a refusal, not a deletion: someone added it
+    // by hand and it needs a human decision.
     const all = await api("/workflows?limit=250");
     const found = (all.data ?? []).find((w) => w.name === WF_NAME);
     if (!found) { console.error(`\n✗ "${WF_NAME}" is not deployed — nothing to update.`); return done(1); }
     const w = await api(`/workflows/${found.id}`);
-    const before = w.nodes.find((n) => n.name === "Build Failure Alert");
-    if (!before) { console.error("\n✗ no 'Build Failure Alert' node"); return done(1); }
+    const builderNames = new Set(nodes.map((n) => n.name));
+    const stray = w.nodes.filter((n) => !builderNames.has(n.name)).map((n) => n.name);
+    if (stray.length) {
+      console.error(`\n✗ deployed workflow has node(s) the builder does not define: ${stray.join(", ")}`);
+      console.error("  Refusing to overwrite them. Add them to the builder or remove them by hand first.");
+      return done(1);
+    }
 
-    const otherHashBefore = JSON.stringify(w.nodes.filter((n) => n.name !== "Build Failure Alert"));
-    if (before.parameters.jsCode === BUILD_ALERT_JS) {
-      console.log("\n✓ deployed jsCode already matches the builder — nothing to do.");
+    // Deployed nodes keep their own id/webhookId/credentials; only the fields
+    // the builder owns are replaced. New nodes come straight from the builder.
+    const OWNED = ["type", "typeVersion", "parameters", "onError", "position"];
+    const deployedByName = Object.fromEntries(w.nodes.map((n) => [n.name, n]));
+    const nextNodes = nodes.map((b) => {
+      const d = deployedByName[b.name];
+      if (!d) return b;
+      const merged = { ...d };
+      for (const k of OWNED) { if (k in b) merged[k] = b[k]; else delete merged[k]; }
+      return merged;
+    });
+
+    const diff = [];
+    for (const b of nodes) {
+      const d = deployedByName[b.name];
+      if (!d) { diff.push(`+ add      ${b.name}  [${b.type.replace("n8n-nodes-base.", "")}]`); continue; }
+      const changed = OWNED.filter((k) => JSON.stringify(d[k]) !== JSON.stringify(b[k]));
+      if (changed.length) diff.push(`~ update   ${b.name}  (${changed.join(", ")})`);
+    }
+    const connChanged = JSON.stringify(w.connections) !== JSON.stringify(connections);
+    if (connChanged) diff.push("~ connections");
+    if (!diff.length) {
+      console.log("\n✓ deployed workflow already matches the builder — nothing to do.");
       return done(0);
     }
-    console.log(`\nWould update "Build Failure Alert" on ${found.id} (active=${w.active})`);
-    console.log(`  deployed: ${before.parameters.jsCode.length} chars`);
-    console.log(`  builder:  ${BUILD_ALERT_JS.length} chars`);
+    console.log(`\nWould sync ${found.id} (active=${w.active}) to the builder:`);
+    for (const d of diff) console.log(`  ${d}`);
     if (!APPLY) { console.log("\nDry run — nothing written. Re-run with --update-code --apply."); return done(0); }
 
-    const nextNodes = w.nodes.map((n) =>
-      n.name === "Build Failure Alert"
-        ? { ...n, parameters: { ...n.parameters, jsCode: BUILD_ALERT_JS } }
-        : n);
-    await api(`/workflows/${found.id}`, {
-      method: "PUT",
-      body: JSON.stringify({
-        name: w.name, nodes: nextNodes, connections: w.connections,
-        settings: { executionOrder: "v1" }, staticData: w.staticData ?? null,
-      }),
-    });
+    // Backup before writing — the house convention, and the only revert data.
+    const backupDir = resolve(__dirname, "../n8n/BEFORE-error-alert-recovery");
+    mkdirSync(backupDir, { recursive: true });
+    const backupPath = resolve(backupDir, `${found.id}.json`);
+    if (!existsSync(backupPath)) {
+      writeFileSync(backupPath, JSON.stringify(w, null, 2));
+      console.log(`✓ backup written to n8n/BEFORE-error-alert-recovery/${found.id}.json`);
+    } else {
+      console.log(`  backup already exists, not overwritten: n8n/BEFORE-error-alert-recovery/${found.id}.json`);
+    }
+
+    // staticData is resent as fetched: it holds the live throttle and the new
+    // incident state, and a PUT that dropped it would reset both.
+    let putErr = null;
+    try {
+      await api(`/workflows/${found.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          name: w.name, nodes: nextNodes, connections,
+          settings: { executionOrder: "v1" }, staticData: w.staticData ?? null,
+        }),
+      });
+    } catch (e) { putErr = e.message; }
+
+    // Gotcha 22: a PUT that errors can still have SAVED. Always re-fetch.
     const after = await api(`/workflows/${found.id}`);
     const problems = [];
-    if (after.nodes.find((n) => n.name === "Build Failure Alert")?.parameters?.jsCode !== BUILD_ALERT_JS) {
-      problems.push("jsCode did not take");
+    if (putErr) problems.push(`PUT errored: ${putErr}`);
+    const afterByName = Object.fromEntries(after.nodes.map((n) => [n.name, n]));
+    for (const b of nodes) {
+      const a = afterByName[b.name];
+      if (!a) { problems.push(`${b.name} missing after write`); continue; }
+      if (JSON.stringify(a.parameters) !== JSON.stringify(b.parameters)) problems.push(`${b.name} parameters differ after write`);
     }
-    if (JSON.stringify(after.nodes.filter((n) => n.name !== "Build Failure Alert")) !== otherHashBefore) {
-      problems.push("another node CHANGED");
-    }
+    if (after.nodes.length !== nodes.length) problems.push(`${after.nodes.length} nodes, expected ${nodes.length}`);
+    if (JSON.stringify(after.connections) !== JSON.stringify(connections)) problems.push("connections differ after write");
     if (after.active !== w.active) problems.push(`active ${w.active} -> ${after.active}`);
     if (problems.length) { console.error(`\n✗ post-write check FAILED: ${problems.join("; ")}`); return done(1); }
-    console.log(`✓ updated, active=${after.active}, all other nodes unchanged`);
+    console.log(`✓ synced, active=${after.active}, ${after.nodes.length} nodes, connections match the builder`);
     writeFileSync(resolve(__dirname, "../n8n/error-alert-workflow.json"), JSON.stringify(after, null, 2));
     console.log("✓ refreshed n8n/error-alert-workflow.json");
     return done(0);

@@ -94,13 +94,15 @@ async function main() {
   console.log("═".repeat(72));
 
   // ───────────────────────── source the code ──────────────────────────────
-  let jsCode, live = null;
+  let jsCode, recoveryJs = null, live = null;
   if (JS_DIR) {
     // --js <dir> pairs with the builder's --emit-js, and is how the assertions
     // below are proved non-vacuous: mutate the emitted file and watch them fail.
     jsCode = readFileSync(resolve(JS_DIR, "Build Failure Alert.js"), "utf8");
+    const rp = resolve(JS_DIR, "Check Recovery.js");
+    recoveryJs = existsSync(rp) ? readFileSync(rp, "utf8") : null;
   } else if (LOCAL) {
-    ({ BUILD_ALERT_JS: jsCode } = await import("./n8n-create-error-workflow.mjs"));
+    ({ BUILD_ALERT_JS: jsCode, RECOVERY_JS: recoveryJs } = await import("./n8n-create-error-workflow.mjs"));
   } else {
     const all = (await api("/workflows?limit=250")).data ?? [];
     const found = all.find((w) => w.name === WF_NAME);
@@ -112,6 +114,7 @@ async function main() {
     const buildNode = live.nodes.find((n) => n.name === "Build Failure Alert");
     if (!buildNode) { console.error("\n✗ deployed workflow has no 'Build Failure Alert' node"); return done(1); }
     jsCode = buildNode.parameters.jsCode;
+    recoveryJs = live.nodes.find((n) => n.name === "Check Recovery")?.parameters?.jsCode ?? null;
   }
 
   // ───────────────────────── A. deployed structure ────────────────────────
@@ -129,7 +132,7 @@ async function main() {
     ok("A7  Twilio reads `to` from $json, NOT a named node reference",
        String(byName["Send Failure Alert"]?.parameters?.to ?? "").includes("$json.phone"),
        `to = ${JSON.stringify(byName["Send Failure Alert"]?.parameters?.to)}`);
-    ok("A8  exactly 3 nodes", live.nodes.length === 3, `${live.nodes.length} nodes`);
+    ok("A8  exactly 5 nodes (alert path + all-clear path)", live.nodes.length === 5, `${live.nodes.length} nodes`);
     ok("A9  NO Google Sheets node — the alarm must survive a quota outage",
        !live.nodes.some((n) => /googleSheets|sheets\.googleapis/i.test(n.type + JSON.stringify(n.parameters ?? {}))));
     eq("A10 Error Trigger -> Build Failure Alert",
@@ -141,6 +144,37 @@ async function main() {
     ok("A13 it does not name ITSELF as its own error workflow (unbounded loop)",
        String(live.settings?.errorWorkflow ?? "") !== live.id,
        `errorWorkflow=${JSON.stringify(live.settings?.errorWorkflow)}`);
+
+    // RECOVERY_MARKER — the all-clear path.
+    const tick = byName["Every 5 Minutes"];
+    ok("A14 Every 5 Minutes is a Schedule Trigger on a 5-minute interval",
+       tick?.type === "n8n-nodes-base.scheduleTrigger" &&
+       tick?.parameters?.rule?.interval?.[0]?.field === "minutes" &&
+       tick?.parameters?.rule?.interval?.[0]?.minutesInterval === 5,
+       JSON.stringify(tick?.parameters));
+    ok("A15 Check Recovery is a Code node running once for all items",
+       byName["Check Recovery"]?.type === "n8n-nodes-base.code" &&
+       byName["Check Recovery"]?.parameters?.mode === "runOnceForAllItems");
+    eq("A16 Every 5 Minutes -> Check Recovery",
+       live.connections?.["Every 5 Minutes"]?.main?.[0]?.map((c) => c.node), ["Check Recovery"]);
+    eq("A17 Check Recovery -> Send Failure Alert",
+       live.connections?.["Check Recovery"]?.main?.[0]?.map((c) => c.node), ["Send Failure Alert"]);
+    ok("A18 the schedule does NOT feed Build Failure Alert (a tick is not a failure)",
+       !(live.connections?.["Every 5 Minutes"]?.main?.flat() ?? []).some((c) => c.node === "Build Failure Alert"));
+  }
+
+  // Both build nodes hardcode the recipients and the sender, because n8n Code
+  // nodes cannot import. They must agree, or the all-clear goes to a
+  // different list than the alert it is clearing.
+  {
+    const consts = (src) => ({
+      r: (String(src ?? "").match(/const RECIPIENTS = (\[[^\]]*\])/) ?? [])[1] ?? null,
+      f: (String(src ?? "").match(/const FROM_NUMBER = ('[^']*')/) ?? [])[1] ?? null,
+    });
+    const a = consts(jsCode), b = consts(recoveryJs);
+    ok("A19 Check Recovery code is present", !!recoveryJs);
+    ok("A20 both nodes text the SAME recipients from the SAME number",
+       a.r !== null && a.r === b.r && a.f !== null && a.f === b.f, JSON.stringify({ alert: a, recovery: b }));
   }
 
   // ───────────────────────── B. behaviour ─────────────────────────────────
@@ -190,7 +224,16 @@ async function main() {
     const held = run(triggerPayload).out;
     ok("B20 the FIRST trigger failure is HELD, not sent (a blip self-heals)",
        (held ?? []).length === 0, `${held?.length} item(s)`);
-    const out = run(triggerPayload);   // recurs within the hour -> confirmed
+    // 2026-10-22: a second failure inside the same short outage used to
+    // confirm. It must not any more — that is exactly the 10/20 and 10/22
+    // texts about pollers that healed themselves minutes later.
+    sd.trigFails["W6PoSadMxnoHwxhG"] = [Date.now() - 6 * 60 * 1000];
+    const held2 = run(triggerPayload).out;
+    ok("B20b a 2nd failure 6 min later, same outage, is STILL held",
+       (held2 ?? []).length === 0, `${held2?.length} item(s)`);
+    // A poller that has been failing for 20+ minutes is not a blip.
+    sd.trigFails["W6PoSadMxnoHwxhG"] = [20, 15, 10, 5].map((m) => Date.now() - m * 60 * 1000);
+    const out = run(triggerPayload);
     const m = out.out?.[0]?.json?.message ?? "";
     ok("B20a a CONFIRMED trigger failure alerts", (out.out ?? []).length === 2, `${out.out?.length} item(s)`);
     ok("B21 …and carries the real error text, not 'no error message'",
@@ -199,8 +242,39 @@ async function main() {
     ok("B23 …and names the failing workflow", m.includes("Delete Property"), m);
     ok("B24 …and links somewhere useful despite having no execution id",
        m.includes("/workflow/W6PoSadMxnoHwxhG"), m);
-    ok("B24a …and says it is REPEATING, so a blip and a dead poller do not read alike",
-       /failing repeatedly \(\d+ in 24h\)/.test(m), m);
+    ok("B24a …and says it is REPEATING and for how long, so a blip and a dead poller do not read alike",
+       /failing repeatedly \(\d+ in 24h, this outage \d+ min\)/.test(m), m);
+  }
+
+  // B32 — replays of the REAL timestamps that produced the 2026-10-20 and
+  // 2026-10-22 texts. Synthetic offsets, real spacing.
+  {
+    const mk = (id) => ({
+      trigger: { error: { message: "The connection timed out", name: "NodeApiError" }, mode: "trigger" },
+      workflow: { id, name: id },
+    });
+    const min = (m) => Date.now() - m * 60 * 1000;
+    {
+      // TGGhSkTSZGYPrZo9, 10/20: 21:10, 21:17, then this one at 21:22.
+      const sd = { trigFails: { TGGhSkTSZGYPrZo9: [min(12), min(5)] } };
+      ok("B32 replay 10/20: a 12-minute outage (3 failures) is held",
+         makeRunner(jsCode, sd)(mk("TGGhSkTSZGYPrZo9")).out.length === 0);
+    }
+    {
+      // W6PoSadMxnoHwxhG, 10/22 10:53: prior failures 10/21 11:55 (an
+      // unrelated Google 500) and 10/22 10:47. Two separate outages, the
+      // current one 6 minutes long.
+      const sd = { trigFails: { W6PoSadMxnoHwxhG: [min(22 * 60 + 58), min(6)] } };
+      ok("B33 replay 10/22: two short outages in a day are held",
+         makeRunner(jsCode, sd)(mk("W6PoSadMxnoHwxhG")).out.length === 0);
+    }
+    {
+      // Counting FAILURES rather than outages would let one outage confirm
+      // itself: 4 failures across 15 minutes is still one outage.
+      const sd = { trigFails: { TGGhSkTSZGYPrZo9: [min(15), min(10), min(5)] } };
+      ok("B34 four failures inside ONE 15-minute outage are held (outages are counted, not failures)",
+         makeRunner(jsCode, sd)(mk("TGGhSkTSZGYPrZo9")).out.length === 0);
+    }
   }
 
   // B28 — the confirm gate must NEVER touch execution failures. Holding one of
@@ -223,12 +297,15 @@ async function main() {
       trigger: { error: { message: "intermittent DNS", name: "NodeApiError" }, mode: "trigger" },
       workflow: { id: "TGGhSkTSZGYPrZo9", name: "New Property -> Provision" },
     });
+    const H = 60 * 60 * 1000;
     const age = (...offsetsMs) => { sd.trigFails["TGGhSkTSZGYPrZo9"] = offsetsMs.map((o) => Date.now() - o); };
     ok("B29 widely-spaced trigger failure 1 is held", run(mk()).out.length === 0);
-    age(3 * 60 * 60 * 1000);                       // push #1 back 3h
-    ok("B30 …failure 2, three hours later, is still held (no recurrence)", run(mk()).out.length === 0);
-    age(5 * 60 * 60 * 1000, 3 * 60 * 60 * 1000);   // push #1 and #2 back
-    ok("B31 …failure 3 in the same day ALERTS on the volume threshold", run(mk()).out.length === 2);
+    age(3 * H);
+    ok("B30 …outage 2, three hours later, is still held", run(mk()).out.length === 0);
+    age(6 * H, 3 * H);
+    ok("B30a …outage 3 in the same day is still held", run(mk()).out.length === 0);
+    age(9 * H, 6 * H, 3 * H);
+    ok("B31 …outage 4 in the same day ALERTS on the outage-count threshold", run(mk()).out.length === 2);
   }
 
   // B25 — trigger failures dedupe harder than execution failures
@@ -240,7 +317,8 @@ async function main() {
     const sd = {};
     const run = makeRunner(jsCode, sd);
     run(mk());                                  // held — awaiting confirmation
-    ok("B25 the trigger failure alerts once CONFIRMED by recurrence", run(mk()).out.length === 2);
+    sd.trigFails["W6PoSadMxnoHwxhG"] = [25, 20, 15, 10, 5].map((m) => Date.now() - m * 60 * 1000);
+    ok("B25 the trigger failure alerts once CONFIRMED (failing 25 min)", run(mk()).out.length === 2);
     // 2 hours later: an execution failure would be free to alert again, a
     // trigger failure must not — the pollers blip and self-heal.
     for (const k of Object.keys(sd.seen ?? {})) sd.seen[k] = Date.now() - 2 * 60 * 60 * 1000;
@@ -325,6 +403,77 @@ async function main() {
     const m = out[0]?.json?.message ?? "";
     ok("B18 a 5000-char error message is truncated", m.length < 600, `message length ${m.length}`);
     ok("B19 truncation is marked with an ellipsis", m.includes("..."));
+  }
+
+  // ───────────────────────── D. all-clear (RECOVERY_MARKER) ───────────────
+  // Both nodes share one staticData object, as they do in n8n ('global' is
+  // per workflow). Time is moved by editing the stored timestamps, the same
+  // way the trigger-gate blocks above do it.
+  console.log("\nD. Check Recovery (all-clear) behaviour");
+  if (!recoveryJs) {
+    ok("D0  Check Recovery code is available to test", false, "no Check Recovery code found");
+  } else {
+    const ago = (m) => Date.now() - m * 60 * 1000;
+    const pair = () => {
+      const sd = {};
+      return { sd, alert: makeRunner(jsCode, sd), recover: makeRunner(recoveryJs, sd) };
+    };
+
+    {
+      const { recover } = pair();
+      ok("D1  nothing alerted -> no all-clear", recover({}).out.length === 0);
+    }
+    {
+      const { alert, recover, sd } = pair();
+      ok("D2  (setup) an execution failure alerts", alert(payloadFor()).out.length === 2);
+      ok("D2a …which opens an incident", !!sd.incident);
+      ok("D3  no all-clear while the failure is recent", recover({}).out.length === 0);
+      sd.lastFailureAt = ago(14);
+      ok("D4  …nor at 14 quiet minutes", recover({}).out.length === 0);
+      sd.lastFailureAt = ago(16);
+      const out = recover({}).out;
+      ok("D5  ALL CLEAR goes out after 15 quiet minutes, one item per recipient", out.length === 2, `${out.length}`);
+      const m = out[0]?.json?.message ?? "";
+      ok("D6  …and says ALL CLEAR", m.includes("ALL CLEAR"), m);
+      ok("D7  …and states times in ET", / ET\b/.test(m), m);
+      ok("D8  …and never claims anything was FIXED", !/fixed|resolved|repaired/i.test(m), m);
+      ok("D9  …and warns that failed webhook runs were not retried", /not retried/i.test(m), m);
+      ok("D10 …and is plain ASCII (an em dash would double the SMS segments)", /^[\n\x20-\x7E]*$/.test(m), JSON.stringify(m));
+      ok("D11 …and no recipient is a comma list (Twilio 21211)", out.every((i) => !String(i.json.phone).includes(",")));
+      ok("D12 the incident is closed after the all-clear", !sd.incident);
+      ok("D13 …so the next tick sends nothing (one all-clear, not one every 5 min)", recover({}).out.length === 0);
+    }
+    {
+      // A held trigger failure never told anyone anything, so nobody is owed
+      // an all-clear about it.
+      const { alert, recover, sd } = pair();
+      alert({ trigger: { error: { message: "blip" }, mode: "trigger" }, workflow: { id: "W6PoSadMxnoHwxhG", name: "Delete Property" } });
+      sd.lastFailureAt = ago(60);
+      ok("D14 a HELD trigger failure opens no incident and earns no all-clear",
+         !sd.incident && recover({}).out.length === 0);
+    }
+    {
+      // A suppressed or held failure during an open incident means the
+      // system is NOT back to normal, even though nobody was texted about it.
+      const { alert, recover, sd } = pair();
+      alert(payloadFor());                       // alerts, opens the incident
+      sd.lastFailureAt = ago(30);
+      alert(payloadFor());                       // same signature: suppressed
+      ok("D15 a SUPPRESSED failure during the incident delays the all-clear", recover({}).out.length === 0);
+      alert({ trigger: { error: { message: "blip" }, mode: "trigger" }, workflow: { id: "TGGhSkTSZGYPrZo9", name: "Provision" } });
+      sd.lastFailureAt = ago(16);
+      const m = recover({}).out[0]?.json?.message ?? "";
+      ok("D16 the all-clear counts every failure in the incident, held and suppressed ones too",
+         /\b3 failures\b/.test(m) && /\b1 alert sent\b/.test(m), m);
+    }
+    {
+      const { recover, sd } = pair();
+      sd.incident = {};                          // corrupt / partial state
+      let threw = null, out = null;
+      try { out = recover({}).out; } catch (e) { threw = e.message; }
+      ok("D17 an incident with no timestamps does not throw", threw === null, threw ?? "");
+      ok("D18 …sends nothing and is closed, so it cannot fire every tick", (out ?? []).length === 0 && !sd.incident);
+    }
   }
 
   // ───────────────────────── C. attachment ────────────────────────────────

@@ -1,20 +1,21 @@
 #!/usr/bin/env node
 /**
- * Proves the trigger-failure assertions in `error-workflow-verify.mjs` are not
- * vacuous.  READ-ONLY — nothing is written to n8n.
+ * Proves the trigger-failure and all-clear assertions in
+ * `error-workflow-verify.mjs` are not vacuous.  READ-ONLY — nothing is written
+ * to n8n.
  *
  *   node scripts/error-alert-mutations.mjs
  *
- * Takes the builder's `BUILD_ALERT_JS`, breaks the confirm-before-alert gate
- * five different ways, and requires the verifier to go red on each — then
- * restores it and requires green. The mutations only ever touch a scratch copy
- * under node_modules/.cache.
+ * Takes the builder's `BUILD_ALERT_JS` and `RECOVERY_JS`, breaks them a dozen
+ * different ways, and requires the verifier to go red on each — then restores
+ * them and requires green. The mutations only ever touch a scratch copy under
+ * node_modules/.cache.
  *
- * It sources from the BUILDER rather than the deployed node on purpose, so it
+ * It sources from the BUILDER rather than the deployed nodes on purpose, so it
  * can be run before the patch is pushed as well as after. The builder is the
- * single source of truth for this node's code; `--update-code` is what makes
- * the two agree, and `error-workflow-verify.mjs` with no flags is what proves
- * they still do.
+ * single source of truth for this workflow's code; `--update-code` is what
+ * makes the two agree, and `error-workflow-verify.mjs` with no flags is what
+ * proves they still do.
  *
  * Committed rather than recorded as prose, for the reason this estate already
  * learned once: "confirmed non-vacuous by N mutations" does not re-run, and two
@@ -25,39 +26,68 @@
  * failure mode is an alarm that has quietly stopped alarming. M2 is the one
  * that matters most — it makes the gate swallow execution failures, which is
  * the Rita-class crash the whole workflow exists to catch.
+ *
+ * M6 and M7 are the 2026-10-22 regression: the old "second failure within the
+ * hour" rule, under which one short VPS network outage texted about pollers
+ * that healed themselves minutes later. M8–M12 cover the all-clear
+ * (RECOVERY_MARKER).
  */
 
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from "fs";
+import { writeFileSync, mkdirSync, rmSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { execFileSync } from "child_process";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DIR = resolve(__dirname, "../node_modules/.cache/error-alert-mutations");
-const FILE = `${DIR}/Build Failure Alert.js`;
+const FILES = {
+  alert: `${DIR}/Build Failure Alert.js`,
+  recovery: `${DIR}/Check Recovery.js`,
+};
 
-const { BUILD_ALERT_JS: base } = await import("./n8n-create-error-workflow.mjs");
+const { BUILD_ALERT_JS, RECOVERY_JS } = await import("./n8n-create-error-workflow.mjs");
+const BASE = { alert: BUILD_ALERT_JS, recovery: RECOVERY_JS };
 
-if (!base.includes("TRIGGER_CONFIRM_MS")) {
-  console.error("The builder carries no confirm-before-alert gate — nothing to mutate.");
+if (!BUILD_ALERT_JS.includes("TRIGGER_CONFIRM_SPAN_MS") || !RECOVERY_JS?.includes("RECOVERY_MARKER")) {
+  console.error("The builder carries no outage-span gate or no all-clear node — nothing to mutate.");
   process.exitCode = 1;
 }
 
 mkdirSync(DIR, { recursive: true });
 
+// [label, which node, mutation]
 const MUTATIONS = [
-  ["M1 the gate never holds — every trigger blip texts immediately again",
-    (s) => s.replace("if (!confirmedByRecurrence && !confirmedByVolume) {", "if (false) {")],
-  ["M2 the gate ALSO holds execution failures (the Rita-class crash goes quiet)",
+  ["M1 the gate never holds — every trigger blip texts immediately again", "alert",
+    (s) => s.replace("if (!confirmedBySpan && !confirmedByVolume) {", "if (false) {")],
+  ["M2 the gate ALSO holds execution failures (the Rita-class crash goes quiet)", "alert",
     (s) => s.replace("\nif (isTriggerFailure) {\n  const wfKey", "\nif (true) {\n  const wfKey")],
-  ["M3 the 24h volume escape hatch is removed (a slow bleed is held forever)",
-    (s) => s.replace("const confirmedByVolume = hist.length >= TRIGGER_DAY_CONFIRM;",
+  ["M3 the 24h outage-count escape hatch is removed (a slow bleed is held forever)", "alert",
+    (s) => s.replace("const confirmedByVolume = episodes >= TRIGGER_DAY_CONFIRM;",
                      "const confirmedByVolume = false;")],
-  ["M4 recurrence never confirms, so only volume can ever speak",
-    (s) => s.replace("const TRIGGER_CONFIRM_MS  = 60 * 60 * 1000;", "const TRIGGER_CONFIRM_MS  = 0;")],
-  ["M5 the SMS stops distinguishing a repeat from a blip",
-    (s) => s.replace("const triggerLine = 'trigger failing repeatedly (' + triggerCount + ' in 24h)';",
+  ["M4 the span arm never confirms, so a dead poller can only speak via outage count", "alert",
+    (s) => s.replace("const confirmedBySpan = now - episodeStart >= TRIGGER_CONFIRM_SPAN_MS;",
+                     "const confirmedBySpan = false;")],
+  ["M5 the SMS stops distinguishing a repeat from a blip", "alert",
+    (s) => s.replace("const triggerLine = 'trigger failing repeatedly (' + triggerCount + ' in 24h, this outage ' + episodeMins + ' min)';",
                      "const triggerLine = 'trigger could not run';")],
+  ["M6 the OLD rule: a 2nd failure within the hour confirms (one short outage texts again)", "alert",
+    (s) => s.replace("const confirmedBySpan = now - episodeStart >= TRIGGER_CONFIRM_SPAN_MS;",
+                     "const confirmedBySpan = hist.length >= 2 && now - hist[hist.length - 2] < 60 * 60 * 1000;")],
+  ["M7 volume counts FAILURES, not outages (one outage confirms itself)", "alert",
+    (s) => s.replace("const confirmedByVolume = episodes >= TRIGGER_DAY_CONFIRM;",
+                     "const confirmedByVolume = hist.length >= TRIGGER_DAY_CONFIRM;")],
+  ["M8 held/suppressed failures stop pushing back the all-clear", "alert",
+    (s) => s.replace("sd.lastFailureAt = now;\n", "")],
+  ["M9 an incident is opened even when nothing was alerted", "alert",
+    (s) => s.replace("let triggerCount = 0;",
+                     "if (!sd.incident) sd.incident = { openedAt: now, failures: 0, alerts: 0 };\nlet triggerCount = 0;")],
+  ["M10 the all-clear ignores the quiet period", "recovery",
+    (s) => s.replace("if (now - last < QUIET_MS) {", "if (false) {")],
+  ["M11 the incident is never closed (an all-clear every 5 minutes forever)", "recovery",
+    (s) => s.replace("// this node re-send the all-clear on every tick.\ndelete sd.incident;",
+                     "// this node re-send the all-clear on every tick.\n")],
+  ["M12 the all-clear claims the problem was FIXED", "recovery",
+    (s) => s.replace("'RF AUTOMATION ALL CLEAR\\n'", "'RF AUTOMATION ALL CLEAR - fixed\\n'")],
 ];
 
 // This verifier's two summary lines are "✓ N assertions passed, 0 failures."
@@ -82,19 +112,23 @@ const verdict = () => {
   }
 };
 
+const writeBoth = (overrides = {}) => {
+  for (const k of Object.keys(FILES)) writeFileSync(FILES[k], overrides[k] ?? BASE[k]);
+};
+
 let bad = 0;
 console.log("=".repeat(72));
-console.log("ERROR ALERT — CONFIRM-BEFORE-ALERT MUTATION SUITE");
+console.log("ERROR ALERT — CONFIRM-BEFORE-ALERT + ALL-CLEAR MUTATION SUITE");
 console.log("=".repeat(72) + "\n");
 
-for (const [label, mut] of MUTATIONS) {
-  const mutated = mut(base);
-  if (mutated === base) {
+for (const [label, target, mut] of MUTATIONS) {
+  const mutated = mut(BASE[target]);
+  if (mutated === BASE[target]) {
     console.log(`  SKIPPED  ${label}\n           (mutation did not apply — the code has drifted)`);
     bad++;
     continue;
   }
-  writeFileSync(FILE, mutated);
+  writeBoth({ [target]: mutated });
   const { line, crashed } = verdict();
   const red = line && line.includes("FAILED");
   if (!red || crashed) bad++;
@@ -102,7 +136,7 @@ for (const [label, mut] of MUTATIONS) {
   console.log(`           ${line}`);
 }
 
-writeFileSync(FILE, base);
+writeBoth();
 const ctl = verdict();
 const ctlGreen = ctl.line && ctl.line.includes("assertions passed") && !ctl.line.includes("FAILED");
 if (!ctlGreen) bad++;
