@@ -62,6 +62,12 @@ export interface VerificationRow {
   sent_at: string;
   resolved_at: string;
   reminder_number: string;
+  /**
+   * IDENTITY_RESTART_MARKER: `manual_restart` on the day-0 row a dashboard
+   * "Restart ID verification" wrote; blank on every other row. Optional
+   * because only the outreach page reads it.
+   */
+  source?: string;
 }
 
 export interface BookingRow {

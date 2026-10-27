@@ -54,7 +54,13 @@ const wf = await fetch(`https://automation.rentingfreedom.com/api/v1/workflows/$
   headers: { "X-N8N-API-KEY": KEY },
 }).then((r) => r.json());
 
-const findDueJs = wf.nodes.find((n) => n.name === "Find Due Reminders").parameters.jsCode;
+// `--js <dir>` tests a patched Find Due Reminders (e.g. from
+// `n8n-add-identity-restart-ladder.mjs --emit-js <dir>`) before it is pushed.
+const jsIdx = process.argv.indexOf("--js");
+const localFindDue = jsIdx !== -1 ? resolve(process.argv[jsIdx + 1], "Find_Due_Reminders.js") : null;
+const findDueJs = localFindDue && existsSync(localFindDue)
+  ? readFileSync(localFindDue, "utf8")
+  : wf.nodes.find((n) => n.name === "Find Due Reminders").parameters.jsCode;
 const guardsJs = wf.nodes.find((n) => n.name === "Check Reminder Guards").parameters.jsCode;
 
 console.log("═".repeat(74));
@@ -230,6 +236,70 @@ ok("Create Stripe Identity Session onError", n("Create Stripe Identity Session")
 ok("FUB - Get Person onError", n("FUB - Get Person")?.onError, "continueRegularOutput");
 ok("Read Identity Verifications executeOnce (gotcha 4)", n("Read Identity Verifications")?.executeOnce, true);
 ok("Sheets read retry window spans the quota minute", n("Read Settings")?.waitBetweenTries, 15000);
+
+console.log("\n6. IDENTITY_RESTART_MARKER · a manual restart starts a fresh ladder");
+{
+  const restart = (o) => row({ sent_at: ago(1), source: "manual_restart", reminder_number: "0", ...o });
+  ok("Find Due Reminders carries IDENTITY_RESTART_MARKER", findDueJs.includes("IDENTITY_RESTART_MARKER"), true);
+  {
+    const rows = [row({ sent_at: ago(12), status: "requires_input" }), restart({ sent_at: ago(1) })];
+    const d = dueFor(runFindDue(rows), 9001);
+    ok("earlier FAILED attempt + restart yesterday -> DUE (client: works for failed leads)", !!d, true);
+    ok("  reminder_number restarts at 1", d?.json.reminder_number, 1);
+    ok("  reminder_anchor_at is the restart", d?.json.reminder_anchor_at, new Date(Date.parse(rows[1].sent_at)).toISOString());
+  }
+  {
+    const rows = [row({ sent_at: ago(10) })];
+    for (let i = 1; i <= 4; i++) rows.push(row({ sent_at: ago(10 - i), reminder_number: String(i) }));
+    rows.push(restart({ sent_at: ago(1) }));
+    ok("old ladder capped at 4 + restart yesterday -> DUE as #1 (old reminders don't count)",
+       dueFor(runFindDue(rows), 9001)?.json.reminder_number, 1);
+  }
+  {
+    const rows = [row({ sent_at: ago(10) }), restart({ sent_at: ago(0.08) })];
+    ok("restart 2h ago -> too soon (day 0 of the new ladder)", !!dueFor(runFindDue(rows), 9001), false);
+  }
+  {
+    const rows = [row({ sent_at: ago(10) }), restart({ sent_at: ago(2) }), row({ sent_at: ago(1.1), reminder_number: "1" })];
+    ok("restart 2 days ago + 1 new reminder -> DUE as #2", dueFor(runFindDue(rows), 9001)?.json.reminder_number, 2);
+  }
+  {
+    const rows = [restart({ sent_at: ago(6) })];
+    for (let i = 1; i <= 4; i++) rows.push(row({ sent_at: ago(6 - i), reminder_number: String(i) }));
+    ok("restart ladder capped at 4 -> NOT due", !!dueFor(runFindDue(rows), 9001), false);
+  }
+  {
+    const rows = [row({ sent_at: ago(12), status: "verified" }), restart({ sent_at: ago(1) })];
+    ok("verified BEFORE the restart -> still excluded (verified anywhere = done)", !!dueFor(runFindDue(rows), 9001), false);
+  }
+  {
+    const rows = [row({ sent_at: ago(12) }), restart({ sent_at: ago(2), status: "requires_input" })];
+    ok("restart's OWN attempt failed -> ladder stops (pending only, as before)", !!dueFor(runFindDue(rows), 9001), false);
+  }
+  {
+    const rows = [row({ sent_at: ago(20) }), restart({ sent_at: ago(9) }), restart({ sent_at: ago(1) })];
+    const d = dueFor(runFindDue(rows), 9001);
+    ok("two restarts -> the LATEST one anchors", d?.json.reminder_anchor_at, new Date(Date.parse(rows[2].sent_at)).toISOString());
+  }
+  {
+    const rows = [row({ sent_at: ago(10) }), restart({ sent_at: ago(1), source: " Manual_Restart " })];
+    ok("source matched case/space-insensitively (Sheets coercion)", dueFor(runFindDue(rows), 9001)?.json.reminder_number, 1);
+  }
+  {
+    const rows = [row({ sent_at: ago(10), lead_id: "9301" }), restart({ sent_at: ago(1), lead_id: "9302" })];
+    ok("a restart for ANOTHER lead leaves this one window_over", !!dueFor(runFindDue(rows), 9301), false);
+  }
+  {
+    const rows = [row({ sent_at: ago(1) }), restart({ sent_at: "not a date" })];
+    ok("restart row with unparseable sent_at is ignored -> old behaviour (DUE off the original)",
+       dueFor(runFindDue(rows), 9001)?.json.reminder_number, 1);
+  }
+  {
+    const rows = [row({ sent_at: ago(1), source: "" }), row({ sent_at: ago(0.5), source: "something_else", reminder_number: "" })];
+    ok("a non-restart source value does NOT start a ladder (anchor stays the earliest)",
+       dueFor(runFindDue(rows), 9001)?.json.reminder_anchor_at, new Date(Date.parse(rows[0].sent_at)).toISOString());
+  }
+}
 
 console.log("\n" + "═".repeat(74));
 if (failures.length) {

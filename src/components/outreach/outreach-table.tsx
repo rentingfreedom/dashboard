@@ -288,6 +288,8 @@ function Line({ k, v }: { k: string; v: string }) {
 export interface OutreachTableProps {
   leads: InFlightLead[];
   isAdmin: boolean;
+  /** Admin or User — the roles allowed to restart ID verification. */
+  canWrite: boolean;
   onStop: (lead: InFlightLead, mode: StopMode) => void;
   onRestart: (lead: InFlightLead) => void;
   onLeadAction: (lead: InFlightLead, kind: LeadActionKind) => void;
@@ -297,6 +299,7 @@ export interface OutreachTableProps {
 export function OutreachTable({
   leads,
   isAdmin,
+  canWrite,
   onStop,
   onRestart,
   onLeadAction,
@@ -524,6 +527,16 @@ export function OutreachTable({
                 {/* For an Active row that just hasn't gone out yet — distinct
                     from Restart, which is for a row a suppression made inert.
                     Admin only: it's a real send, same bar as Restart. */}
+                {/* IDENTITY_RESTART_MARKER: admin AND User, by client decision
+                    2026-10-27. Offered to anyone asked and not yet verified —
+                    including a failed Stripe attempt. The workflow re-checks
+                    everything (and the 20h cooldown) before it sends. */}
+                {l.identityRestart.offered && canWrite && (
+                  <DropdownMenuItem onClick={() => onLeadAction(l, "restart_verification")}>
+                    <RotateCcw className="h-4 w-4 mr-2 text-emerald-500" />
+                    Restart ID verification…
+                  </DropdownMenuItem>
+                )}
                 {!linkDelivered && isAdmin && (
                   <DropdownMenuItem onClick={() => onLeadAction(l, "send_link")}>
                     <Send className="h-4 w-4 mr-2 text-sky-500" />
@@ -562,7 +575,7 @@ export function OutreachTable({
         },
       }),
     ],
-    [isAdmin, onStop, onRestart, onLeadAction, onAddInquiry, expanded]
+    [isAdmin, canWrite, onStop, onRestart, onLeadAction, onAddInquiry, expanded]
   );
 
   const table = useReactTable({

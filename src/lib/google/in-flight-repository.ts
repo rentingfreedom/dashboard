@@ -155,7 +155,7 @@ async function fetchTabs(): Promise<RawTabs> {
       ])
     ),
     verifications: verObjs.map((o) =>
-      pick<VerificationRow>(o, ["session_id", "lead_id", "lead_name", "phone", "status", "sent_at", "resolved_at", "reminder_number"])
+      pick<VerificationRow>(o, ["session_id", "lead_id", "lead_name", "phone", "status", "sent_at", "resolved_at", "reminder_number", "source"])
     ),
     // The per-step `_sent` columns are what the ladder's pre-visit and
     // post-visit cells read. Names come from scripts/cal-reminders-setup.mjs,

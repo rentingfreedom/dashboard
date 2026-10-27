@@ -47,14 +47,15 @@ workflows should read this file first.
 | `3hGnl6mPnu2AMbZ1` | Cal Reminder - Cron Poll | Every 5 min. Due reminders + follow-ups. **ACTIVE, test-gated.** `n8n/cal-reminder-cron.json`. |
 | `41HFRjgWiPEFJwTU` | Cal Reminder - Reconfirm Webhook | Webhook `reconfirm` (GET `?token=`). Marks `confirmed`, returns static HTML. **ACTIVE.** `n8n/cal-reconfirm-webhook.json`. |
 | `R3rhuCYEGoBFArBa` | Identity Verification Reminders | Hourly tick, sends in the 10am ET hour. One reminder SMS/day for 4 days to leads who haven't verified. **ACTIVE since 2026-08-25.** |
+| `BGUJz6otsRaCTFGR` | Identity Verification Restart | Webhook `identity-restart`, **header-auth** (`x-internal-api-key`). The dashboard's "Restart ID verification": fresh day-0 verify SMS, then the reminders run days 1–4 from it. **ACTIVE since 2026-10-27.** See "Restart ID verification". |
 | `5UvuzQwLjCB4D25A` | Cal Booking Reminders | Hourly tick, sends in the 10am ET hour. One SMS **and** email per day for 4 days to a lead sent a per-property cal link who hasn't booked. **ACTIVE since 2026-09-01** (created inactive 2026-08-31; activated in a later session). |
 | `TGGhSkTSZGYPrZo9` | New Property → Provision | Sheets `rowAdded` poll (**every 5 min** since 2026-09-01) → cal.com event type + Google resource. |
-| `zvwMJSOZBwqVM8Lo` | Automation Failure Alerts | **Error Trigger.** Named as `settings.errorWorkflow` by all 17 active workflows. SMS to Nicole + Andrew on any failed execution, throttled. **ACTIVE — and it must be.** `n8n/error-alert-workflow.json`. |
+| `zvwMJSOZBwqVM8Lo` | Automation Failure Alerts | **Error Trigger.** Named as `settings.errorWorkflow` by all 17 active workflows. SMS to Nicole + Andrew on any failed execution, throttled, plus one all-clear SMS after 15 quiet minutes (5-min schedule, `RECOVERY_MARKER`). **ACTIVE — and it must be.** `n8n/error-alert-workflow.json`. |
 | `PKdaOsoHatbuRTfZ` | Missed Access Code Sweep | Hourly. Reconciles Cal Bookings -> Showings and texts staff when a showing has, or will have, no door code. **ACTIVE since 2026-09-15.** `n8n/missed-code-sweep.json`. |
 | `87TEvHQzAv5rnuMT` | Funnel Daily Snapshot | Daily 23:30 UTC. One POST to the dashboard, which appends a `Funnel_Snapshots` row. Computes NOTHING itself and reads no Sheet. **ACTIVE since 2026-09-17.** |
 | `W6PoSadMxnoHwxhG` | Delete Property | Sheets `anyUpdate` poll (**every 5 min**) on the SAME tab → filter `active == "Delete"` → deletes the cal.com event type, the Google resource, and the sheet row. **ACTIVE.** |
 | `3tUbcCzaBqYisAHr` | Property Leased Notify | Webhook `property-leased-notify`. One item per call — invoked by the dashboard's own paced `leased-execute` loop, not a poll. Sends the "this home is gone" SMS + email for Item 07, 3b, greets the lead by first name, and logs every send to FUB. **ACTIVE, live-tested 2026-09-25 and 2026-09-26 (first name). Copy CLIENT-APPROVED 2026-09-28.** |
-| `w8VkzN2V9TLFReXw` | No Response Follow-Up | Hourly. Part 5 — 2nd ID/booking reminder → Nicole phone-call task → +4d send-off SMS/email (checks `Outreach_Suppression`) → +1d No Response Trash tag + move to Cold. **INACTIVE, built and validated offline 2026-09-26. `followup_enabled` Settings key is FALSE. Copy CLIENT-APPROVED 2026-09-28. Not yet activated — activation is deliberately held until the whole outreach-control effort is deployed.** |
+| `w8VkzN2V9TLFReXw` | No Response Follow-Up | Hourly. Part 5 — 2nd ID/booking reminder → Nicole phone-call task → +4d send-off SMS/email (checks `Outreach_Suppression`) → +1d No Response Trash tag + move to Cold. **ACTIVE since 2026-10-27**, go-forward only: `followup_start_at` was moved to the activation moment (the build-time value had gone stale and would have pulled in a 60-person backlog), `followup_enabled` TRUE. `node scripts/n8n-activate-no-response-followup.mjs [--revert --apply]`, backup `n8n/BEFORE-followup-activation/`. Copy CLIENT-APPROVED 2026-09-28. **Fixed the same day, before any flow could close:** a closed (responded/cancelled) flow let the SAME 2nd reminder open a new one next tick, i.e. a fresh Nicole task every few days for leads who had verified — `FOLLOWUP_RETRIGGER_MARKER`, `node scripts/n8n-fix-followup-retrigger.mjs [--revert --apply]`, backup `n8n/BEFORE-followup-retrigger/`. |
 
 ### Funnel Daily Snapshot — `87TEvHQzAv5rnuMT` (2026-09-16, ACTIVE since 2026-09-17)
 
@@ -612,6 +613,62 @@ guards.
 > sufficient**: the node also needs `authentication: "serviceAccount"` in its
 > *parameters*, or n8n defaults to OAuth2 and refuses to publish. This estate mixes both,
 > so copying the wrong neighbour is easy.
+### Restart ID verification — `IDENTITY_RESTART_MARKER` (2026-10-27)
+
+Client decision 2026-10-27 (option B): a dashboard button, **admin and User**, that
+restarts a lead's ID sequence from the top — a fresh verification SMS now (the
+**original** `identity_verification_sms_template`, footered), then the four daily
+reminders. **Works for a lead whose earlier Stripe attempt failed** (`requires_input`),
+whom the reminders otherwise skip forever.
+
+Three pieces:
+
+| Piece | What |
+|---|---|
+| `BGUJz6otsRaCTFGR` (new) | the day-0 send: FUB by id → 4 reads (`executeOnce`) → `Check Restart Guards` → Stripe → SMS → FUB note → `Identity_Verifications` row with **`source = manual_restart`** (new column M) |
+| `Find Due Reminders` (`R3rhuCYEGoBFArBa`) | per lead, the ladder is the rows at/after the **latest** `manual_restart` row: anchor, cap and "pending only" are judged on it. No restart row ⇒ identical to before (proved by diffing old vs new over all 667 live rows) |
+| No Response Follow-Up (`w8VkzN2V9TLFReXw`) | the ID track ignores a reminder-2 row older than the latest restart; the dashboard closes an open ID flow on restart (`cancelled_reason = manual_id_restart`) |
+
+**Why not the Identity Gate:** `already_sent` refuses anyone with any row — the guard
+against repeat first-asks. A bypass flag would sit on an unauthenticated webhook every
+FUB event reaches. Do not add one.
+
+**Auth reuses the existing secret** — webhook header auth with credential
+`RF Dashboard Internal API` (`LstfkvTtbGOIQdtO`), i.e. `IDENTITY_SESSION_API_KEY`,
+already in Vercel. No new env var. Verified live: no key / wrong key → **403**.
+
+**One per PERSON, not per inquiry.** Keyed on the FUB person id; one SMS however many
+inquiries. Refusals (each answered to the dashboard by a Respond node):
+`already_verified`, `verification_waived`, `verification_disabled`, `never_asked` (the
+Gate owns the first ask), **`sent_within_20h`** (any row by person id **or** phone
+last-10 — so two presses, two rows, or a duplicate FUB record cannot double-send),
+`outreach_suppressed` (`identity`/`identity_reminders`/`all`), `no_phone`, any trash tag
+(blunt), trash stage, `stage_not_allowed`, `person_mismatch` (gotcha 17),
+`sheets_unavailable`.
+
+> **`Log Restart Row` has NO `onError`, deliberately.** Same send-then-record order as
+> the reminders, but a lost row means the lead verifies into silence, so it fails the
+> execution and pages via the error workflow rather than continuing quietly.
+
+> **Duplicate FUB records are still two people to the reminders.** The cooldown is
+> phone-aware, but `Find Due Reminders` groups by `lead_id` only (how Angela Polite,
+> 2763 + 2931, got two full ladders). Merge in FUB; not changed here.
+
+```bash
+node scripts/identity-restart-setup.mjs [--apply]                     # the source column
+node scripts/n8n-add-identity-restart-ladder.mjs [--apply] [--revert --apply] [--emit-js <dir>]
+node scripts/n8n-create-identity-restart.mjs [--apply] [--update --apply] [--activate --apply]
+node scripts/identity-restart-verify.mjs [--live]                     # 69 assertions
+node scripts/identity-restart-mutations.mjs                           # 21 mutations
+node scripts/identity-reminders-verify.mjs [--js <dir>]               # section 6 is the ladder
+```
+Backup `n8n/BEFORE-identity-restart-ladder/`. **Live-verified:** auth (403/403), an
+invalid id, and a full refusal path on test contact 2652 (`already_verified`, 3.3s,
+Stripe never called). **The SEND path is NOT live-verified** — every test contact shares
+Andrew's phone, which already has verified rows, so none can pass the guards. The first
+real press is the live test: watch for the SMS, the FUB note, the `manual_restart` row,
+and reminder #1 at the next 10am ET.
+
 ### `Log to Identity Verifications` fails AFTER the SMS — the record can be lost
 
 Node order is create session → build SMS → **send SMS** → log the row, so a Sheets
@@ -3029,22 +3086,29 @@ advanced. Confirmed at the time — the sibling poller on the **same tab and
 credential** (`W6PoSadMxnoHwxhG`) succeeded at 21:00 and 22:00 either side of
 it, and all 79 Properties rows were intact.
 
-So the **first** trigger failure for a workflow is now **held**, and an alert
-goes out only once it proves durable:
+So trigger failures are **held**, and an alert goes out only once the failure
+proves durable. Failures more than `TRIGGER_EPISODE_GAP_MS` (30 min) apart are
+separate **outages**:
 
 | Confirmed by | Rule |
 |---|---|
-| recurrence | another trigger failure for the same workflow within `TRIGGER_CONFIRM_MS` (1h) |
-| volume | `TRIGGER_DAY_CONFIRM` (3) of them in a rolling day, however spaced |
+| span | the current outage has kept the workflow failing for `TRIGGER_CONFIRM_SPAN_MS` (20 min) |
+| volume | `TRIGGER_DAY_CONFIRM` (4) separate outages in a rolling day |
 
-Both pollers tick every **5 minutes**, so a genuinely dead one confirms on its
-next tick — the alert is ~5 minutes later than before, not hours. A blip that
-never recurs is never sent.
+> **Tightened 2026-10-22 — the original rule was "a second failure within the
+> hour".** Two short VPS network outages (10/20 21:10–21:26, 10/22 10:45–10:54
+> UTC — `systemd-resolved` lost all three upstream DNS servers on the first)
+> each made **both** Properties pollers fail twice, 5–7 min apart, inside one
+> outage. That "recurred", so it texted about pollers that healed minutes later.
+> The longest outage on record (16 min) now never alerts. The price: a
+> genuinely dead poller confirms after ~20 min of failing instead of ~5.
+> Verifier B32/B33 replay the real timestamps; mutation **M6** restores the old
+> rule and must go red.
 
-> **The volume arm is not redundant.** Without it, a poller failing every few
-> hours forever — intermittent but *not* self-healing — resets the recurrence
-> clock every time and is held **permanently**. Mutation M3 exists solely to
-> keep that door shut.
+> **The volume arm counts OUTAGES, not failures, and is not redundant.** A
+> poller failing briefly every few hours forever never builds a 20-minute
+> outage, so without it it is held **permanently** (M3). Counting failures
+> instead would let one 10-minute outage confirm itself (M7).
 
 > **EXECUTION failures are deliberately untouched and must stay that way.**
 > Those are the Rita-class crashes where a customer is already affected by the
@@ -3066,9 +3130,35 @@ never recurs is never sent.
 > that returned `[]`. The hold path is that mechanism and no new one.
 
 The SMS for a confirmed trigger failure now reads **`trigger failing repeatedly
-(N in 24h)`** rather than `trigger could not run` — the old wording read
-identically for a self-healing blip and a dead poller, which is exactly what
-made the 21:45 message impossible to action.
+(N in 24h, this outage M min)`** rather than `trigger could not run` — the old
+wording read identically for a self-healing blip and a dead poller, which is
+exactly what made the 21:45 message impossible to action.
+
+### All-clear — `RECOVERY_MARKER` (2026-10-22)
+
+A second trigger on the same workflow — `Every 5 Minutes` → `Check Recovery` →
+the existing `Send Failure Alert` — sends **one** "RF AUTOMATION ALL CLEAR" SMS
+once an incident has gone **15 minutes with no failure of any kind**.
+
+- An incident is opened **only when an alert is actually sent**. A held or
+  suppressed failure opens nothing, so nobody is told "all clear" about
+  something they were never told about (D14, M9).
+- **Every** failure, held and suppressed included, stamps `sd.lastFailureAt`
+  and so pushes the all-clear back. The system is not back to normal just
+  because we chose not to text (D15, M8).
+- The incident is deleted **before** the message is built, so a Twilio failure
+  cannot turn it into an all-clear every 5 minutes (M11).
+- **It says "no new failures", never "fixed"** (M12), and reminds the reader
+  that failed webhook runs are not retried. A Rita-class crash is not repaired
+  by the passage of 15 quiet minutes.
+- Both code nodes hardcode `RECIPIENTS`/`FROM_NUMBER` (Code nodes cannot
+  import); verifier A20 asserts they agree. ASCII only, ~207 chars = 2 GSM-7
+  segments.
+
+Shares `$getWorkflowStaticData('global')` with `Build Failure Alert` —
+staticData is per workflow, not per node. A tick racing an error execution can
+lose one write; the worst case is one all-clear sent early or late, never a
+lost failure alert. Adds 288 short executions a day to this workflow's history.
 
 ### The throttle is not optional
 
@@ -3097,10 +3187,14 @@ alert, which is the correct direction for an alarm.
 ```bash
 node scripts/n8n-create-error-workflow.mjs [--apply] [--update-code --apply] [--delete <id>] [--emit-js <dir>]
 node scripts/n8n-attach-error-workflow.mjs [--apply] [--revert --apply] [--only <id>] [--include-inactive]
-node scripts/error-workflow-verify.mjs [--local] [--js <dir>]   # 52 assertions
-node scripts/error-alert-mutations.mjs                          # 5 mutations, proves the above
+node scripts/error-workflow-verify.mjs [--local] [--js <dir>]   # 83 assertions (63 without the live graph)
+node scripts/error-alert-mutations.mjs                          # 12 mutations, proves the above
 ```
-Backups `n8n/BEFORE-error-workflow-attach/` (full pre-change JSON per workflow).
+Backups `n8n/BEFORE-error-workflow-attach/` (full pre-change JSON per workflow),
+`n8n/BEFORE-error-alert-recovery/` (the alerter before the 2026-10-22 change).
+`--update-code` now syncs the **whole** node set and connections to the
+builder, and refuses if the deployed workflow has a node the builder does not
+define.
 
 **Verified live 2026-09-14** end to end on a throwaway copy whose recipient list
 was narrowed to Andrew only — Twilio accepted the send (`status=queued`), and a
@@ -3271,6 +3365,29 @@ both crons dedup off sheet state rather than execution timing.
 node scripts/n8n-set-sheets-retry.mjs [--apply] [--revert --apply]
 ```
 Backups `n8n/BEFORE-sheets-retry/`. All 13 PUTs preserved `active`.
+
+## Populife retry — `retryOnFail` 3 × 5s (2026-10-11, APPLIED)
+
+All **8** Populife HTTP nodes on the live code paths (Access Dispatch: Get Token / Generate
+Code (Cron); Booking Handler: Get Token + Generate Code (Created), Get Token + Delete
+(Delete Old Code), Get Token + Delete (Cancel)) now retry **3 tries, 5000ms apart**. None had
+any retry before, so execution 60688's one DNS blip ("The DNS server returned an error") cost
+a whole 5-minute tick on a real T-2h code and paged staff. The next tick delivered it.
+
+- ≤10s added: well inside the 5-minute tick, and both host webhooks respond `onReceived`.
+- 5000ms is the editor slider cap, so a hand-save **cannot clamp it** (unlike the Sheets 15s).
+- **Generate Code is the one non-idempotent call.** A retry fires only on a throw. A
+  DNS/connect failure never left the box. The residual case (succeeded at Populife,
+  response lost) leaves one extra, never-sent code for the same window. Accepted.
+- No `onError` added: exhausted retries still throw and still alert.
+
+```bash
+node scripts/n8n-add-populife-retry.mjs [--apply] [--revert --apply]
+```
+Backup `n8n/BEFORE-populife-retry/`. The script refuses if the Populife node count per workflow
+moves, re-fetches after each PUT and asserts only the three retry keys changed. `--revert`
+restores only those keys, so it can't undo later edits. Excludes the inactive
+`Populife Code Test`. **Not yet observed retrying live.**
 
 ## DoorLoop Occupancy Sync
 
@@ -4677,13 +4794,14 @@ write nothing, and touch no n8n state.
 | `funnel-metrics-verify.mjs` | **59 offline** — the four data rules, plus section G: the on/off cohort split |
 | `inquiry-alert-verify.mjs` | **36** — all three `Row Recorded?` wirings, fan-out |
 | `missed-code-sweep-verify.mjs` | **68** — the five finding kinds (incl. `no_phone`), both windows, dedupe, recipients, graph; A10 is stale-red |
-| `error-workflow-verify.mjs` | **52** — the alarm's structure, throttle, confirm-before-alert, self-exclusion, and that every active workflow is attached |
+| `error-workflow-verify.mjs` | **83** — the alarm's structure, throttle, outage-span confirm (incl. replays of the 10/20 and 10/22 outages), the all-clear, self-exclusion, and that every active workflow is attached |
 | `lockbox-park-verify.mjs` | **64** — item 1a: parking, the alert fan-out, the graph, and that a parked row is inert in the dispatch cron |
 | `non-showing-skip-verify.mjs` | **24** — consult/walkthrough skipped, showings untouched, classify() parity, no event-type collision |
 | `fub-status-verify.mjs` | **25** — the dashboard's FUB status column: rejected / progressed / active / out-of-scope, pinned to synthetic stages |
 | `showing-code-gate-verify.mjs` | **57** — item 1c: the 6 gated rules (day-0 `followup` dropped from showing entirely, item 1 2026-09-28), the category clause, the sentinel allowlist, defer-don't-decide |
 | `two-window-access-codes-verify.mjs` | **39** — item 3: T-2h/T-1h window selection, booking-time due flags, code reuse (never touches Generate Code on the reuse branch), and that an earlier pass's stamp survives a later one |
-| `followup-verify.mjs` | **85** — Part 5: all four phases' candidate selection and guard/resolve logic, the responded/cancelled/send precedence, per-track outreach suppression, and the tag-dedup-is-unreachable-by-default finding |
+| `identity-restart-verify.mjs` | **69** — the restart's guards, one-per-person cooldown, original template + footer, every branch answers the webhook, the loud row write |
+| `followup-verify.mjs` | **98** (`--js <dir>`) — section J is `FOLLOWUP_RETRIGGER_MARKER`: a closed flow is not reopened by the same reminder, and a restart's abandoned ladder is ignored. Part 5: all four phases' candidate selection and guard/resolve logic, the responded/cancelled/send precedence, per-track outreach suppression, and the tag-dedup-is-unreachable-by-default finding |
 | `delete-multirow-verify.mjs` | **36** — Delete Property multi-row: simulated deleteDimension, fail-closed guards, the `.item` rewrites |
 | `launch-audit.mjs` | all 12 workflows, 16 hard gates, 3 alert phones |
 

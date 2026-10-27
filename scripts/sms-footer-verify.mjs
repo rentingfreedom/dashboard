@@ -79,6 +79,8 @@ const SMS_NODES = [
   ["UbO0l29GtILMm1sP", "Check & Build Message", "obj"],
   ["3hGnl6mPnu2AMbZ1", "Build Message", "obj"],
   ["JDsKrVRHf9TEVj7j", "Resolve Inquiry", "obj"],
+  // IDENTITY_RESTART_MARKER (2026-10-27) — built with the helper copied verbatim.
+  ["BGUJz6otsRaCTFGR", "Build Restart SMS", "node"],
 ];
 const STAFF_BUILD_NODES = [
   ["zvwMJSOZBwqVM8Lo", "Build Failure Alert"],
@@ -177,6 +179,7 @@ const EMIT_PATTERNS = {
   "Check & Build Message": /message: withFooter\(message\),/,
   "Build Message": /message: footeredMessage,/,
   "Resolve Inquiry": /message: withFooter\(message\),/,
+  "Build Restart SMS": /message: withFooter\(message\),/,
 };
 for (const [wf, node] of SMS_NODES) {
   okTrue(`${node} emits a footered message`, EMIT_PATTERNS[node].test(codeOf(wf, node)));
@@ -206,7 +209,14 @@ for (const stub of all.data) {
   WF.set(stub.id, w);
   twilio += w.nodes.filter((n) => String(n.type).includes("twilio")).length;
 }
-ok("live Twilio node count", twilio, 22);
+// 22 at SMS_FOOTER_MARKER, plus four LEAD-facing sends built since, each of
+// which renders `sms_footer` in its own build node (checked 2026-10-27):
+//   w8VkzN2V9TLFReXw/Send Sendoff SMS        (Resolve Sendoff)
+//   3tUbcCzaBqYisAHr/Send SMS                (Build Messages)
+//   5LwTZS4dw5qmInL2/Send Confirmation SMS   (Build Confirmation SMS)
+//   BGUJz6otsRaCTFGR/Send Restart SMS        (Build Restart SMS, section A)
+// A change here means a send node was added or removed: classify it first.
+ok("live Twilio node count", twilio, 26);
 
 // ── D. The Cal.com Cron Poll: invitee SMS only ─────────────────────────────
 console.log("\nD. Cron Poll `Build Message` · invitee SMS only, never host, never email");

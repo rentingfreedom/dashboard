@@ -495,6 +495,20 @@ export interface InFlightLead {
    */
   stageCategory: LeadCategory | "unknown";
   flags: string[];
+  /**
+   * IDENTITY_RESTART_MARKER — whether "Restart ID verification…" is offered
+   * on this row, and what its confirm screen shows. Only decides whether the
+   * menu item appears: the n8n workflow re-checks everything live (verified,
+   * waived, 20h cooldown, suppression, trash, stage, phone) before sending.
+   */
+  identityRestart: {
+    offered: boolean;
+    /** The current ladder's day-0 send (the first ask, or the latest restart). */
+    lastAskedAt: string | null;
+    remindersSent: number;
+    /** Status of the current ladder: "pending", or the failure status. */
+    status: string;
+  };
 }
 
 export interface InFlightResult {
@@ -668,6 +682,43 @@ export function pipelinePositionOf(
 const norm = (s: unknown) => String(s ?? "").trim().toLowerCase();
 const last10 = (s: unknown) => String(s ?? "").replace(/\D/g, "").slice(-10);
 const DAY = 86_400_000;
+
+/**
+ * IDENTITY_RESTART_MARKER — the rows of the ID-verification ladder that is
+ * actually running, by the same rule `Find Due Reminders` uses per `lead_id`:
+ * the ladder starts at the latest `source = manual_restart` row, or at the
+ * earliest row when there is none.
+ *
+ * The page finds a person's rows by FUB id OR phone, so it can see several
+ * `lead_id`s at once — a duplicate FUB record sharing a phone. Adding all their
+ * reminders together is what showed Angela Polite (2763 + 2931) as "6/4": two
+ * separate ladders summed. The ladder that started most recently is the one
+ * the person is on now, so only that one is counted.
+ */
+function currentIdLadder(rows: VerificationRow[]): VerificationRow[] {
+  const byLead = new Map<string, VerificationRow[]>();
+  for (const v of rows) {
+    const id = String(v.lead_id ?? "").trim();
+    if (!byLead.has(id)) byLead.set(id, []);
+    byLead.get(id)!.push(v);
+  }
+  let best: { start: number; rows: VerificationRow[] } | null = null;
+  for (const group of byLead.values()) {
+    const times = group.map((v) => parseTime(v.sent_at)).filter((t): t is number => t !== null);
+    if (!times.length) continue;
+    const restarts = group
+      .filter((v) => norm(v.source) === "manual_restart")
+      .map((v) => parseTime(v.sent_at))
+      .filter((t): t is number => t !== null);
+    const start = restarts.length ? Math.max(...restarts) : Math.min(...times);
+    const ladder = group.filter((v) => {
+      const t = parseTime(v.sent_at);
+      return t !== null && t >= start;
+    });
+    if (!best || start > best.start) best = { start, rows: ladder };
+  }
+  return best?.rows ?? [];
+}
 
 /**
  * The ET calendar day for an instant, as YYYY-MM-DD.
@@ -1002,7 +1053,15 @@ export function computeInFlight(input: InFlightInput): InFlightResult {
     ];
     const uniqueVer = [...new Map(verRows.map((v) => [v.session_id || `${v.lead_id}:${v.sent_at}`, v])).values()];
     const anyVerified = uniqueVer.some((v) => norm(v.status) === "verified");
-    const pendingVer = uniqueVer.filter((v) => norm(v.status) === "pending");
+    // Only the ladder running NOW (see currentIdLadder). "Pending only", as in
+    // `Find Due Reminders`: a failed attempt on this ladder stops its reminders,
+    // so its remaining pending rows must not read as an open request.
+    const ladderVer = currentIdLadder(uniqueVer);
+    const ladderFailed = ladderVer.some((v) => {
+      const st = norm(v.status);
+      return st !== "" && st !== "pending";
+    });
+    const pendingVer = ladderFailed ? [] : ladderVer.filter((v) => norm(v.status) === "pending");
 
     const booked = bookedAt !== "" || hasBooked(propertyKey, who);
     // FUB's answer wins where we have it. The Identity Gate and the sweep both
@@ -1476,6 +1535,23 @@ export function computeInFlight(input: InFlightInput): InFlightResult {
       flags.push("booking link stranded by a lifted stop — needs a restart");
     }
 
+    // IDENTITY_RESTART_MARKER: offered to someone who was asked, has not
+    // verified, was not waived, and is not yet holding this property's link.
+    // A failed Stripe attempt is included on purpose (client decision
+    // 2026-10-27) — the reminders skip those leads, so they need it most.
+    const ladderStartRow = ladderVer
+      .filter((v) => !String(v.reminder_number ?? "").trim() || Number(v.reminder_number) === 0)
+      .sort((a, b) => (parseTime(b.sent_at) ?? 0) - (parseTime(a.sent_at) ?? 0))[0];
+    const ladderStatus =
+      ladderVer.map((v) => norm(v.status)).find((st) => st !== "" && st !== "pending") ?? (ladderVer.length ? "pending" : "");
+    const identityRestart = {
+      offered:
+        s.verificationEnabled && verificationRequired && identityAsked && !anyVerified && linkSent !== "true",
+      lastAskedAt: ladderStartRow?.sent_at ?? null,
+      remindersSent: ladderVer.filter((v) => Number(v.reminder_number ?? 0) >= 1).length,
+      status: ladderStatus,
+    };
+
     leads.push({
       eventId: String(row.event_id ?? "").trim(),
       personId,
@@ -1496,6 +1572,7 @@ export function computeInFlight(input: InFlightInput): InFlightResult {
       stage,
       stageCategory,
       flags,
+      identityRestart,
     });
   }
 

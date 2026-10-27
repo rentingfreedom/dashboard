@@ -121,7 +121,7 @@ export default function OutreachPage() {
   const [restartTarget, setRestartTarget] = useState<RestartTarget | null>(null);
   const [leadAction, setLeadAction] = useState<LeadActionTarget | null>(null);
   const [addInquiryTarget, setAddInquiryTarget] = useState<AddInquiryTarget | null>(null);
-  const { isAdmin } = useRole();
+  const { isAdmin, canWrite } = useRole();
 
   const load = useCallback(async (refresh = false) => {
     setLoading(true);
@@ -365,6 +365,7 @@ export default function OutreachPage() {
         <OutreachTable
           leads={rows}
           isAdmin={isAdmin}
+          canWrite={canWrite}
           onStop={(lead: InFlightLead, mode: StopMode) =>
             setStopTarget({
               mode,
@@ -387,6 +388,7 @@ export default function OutreachPage() {
               personName: lead.personName,
               propertyKey: lead.propertyKey,
               propertyAddress: lead.propertyAddress,
+              identityRestart: lead.identityRestart,
             })
           }
           onRestart={(lead: InFlightLead) =>

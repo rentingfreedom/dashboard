@@ -23,7 +23,7 @@ import { fetchJson } from "@/lib/fetch-json";
  * send, which means all three need the same "what will actually happen"
  * preamble rather than one of them quietly getting a thinner one.
  */
-export type LeadActionKind = "mark_verified" | "restart_nudges" | "send_link";
+export type LeadActionKind = "mark_verified" | "restart_nudges" | "send_link" | "restart_verification";
 
 export interface LeadActionTarget {
   kind: LeadActionKind;
@@ -31,6 +31,43 @@ export interface LeadActionTarget {
   personName: string;
   propertyKey: string;
   propertyAddress: string;
+  /** restart_verification only — what the confirm screen shows about the current ladder. */
+  identityRestart?: {
+    lastAskedAt: string | null;
+    remindersSent: number;
+    status: string;
+  };
+}
+
+/** Why the restart workflow said no, in words an operator can act on. */
+const RESTART_REASON_COPY: Record<string, string> = {
+  already_verified: "they have already verified their ID",
+  verification_waived: "ID verification was waived for them",
+  verification_disabled: "ID verification is switched off — use Send booking link instead",
+  never_asked: "they were never asked to verify, so there is nothing to restart",
+  outreach_suppressed: "their outreach is stopped or paused — restart outreach first",
+  no_phone: "there is no phone number on their FUB record",
+  person_not_found: "FUB could not find this person",
+  person_mismatch: "FUB returned a different person — nothing sent",
+  fub_unavailable: "FUB could not be reached — try again shortly",
+  sheets_unavailable: "Google Sheets could not be read — try again shortly",
+  no_session_url: "Stripe did not return a verification link — try again shortly",
+  send_failed: "the text failed to send — check the FUB note",
+  send_unconfirmed: "the send could not be confirmed — check FUB before trying again",
+  not_configured: "the dashboard is missing its n8n key (IDENTITY_SESSION_API_KEY)",
+};
+
+function restartReason(reason: string | undefined, lastSentAt: string | null | undefined): string {
+  const r = reason ?? "";
+  if (r === "sent_within_20h") {
+    const when = lastSentAt ? new Date(lastSentAt).toLocaleString() : "recently";
+    return `they were already texted within the last 20 hours (${when})`;
+  }
+  if (r.startsWith("trash_tag:")) return `they carry a trash tag (${r.slice(10)})`;
+  if (r.startsWith("trash_stage:") || r.startsWith("stage_not_allowed:")) {
+    return `their FUB stage (${r.slice(r.indexOf(":") + 1)}) is not one we message`;
+  }
+  return RESTART_REASON_COPY[r] ?? (r || "unknown reason");
 }
 
 const COPY: Record<
@@ -89,6 +126,21 @@ const COPY: Record<
     ],
     withReason: false,
   },
+  restart_verification: {
+    title: "Restart ID verification",
+    description:
+      "Sends this lead a new ID verification link now and starts their reminders over, as if they had just been asked for the first time.",
+    endpoint: "/api/outreach/restart-verification",
+    cta: "Restart ID verification",
+    busy: "Sending…",
+    effects: [
+      "One text now with a new Stripe link, using the first ID-request wording.",
+      "Then up to four daily reminders at 10am ET, until they verify.",
+      "One text for the whole person, however many properties they asked about.",
+      "Refused if they verified, were exempted, or were texted in the last 20 hours.",
+    ],
+    withReason: false,
+  },
 };
 
 export function LeadActionDialog({
@@ -119,6 +171,8 @@ export function LeadActionDialog({
         skipped?: Record<string, string>;
         sent?: boolean;
         reason?: string;
+        lastSentAt?: string | null;
+        followupsClosed?: number;
       }>(copy.endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -163,6 +217,12 @@ export function LeadActionDialog({
           toast.success(`Booking link sent to ${who}.`);
         } else {
           toast.warning(`Nothing sent to ${who} — ${REASON_COPY[res.reason ?? ""] ?? res.reason ?? "unknown reason"}.`);
+        }
+      } else if (target.kind === "restart_verification") {
+        if (res.sent) {
+          toast.success(`ID verification restarted for ${who} — new link sent, reminders start tomorrow at 10am ET.`);
+        } else {
+          toast.warning(`Nothing sent to ${who} — ${restartReason(res.reason, res.lastSentAt)}.`);
         }
       } else if (res.released) {
         toast.success(
@@ -221,6 +281,34 @@ export function LeadActionDialog({
               property this lead currently has an open, unsent inquiry on — ID verification
               covers the whole person, not one property.
             </p>
+          ) : null}
+
+          {target?.kind === "restart_verification" ? (
+            <div className="space-y-1 text-xs text-gray-500 dark:text-gray-400">
+              <p>
+                Last asked:{" "}
+                <span className="font-medium text-gray-700 dark:text-gray-300">
+                  {target.identityRestart?.lastAskedAt
+                    ? new Date(target.identityRestart.lastAskedAt).toLocaleString()
+                    : "unknown"}
+                </span>
+                {" · "}reminders sent since:{" "}
+                <span className="font-medium text-gray-700 dark:text-gray-300">
+                  {target.identityRestart?.remindersSent ?? 0}
+                </span>
+                {" · "}status:{" "}
+                <span className="font-medium text-gray-700 dark:text-gray-300">
+                  {target.identityRestart?.status === "requires_input"
+                    ? "Stripe attempt failed"
+                    : target.identityRestart?.status || "unknown"}
+                </span>
+              </p>
+              <p>
+                Covers <span className="font-medium text-gray-700 dark:text-gray-300">every</span>{" "}
+                property this lead asked about — ID verification is one check per person. When they
+                verify, each property&apos;s booking link goes out as usual.
+              </p>
+            </div>
           ) : null}
 
           {copy?.withReason && (

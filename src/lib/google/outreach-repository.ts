@@ -752,3 +752,139 @@ export async function markVerifiedManually(
   invalidateInFlightCache();
   return { waived, released, swept };
 }
+
+const FOLLOWUP_TRACKING = "Followup_Tracking";
+
+/**
+ * IDENTITY_RESTART_MARKER — n8n workflow "Identity Verification Restart"
+ * (`scripts/n8n-create-identity-restart.mjs`). Unlike the sweep webhook it is
+ * AUTHENTICATED: header `x-internal-api-key`, the same secret n8n already sends
+ * to the dashboard (`IDENTITY_SESSION_API_KEY`, already set in Vercel for
+ * `/api/identity/create-session`). No new env var.
+ */
+const IDENTITY_RESTART_WEBHOOK = "https://automation.rentingfreedom.com/webhook/identity-restart";
+
+export interface RestartIdVerificationInput {
+  personId: string;
+  /** Audit-trail context ONLY — verification is per person, never per property. */
+  propertyKey?: string;
+}
+
+export interface RestartIdVerificationResult {
+  sent: boolean;
+  /**
+   * `sent`, one of the workflow's refusal reasons (`already_verified`,
+   * `sent_within_20h`, `trash_tag:…`, …), or `not_configured` /
+   * `send_unconfirmed` from this side.
+   */
+  reason: string;
+  /** Set on `sent_within_20h`, so the operator can be told when. */
+  lastSentAt: string | null;
+  /** Open ID-track follow-up flows closed because the ladder restarted. */
+  followupsClosed: number;
+}
+
+/**
+ * Restart a lead's ID-verification sequence from the top: a fresh day-0
+ * verification SMS now, then the reminder workflow's days 1-4 from it.
+ * Client decision 2026-10-27 (option B).
+ *
+ * ── One per PERSON ────────────────────────────────────────────────────────
+ * ID verification is one fact about a person, so this is keyed on the FUB
+ * person id and sends ONE text however many inquiries they have. The menu
+ * item appears on each of their rows; pressing it twice, from two rows or by
+ * two people, is refused by the workflow's 20h cooldown (person id OR phone).
+ *
+ * ── Every guard lives in n8n ──────────────────────────────────────────────
+ * Verified, waived, never asked, the 20h cooldown, suppression, trash tags,
+ * stage and phone are all re-checked by `Check Restart Guards` against live
+ * FUB and live sheets, immediately before the send. Repeating them here would
+ * be a second copy free to drift; the workflow answers with the reason
+ * instead, and that reason is what the operator sees.
+ *
+ * ── Closing the old no-response flow ──────────────────────────────────────
+ * A restart abandons the old ladder. If a No Response Follow-Up ID flow is
+ * open for them, its send-off and move-to-Cold would otherwise fire in the
+ * middle of the new ladder, so it is closed (`cancelled_reason =
+ * manual_id_restart`). The new ladder's 2nd reminder starts a fresh one
+ * (FOLLOWUP_RETRIGGER_MARKER). Nicole's existing FUB task is left alone —
+ * record, don't drop.
+ */
+export async function restartIdVerification(
+  input: RestartIdVerificationInput,
+  actor: string
+): Promise<RestartIdVerificationResult> {
+  const personId = String(input.personId ?? "").trim();
+  if (!/^\d{1,10}$/.test(personId)) throw new Error("Restarting ID verification needs a numeric FUB person id.");
+
+  const key = process.env.IDENTITY_SESSION_API_KEY;
+  if (!key) {
+    console.error("[restartIdVerification] IDENTITY_SESSION_API_KEY is not set — refusing.");
+    return { sent: false, reason: "not_configured", lastSentAt: null, followupsClosed: 0 };
+  }
+
+  let sent = false;
+  let reason = "send_unconfirmed";
+  let lastSentAt: string | null = null;
+  try {
+    const res = await fetch(IDENTITY_RESTART_WEBHOOK, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-internal-api-key": key },
+      body: JSON.stringify({ person_id: personId, actor }),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      // A failed row write after the SMS lands here too — the workflow fails
+      // loudly on purpose and the n8n error alert has already gone out.
+      console.error(`[restartIdVerification] webhook -> ${res.status} ${text.slice(0, 300)}`);
+    } else {
+      const body = JSON.parse(text) as { sent?: unknown; reason?: unknown; last_sent_at?: unknown };
+      sent = body.sent === true;
+      reason = typeof body.reason === "string" && body.reason ? body.reason : sent ? "sent" : "send_unconfirmed";
+      lastSentAt = typeof body.last_sent_at === "string" ? body.last_sent_at : null;
+    }
+  } catch (err) {
+    console.error("[restartIdVerification] webhook failed:", err);
+  }
+  console.log(`[restartIdVerification] person ${personId} by ${actor}: sent=${sent} reason=${reason}`);
+
+  let followupsClosed = 0;
+  if (sent) {
+    try {
+      const { headers, objects } = rowsToObjects(await readSheet(FOLLOWUP_TRACKING));
+      const now = new Date().toISOString();
+      for (const row of objects) {
+        if (String(row.person_id ?? "").trim() !== personId) continue;
+        if (String(row.track ?? "").trim() !== "id_verification") continue;
+        if (String(row.responded_at ?? "").trim() || String(row.cancelled_at ?? "").trim()) continue;
+        await updateSpecificColumns(
+          FOLLOWUP_TRACKING,
+          parseInt(row._rowIndex!),
+          { cancelled_at: now, cancelled_reason: "manual_id_restart" },
+          headers
+        );
+        followupsClosed++;
+      }
+    } catch (err) {
+      // Not thrown: the SMS already went out. Logged loudly so a stale open
+      // flow can be closed by hand before its send-off date.
+      console.error(`[restartIdVerification] could not close open follow-up flow(s) for ${personId}:`, err);
+    }
+  }
+
+  await writeAuditLog({
+    timestamp: new Date().toISOString(),
+    actor,
+    action: "outreach.id_verification_restarted",
+    entity_type: "lead",
+    entity_id: personId,
+    property_key: input.propertyKey ?? "",
+    before_json: "",
+    after_json: JSON.stringify({ sent, reason, followupsClosed }),
+    source: "dashboard",
+    notes: "",
+  });
+
+  if (sent) invalidateInFlightCache();
+  return { sent, reason, lastSentAt, followupsClosed };
+}
