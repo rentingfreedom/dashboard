@@ -14,13 +14,21 @@
  * G/H — tag candidates + resolve (same responded/cancelled precedence,
  *       tag/stage write, no duplicate tag)
  * I   — deployed wiring: kill switch, node presence, gotcha-19 references
+ * J   — FOLLOWUP_RETRIGGER_MARKER: a closed flow cannot be reopened by the
+ *       same reminder, and a manual ID restart's abandoned ladder is ignored
+ *
+ *   node scripts/followup-verify.mjs [--js <dir>]
+ *
+ * `--js <dir>` reads a node's jsCode from <dir>/<Node_Name>.js when that file
+ * exists (e.g. from `n8n-fix-followup-retrigger.mjs --emit-js <dir>`), so a
+ * patch can be tested before it is pushed.
  *
  * The four "Resolve *" guard functions are near-identical copies (not a
  * shared library — n8n Code nodes can't import) so each phase is tested
  * independently rather than assuming they stay in sync.
  */
 
-import { readFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -49,6 +57,9 @@ const eq = (label, a, b) => ok(label, Object.is(a, b), `expected ${JSON.stringif
 const section = (s) => console.log(`\n── ${s} ${"─".repeat(Math.max(0, 66 - s.length))}`);
 const tryRun = (label, fn) => { try { return fn(); } catch (e) { fails.push(`${label}: threw ${e.message}`); console.log(`    FAIL  ${label}: threw ${e.message}`); return null; } };
 
+const jsIdx = process.argv.indexOf("--js");
+const JS_DIR = jsIdx !== -1 ? process.argv[jsIdx + 1] : null;
+
 const NOW = Date.now();
 const DAY = 86400000;
 const isoDaysAgo = (n) => new Date(NOW - n * DAY).toISOString();
@@ -63,6 +74,8 @@ async function main() {
   const codeOf = (name) => {
     const n = by[name];
     if (!n) throw new Error(`node "${name}" not found`);
+    const local = JS_DIR ? resolve(JS_DIR, `${name.replace(/[^\w]+/g, "_")}.js`) : null;
+    if (local && existsSync(local)) return readFileSync(local, "utf8");
     return n.parameters.jsCode;
   };
 
@@ -350,7 +363,9 @@ async function main() {
 
   // ── I. Deployed wiring ────────────────────────────────────────────────
   section("I. Deployed wiring");
-  eq("I1  workflow is currently INACTIVE (deliberate — copy/activation gate)", wf.active, false);
+  // Activated 2026-10-27 (n8n-activate-no-response-followup.mjs), go-forward only.
+  eq("I1  workflow is ACTIVE (activated 2026-10-27)", wf.active, true);
+  eq("I1b errorWorkflow is the Automation Failure Alerts workflow", wf.settings?.errorWorkflow, "zvwMJSOZBwqVM8Lo");
   for (const name of [
     "Hourly Tick", "Find ID Task Candidates", "Find Booking Task Candidates",
     "Find Sendoff Candidates", "Find Tag Candidates", "Read Outreach Suppression (Sendoff)",
@@ -366,6 +381,41 @@ async function main() {
     outs("FUB - Get Person (Sendoff)").includes("Read Outreach Suppression (Sendoff)"));
   okTrue2("I5  Read Outreach Suppression (Sendoff) feeds Resolve Sendoff",
     outs("Read Outreach Suppression (Sendoff)").includes("Resolve Sendoff"));
+
+  // ── J. FOLLOWUP_RETRIGGER_MARKER ───────────────────────────────────────
+  section("J. A closed flow is not reopened by the same reminder");
+  okTrue2("J0  both candidate finders carry FOLLOWUP_RETRIGGER_MARKER",
+    findIdTask.includes("FOLLOWUP_RETRIGGER_MARKER") && findBookingTask.includes("FOLLOWUP_RETRIGGER_MARKER"));
+  {
+    const rem = isoDaysAgo(5);
+    const task = isoDaysAgo(4.9);
+    eq("J1  ID: responded row started FROM this reminder -> NOT a candidate again",
+      runFindId([iv2("100", rem)], [{ person_id: "100", track: "id_verification", task_created_at: task, responded_at: isoDaysAgo(1) }]).length, 0);
+    eq("J2  ID: cancelled row started from this reminder -> NOT a candidate again",
+      runFindId([iv2("100", rem)], [{ person_id: "100", track: "id_verification", task_created_at: task, cancelled_at: isoDaysAgo(1) }]).length, 0);
+    eq("J3  ID: a NEWER reminder 2 after the closed flow -> candidate (fresh ladder)",
+      runFindId([iv2("100", rem), iv2("100", isoDaysAgo(1))], [{ person_id: "100", track: "id_verification", task_created_at: task, responded_at: isoDaysAgo(2) }]).length, 1);
+    eq("J4  ID: a closed BOOKING row does not block the ID track",
+      runFindId([iv2("100", rem)], [{ person_id: "100", track: "booking", task_created_at: task, responded_at: isoDaysAgo(1) }]).length, 1);
+    eq("J5  ID: an unparseable task_created_at on a closed row neither blocks nor unblocks -> candidate",
+      runFindId([iv2("100", rem)], [{ person_id: "100", track: "id_verification", task_created_at: "garbage", responded_at: isoDaysAgo(1) }]).length, 1);
+    eq("J6  booking: responded row started from this nudge -> NOT a candidate again",
+      runFindBooking([inq("200", { booking_reminder_last_at: rem })], [{ person_id: "200", track: "booking", task_created_at: task, responded_at: isoDaysAgo(1) }]).length, 0);
+    eq("J7  booking: a restarted nudge run (newer last_at) -> candidate again",
+      runFindBooking([inq("200", { booking_reminder_last_at: isoDaysAgo(1) })], [{ person_id: "200", track: "booking", task_created_at: task, cancelled_at: isoDaysAgo(2) }]).length, 1);
+  }
+  section("J. IDENTITY_RESTART_MARKER — the abandoned ladder is ignored");
+  {
+    const restart = (sentAt) => ({ lead_id: "100", reminder_number: "0", sent_at: sentAt, source: "manual_restart", status: "pending" });
+    eq("J8  old reminder 2 BEFORE a manual restart -> not a candidate (new ladder not at reminder 2 yet)",
+      runFindId([iv2("100", isoDaysAgo(6)), restart(isoDaysAgo(1))]).length, 0);
+    eq("J9  new reminder 2 AFTER the restart -> candidate",
+      runFindId([iv2("100", isoDaysAgo(6)), restart(isoDaysAgo(3)), iv2("100", isoDaysAgo(1))]).length, 1);
+    eq("J10 restart for a DIFFERENT person does not affect this one",
+      runFindId([iv2("100", isoDaysAgo(6)), { ...restart(isoDaysAgo(1)), lead_id: "999" }]).length, 1);
+    eq("J11 source compared case-insensitively (Sheets may coerce)",
+      runFindId([iv2("100", isoDaysAgo(6)), { ...restart(isoDaysAgo(1)), source: " Manual_Restart " }]).length, 0);
+  }
 
   console.log("\n" + "═".repeat(72));
   if (fails.length === 0) {
