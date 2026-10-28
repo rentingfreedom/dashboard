@@ -1,0 +1,4 @@
+{
+  "property_leased_sms_template": "Hi {{first_name}}, we wanted to let you know that {{property_address}} has been leased and is no longer available. {{cancel_note}}Thank you for your interest. If you'd like help finding another rental, please reach out to Nicole at 843-494-5244 or nicolee@rentingfreedom.com.",
+  "property_leased_email_body": "Hi {{first_name}},\n\nWe wanted to let you know that {{property_address}} has been leased and is no longer available.{{cancel_note}}\n\nThank you for your interest. If you'd like help finding another rental, please reach out to Nicole at 843-494-5244 or nicolee@rentingfreedom.com."
+}

@@ -1817,8 +1817,11 @@ node scripts/n8n-add-property-leased-task.mjs [--apply] [--revert --apply] [--em
 node scripts/property-leased-task-verify.mjs [--js <dir>]     # 26 live (16 with --js)
 ```
 Backup `n8n/BEFORE-property-leased-task/`. Applied 2026-10-28; ET-date and id checks
-confirmed red under mutation. **Live-tested 2026-10-28**, execution 75243: test contact 2652 with no phone or email, so only the task branch ran. FUB task 10741 was created on Nicole, Follow Up, due the ET date, then deleted. D(c), the new
-notice copy, is Settings cell edits only and is waiting on the client.
+confirmed red under mutation. **Live-tested 2026-10-28**, execution 75243: test contact 2652 with no phone or email, so only the task branch ran. FUB task 10741 was created on Nicole, Follow Up, due the ET date, then deleted. D(c): **interim
+copy live 2026-10-28** ("...has been leased. Someone from our team will be reaching out to
+discuss other options."), `node scripts/property-leased-interim-copy.mjs [--apply] [--revert --apply]`,
+old values in `n8n/BEFORE-property-leased-interim-copy/`. The client's final wording replaces
+`property_leased_sms_template` / `_email_body` in Settings when it arrives.
 
 ## Per-category booking notifications (B, built 2026-09-01, APPLIED)
 
