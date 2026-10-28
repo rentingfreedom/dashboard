@@ -23,9 +23,9 @@ export async function PUT(
     }
 
     const actor = auth.user.actorLabel;
-    const lockbox = await assignLockbox(propertyKey, parsed.data.lock_id, actor);
+    const { lockbox, releasedShowings } = await assignLockbox(propertyKey, parsed.data.lock_id, actor);
     triggerLockboxAssigned(propertyKey, lockbox.lock_id, lockbox.serial_number, actor).catch(() => {});
-    return NextResponse.json({ lockbox });
+    return NextResponse.json({ lockbox, releasedShowings });
   } catch (err) {
     console.error("[PUT /api/properties/lockbox]", err);
     return NextResponse.json(

@@ -69,6 +69,10 @@ const run = (code, { bookings, showings }) => {
     "Read Settings (Cron)": mk(SETTINGS_ROWS),
     "Read Showings": mk(showings),
     "Read Outreach Suppression": [],
+    // Property-scoped suppression (CAL_REMINDERS_SCOPE_SPLIT era) made Find Due
+    // Notifications read Properties too; with nobody suppressed it only feeds
+    // the event-type -> property_key map, so EMPTY is the same baseline.
+    "Read Properties (Cron)": [],
   };
   const $ = (name) => {
     if (!(name in named)) throw new Error(`node "${name}" not stubbed`);
@@ -254,7 +258,10 @@ async function main() {
     // parallel — n8n needs a real edge to force the order Find Due Notifications
     // depends on — and a longer chain still proves it. Both links are pinned.
     eq("C2  Read Showings -> Read Outreach Suppression (CHAINED, not parallel)", (outs("Read Showings")[0] ?? [])[0], "Read Outreach Suppression");
-    eq("C2b ...-> Read Cal Bookings (still chained)", (outs("Read Outreach Suppression")[0] ?? [])[0], "Read Cal Bookings");
+    // Property-scoped suppression later chained `Read Properties (Cron)` in here
+    // too. Still a chain, so the ordering this pins still holds.
+    eq("C2b ...-> Read Properties (Cron) (still chained)", (outs("Read Outreach Suppression")[0] ?? [])[0], "Read Properties (Cron)");
+    eq("C2c ...-> Read Cal Bookings (still chained)", (outs("Read Properties (Cron)")[0] ?? [])[0], "Read Cal Bookings");
     ok("C3  Read Cal Bookings still feeds Find Due Notifications", (outs("Read Cal Bookings")[0] ?? []).includes("Find Due Notifications"));
     ok("C4  ...and still feeds Find Rejection Candidates (A-2 untouched)", (outs("Read Cal Bookings")[0] ?? []).includes("Find Rejection Candidates"));
     // OUTREACH_SUPPRESSION_MARKER (2026-09-21) inserted `Outreach Suppressed?`
@@ -265,7 +272,11 @@ async function main() {
     eq("C5b IF[false] -> No Code Delivered? (the gate is still reached)", (outs("Outreach Suppressed?")[1] ?? [])[0], "No Code Delivered?");
     eq("C5c IF[true]  -> Mark Step Skipped (Suppressed)", (outs("Outreach Suppressed?")[0] ?? [])[0], "Mark Step Skipped (Suppressed)");
     eq("C6  IF[true]  -> Mark Step Skipped (No Code)", (outs("No Code Delivered?")[0] ?? [])[0], "Mark Step Skipped (No Code)");
-    eq("C7  IF[false] -> Missing Recipient? (unchanged path)", (outs("No Code Delivered?")[1] ?? [])[0], "Missing Recipient?");
+    // POSTVISIT_STAGE_GATE_MARKER (2026-10-27) inserted `Stage Check?` after the
+    // no-code gate. Pinned as the chain: its ungated fallback still reaches
+    // Missing Recipient? with Build Message's items untouched.
+    eq("C7  IF[false] -> Stage Check?", (outs("No Code Delivered?")[1] ?? [])[0], "Stage Check?");
+    eq("C7b Stage Check? [fallback] -> Missing Recipient? (unchanged path)", (outs("Stage Check?")[2] ?? [])[0], "Missing Recipient?");
     eq("C8  the skip path rejoins Loop Back (SplitInBatches must advance)", (outs("Mark Step Skipped (No Code)")[0] ?? [])[0], "Loop Back");
 
     ok("C9  Read Showings has executeOnce (else 72 requests/tick)", by["Read Showings"].executeOnce === true);

@@ -145,6 +145,7 @@ export type AuditAction =
   | "showing.created"
   | "showing.updated"
   | "showing.cancelled"
+  | "showing.unparked"
   | "booking.cancelled"
   | "booking.manual_created";
 

@@ -1,0 +1,8 @@
+{
+  "allowed_stages": "Tenant Inquiry Lead (Do Not Contact),Tenant Still Looking For Rental",
+  "rental_application_stage": "Tenant Inquiry Lead (Do Not Contact)",
+  "rows": {
+    "allowed_stages": 26,
+    "rental_application_stage": 28
+  }
+}

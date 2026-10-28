@@ -8,6 +8,7 @@ import type { Lockbox, CreateLockboxInput, LockboxStatus } from "@/lib/types";
 import { writeAuditLog } from "./audit-repository";
 import { updateProperty } from "./properties-repository";
 import { checkConflicts } from "./concurrency";
+import { releaseParkedShowings } from "./showings-repository";
 
 const TAB = "Lockboxes";
 
@@ -99,7 +100,7 @@ export async function assignLockbox(
   propertyKey: string,
   lockId: string,
   actor: string
-): Promise<Lockbox> {
+): Promise<{ lockbox: Lockbox; releasedShowings: number }> {
   const { headers, rawObjects, lockboxes } = await readAll();
 
   const lockboxIdx = rawObjects.findIndex((o) => o.lock_id === lockId);
@@ -169,7 +170,17 @@ export async function assignLockbox(
     notes: "",
   });
 
-  return parseLockbox({ ...existing, ...updates });
+  // Tours booked while the property had no lockbox are parked; give them the
+  // lock id so Access Code Dispatch sends their codes. Best-effort: the
+  // assignment has already succeeded and must not be reported as failed.
+  let releasedShowings = 0;
+  try {
+    releasedShowings = await releaseParkedShowings(propertyKey, lockbox.lock_id, actor);
+  } catch (err) {
+    console.error(`[assignLockbox] releasing parked showings for ${propertyKey} failed:`, err);
+  }
+
+  return { lockbox: parseLockbox({ ...existing, ...updates }), releasedShowings };
 }
 
 export async function unassignLockbox(

@@ -47,8 +47,14 @@ export function AssignLockboxDialog({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lock_id: selectedId }),
       });
-      if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
-      toast.success("Lockbox assigned");
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed");
+      const released = Number(data.releasedShowings ?? 0);
+      toast.success(
+        released > 0
+          ? `Lockbox assigned — ${released} upcoming tour${released === 1 ? "" : "s"} will now get a door code`
+          : "Lockbox assigned"
+      );
       setSelectedId("");
       onSuccess();
     } catch (err) {

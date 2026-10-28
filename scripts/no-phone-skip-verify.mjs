@@ -218,7 +218,14 @@ const outs = (src, br = 0) => ((C[src]?.main ?? [])[br] ?? []).map((c) => c.node
 // with Build Message's items unchanged.
 ok("Build Message -> Outreach Suppressed?", outs("Build Message"), ["Outreach Suppressed?"]);
 ok("Outreach Suppressed? [false] -> No Code Delivered?", outs("Outreach Suppressed?", 1), ["No Code Delivered?"]);
-ok("No Code Delivered? [false] -> Missing Recipient?", outs("No Code Delivered?", 1), ["Missing Recipient?"]);
+// POSTVISIT_STAGE_GATE_MARKER (2026-10-27) inserted `Stage Check?` after the
+// no-code gate. Its fallback (ungated steps) passes Build Message's items
+// through a Switch untouched; its `send` path re-emits them from
+// `Check Stage Verdict`. Both routes into Missing Recipient? are pinned.
+ok("No Code Delivered? [false] -> Stage Check?", outs("No Code Delivered?", 1), ["Stage Check?"]);
+ok("Stage Check? [fallback] -> Missing Recipient? (ungated path)", outs("Stage Check?", 2), ["Missing Recipient?"]);
+ok("Stage Verdict? [send] -> Missing Recipient?", outs("Stage Verdict?", 0), ["Missing Recipient?"]);
+ok("Stage Verdict? [defer] -> Loop Back (SplitInBatches must advance)", outs("Stage Verdict?", 2), ["Loop Back"]);
 ok("No Code Delivered? [true] -> Mark Step Skipped (No Code)", outs("No Code Delivered?"), ["Mark Step Skipped (No Code)"]);
 ok("Mark Step Skipped (No Code) -> Loop Back", outs("Mark Step Skipped (No Code)"), ["Loop Back"]);
 ok("Missing Recipient? [true] -> Mark Step Skipped", outs("Missing Recipient?"), ["Mark Step Skipped"]);

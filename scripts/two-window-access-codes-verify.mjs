@@ -142,6 +142,13 @@ async function main() {
   }
   eq("A9  showing already in the past: NOT ready (safety net)", runFindReady([row(-0.5)]).length, 0);
   eq("A10 missing showing_time: excluded", runFindReady([row(0.5, { showing_time: "" })]).length, 0);
+  // DISPATCH_ONE_PER_TICK_MARKER (2026-10-27): every downstream node reads
+  // .first(), so more than one ready row would text the first lead N times.
+  {
+    const out = runFindReady([row(1.5, { booking_uid: "later" }), row(0.5, { booking_uid: "soonest" }), row(1.0, { booking_uid: "mid" })]);
+    ok("A11 three ready rows: exactly ONE is handed to the loop, the soonest",
+      out.length === 1 && out[0].booking_uid === "soonest", JSON.stringify(out.map((r) => r.booking_uid)));
+  }
 
   // ── B. Build Showing Row ────────────────────────────────────────────────
   section("B. Build Showing Row — booking-time due flags");

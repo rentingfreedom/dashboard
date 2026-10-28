@@ -1401,6 +1401,29 @@ match (2026-07-27):
 Re-verify with `node scripts/fub-stage-counts.mjs`. Not every smart list is a pure
 stage filter, so this holds for the two gated lists, not as a general rule.
 
+### Stage renamed — `STAGE_RENAME_APPLICATIONS_MARKER` (2026-10-27)
+
+**`Tenant Still Looking For Rental` is now `Potential Tenant with Applications`** —
+renamed in FUB by the client, unannounced, and every gate compares stage NAMES, so the
+13 people in it silently fell out of scope. Nothing was lost (one blocked execution,
+for a lead already served). Fixed the same evening:
+
+- `allowed_stages` lists **both** names; `rental_application_stage` is the new name, so
+  new Zillow applicants are created there (client decision, same day).
+- The four Identity Gate nodes that hardcode the list (`Trash Transition Watcher`,
+  `In Gated Scope?`, `Retry Decision`, `Build Sheets-Unavailable Alert`) accept both.
+  No other workflow and nothing in `src/` hardcodes the name — inventoried live.
+
+> **A FUB stage rename is a breaking change here.** Accept both names first, rename in
+> FUB second, drop the old name last. The old name is still listed; drop it once settled.
+
+```bash
+node scripts/n8n-stage-rename-applications.mjs [--apply] [--revert --apply]
+```
+Backup `n8n/BEFORE-stage-rename-applications/` (also `settings-before.json`, the two
+Settings values before the change). Verified live, execution 74538: `In Gated Scope?`
+read the new stage and returned `inScope: true`.
+
 > **`Tenant Initial Inquiry` really is the stage named `Tenant Inquiry Lead (Do Not
 > Contact)`.** Confirmed intentional 2026-07-28 — the "(Do Not Contact)" refers to
 > the client's own manual follow-up practice, not to this automation. **Do not read
@@ -1416,6 +1439,7 @@ FUB Person:
 | `L13GUyrWbjSJwn8p` Identity Gate | `Check Guards` | `proceed = false`, `stage_not_allowed:<stage>` |
 | `JDsKrVRHf9TEVj7j` Inquiry flow | `Resolve Inquiry` | row still recorded, `link_sent = "skipped_stage_gate"` |
 | `UbO0l29GtILMm1sP` Sweep | `Check & Build Message` | bails `stage_not_allowed` |
+| `3hGnl6mPnu2AMbZ1` Cal Cron Poll | `Stage Check?` → `Check Stage Verdict` | showings only; post-visit on `postvisit_followup_stages` — see `POSTVISIT_STAGE_GATE_MARKER` |
 
 ```bash
 node scripts/n8n-add-stage-gate.mjs --apply      # idempotent, STAGE_GATE_MARKER
@@ -1599,7 +1623,8 @@ obvious design, both found by reading the live code:**
 This layer fails **open** (the opposite of layer 1): it blocks only on a positive,
 verified rejection signal.
 
-> **Pre-existing defect, surfaced not fixed.** That same `.first()` chain means two
+> **MITIGATED 2026-10-27 by `DISPATCH_ONE_PER_TICK_MARKER`** — `Find Ready Showings`
+> now hands the loop one row per tick. Original note: **Pre-existing defect, surfaced not fixed.** That same `.first()` chain means two
 > showings ready in the *same* 5-minute tick produce a duplicate Populife code and
 > duplicate SMS for the first, and delay the second by one tick. It has not fired —
 > person 2712's two bookings on 2026-09-01 were 15 minutes apart and the first was
@@ -1991,6 +2016,49 @@ stamped `blocked_no_lockbox` are not rewritten** and stay inert forever.
 > run: three mutations made the verifier **crash** rather than report, silently
 > skipping every assertion after the crash point. Hence the `at()` accessor there.
 > Re-run it after any edit to the builder or the verifier.
+
+### Assigning a lockbox releases parked tours — item A (2026-10-27, dashboard UNDEPLOYED)
+
+Parking (above) never un-parked: a lockbox assigned later left every booking made in
+the gap dead, and the operator had to work around it by hand (1173 Camden Street,
+10/28). Access Dispatch reads `populife_lock_id` from the **Showings row**, not
+Properties, and throws on an empty one — so a parked row a reschedule had put back to
+`scheduled` (Ellie Leimberger, 11/1) was also going to fail.
+
+`assignLockbox` now calls **`releaseParkedShowings`** (`showings-repository.ts`) after
+the property write: that property's **future** rows that are `blocked_no_lockbox`, or
+`scheduled` with an empty lock id, get the lock id and `status = scheduled`, one
+`showing.unparked` audit row each. Never touched: `blocked_rejected`, `cancelled`,
+`code_sent`, past or unparseable times. Best-effort — a failure is logged and the
+assignment still succeeds. The dialog's toast reports the count. The dispatch cron
+sends on its next tick (immediately if a window has passed). No n8n change, no env
+var. A cancelled parked booking is safe: `Find Showing (Cancel)` matches on
+`booking_uid` before status.
+
+> **Not a backstop in the sweep, deliberately** — that would have repaired Camden,
+> which the operator was handling by hand, and added a second writer. **Re-assigning
+> Camden's lockbox after deploy WILL release its rows.**
+
+Live-tested 2026-10-27 on synthetic rows (the real function via `jiti`, 9 assertions
+incl. idempotency, rows deleted after; two audit rows from that test remain).
+
+### Dispatch one showing per tick — `DISPATCH_ONE_PER_TICK_MARKER` (2026-10-27, APPLIED)
+
+**Prerequisite to item A.** Four dispatch nodes read `$('Find Ready Showings').first()`
+inside a batchSize-1 loop, so N rows ready in one tick texted the **first** lead N times
+(N Populife codes) and delayed the rest — the defect recorded under the access-rejection
+backstop. A bulk release lines rows up on purpose. `Find Ready Showings` now sorts
+soonest-first and returns **one** row; `.first()` is correct by construction and no
+other node changed. Cost: simultaneous showings dispatch 5 minutes apart, logged as
+`[dispatch-one-per-tick]`. The immediate-dispatch webhook shares the node.
+
+```bash
+node scripts/n8n-dispatch-one-per-tick.mjs [--apply] [--revert --apply]
+```
+Backup `n8n/BEFORE-dispatch-one-per-tick/`. `two-window-access-codes-verify.mjs` A11
+pins it (red against the pre-fix code); the 5 two-window mutations, lockbox-park (64)
+and rejection-cancel (73) still pass. **If the `.first()` references are ever rewritten
+to `.item`, this can be lifted** — and the A-2 gate must move with them.
 
 ### Two-window access codes — `ACCESS_CODE_TWO_WINDOW_MARKER` (item 3, 2026-09-28)
 
@@ -3706,6 +3774,61 @@ fire, which is the review-request behaviour this gate exists to stop.
 > (`cal-bookings-clear-followup-backlog.mjs`). That proves nothing about the gate, which
 > is why the verifier and the mutation suite carry the weight here. Same shape as the
 > A-2 and Cal Booking Reminders previews.
+
+### Stage-gated showing messages — `POSTVISIT_STAGE_GATE_MARKER` (2026-10-27, APPLIED)
+
+**The Cron Poll was the one lead-facing path that never read FUB**, so it ignored stage
+and trash entirely — Charles Frierson (3002) got day-1/day-2 bumps after being moved to
+Cold. Client rule, 2026-10-27 meeting: leads stay in `Tenant Inquiry Lead (Do Not
+Contact)` through ID, link and code; once they apply Nicole moves them **by hand** to
+`Potential Tenant with Applications`, and the "still interested? apply" bumps stop.
+
+| Step (showing, invitee) | Allowed stages | No `fub_person_id` | FUB unreadable |
+|---|---|---|---|
+| pre-visit (`anchor: start`) | `allowed_stages` | **send** (client decision) | defer |
+| post-visit (`anchor: end`) | `postvisit_followup_stages` (new key) | skip | defer |
+| consult / walkthrough / staff steps | **never gated** | — | — |
+
+> **Consults and walkthroughs are owner leads** (`PM Lead Onboarding`), outside both
+> tenant stages — gating them would mute every owner's reminders. Same lesson as A-2.
+
+**Empty stage list = that side's gate off**, `allowed_stages`' semantics. A FUB stage
+rename is a **cell edit** in `postvisit_followup_stages`, not a workflow change.
+
+```
+... No Code Delivered? [false] -> Stage Check? (Switch on stage_check)
+      fub       -> FUB - Get Person (Stage) -> Check Stage Verdict -> Stage Verdict?
+                     send -> Missing Recipient? · skip -> Mark Step Skipped (Stage) · fallback(defer) -> Loop Back
+      no_person -> Mark Step Skipped (Stage) -> Loop Back
+      fallback  -> Missing Recipient?          (ungated: unchanged path)
+```
+
+- **Gotcha 19:** `Missing Recipient?`/`Channel?`/the sends read `$json`, so
+  `Check Stage Verdict` re-emits `$('Build Message').item.json`.
+- **Last in the chain**, after suppression and the no-code gate, so FUB is only called
+  for a step that would otherwise send. `Process One at a Time` is batchSize 1 — no fan-out.
+- **`skipped_stage_gate` is in the explicit `alreadySent` allowlist** (the
+  NO_PHONE_SKIP trap). The `Stage Verdict?` fallback goes to `Loop Back` so a
+  verdict-less item still advances SplitInBatches.
+- Only a digits-only id reaches FUB (gotcha 17); a wrong-id or list-shaped response
+  defers; a 404 skips. **A FUB merge keeps the old record under its own id** (2948 →
+  `Trash`, verified 2026-10-27), so a merge reads as an ordinary not-allowed stage.
+- Each step is judged **when due**: a lead moved back into the Inquiry stage before
+  day 2 gets day 2.
+
+```bash
+node scripts/postvisit-stage-gate-setup.mjs [--apply]     # postvisit_followup_stages
+node scripts/n8n-add-postvisit-stage-gate.mjs [--apply] [--revert --apply] [--emit-js <dir>]
+```
+Backup `n8n/BEFORE-postvisit-stage-gate/`. **`--revert` does not rewrite rows stamped
+`skipped_stage_gate`** — those steps fire on the next tick. A read-only preview of the
+next three days at apply time changed **nothing** for current leads (every due post-visit
+step was already suppressed or no-code). `no-phone-skip-verify` and
+`showing-code-gate-verify` now pin the chain through `Stage Check?` (the latter also had
+two stale pre-existing breaks fixed: an unstubbed `Read Properties (Cron)` and its C2b
+edge). **Not yet observed on a real send** — the first showing whose lead is in
+`Potential Tenant with Applications` 24h after the tour is the live test: expect
+`skipped_stage_gate` in its `followup_1day_*` cells.
 
 ### Immediate Sends booking idempotency (2026-08-06, was launch-blocking)
 
