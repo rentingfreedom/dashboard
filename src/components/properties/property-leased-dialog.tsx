@@ -115,6 +115,7 @@ export function PropertyLeasedDialog({
             personId,
             cancelled: false,
             suppressed: false,
+            suppressionScope: null,
             notified: false,
             notifyError: err instanceof Error ? err.message : "Request failed",
             skippedReason: null,
@@ -239,10 +240,9 @@ export function PropertyLeasedDialog({
               )}
 
               <div className="rounded border border-sky-300 bg-sky-50 p-2 text-xs text-sky-900 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200">
-                Cancelling and stopping outreach happen immediately. Sending the &ldquo;this home is
-                gone&rdquo; text and email depends on an n8n workflow that is not built yet — until
-                it is, those messages will NOT go out, and each lead below will show that in its
-                result.
+                Each lead you leave checked gets the &ldquo;this home is gone&rdquo; text and email
+                straight away, and Nicole gets a Follow Up Boss task to offer them another home. If
+                a message can&rsquo;t be sent, that lead&rsquo;s result will say so.
               </div>
 
               {confirming && (
@@ -279,7 +279,8 @@ export function PropertyLeasedDialog({
                           ? `skipped — ${o.skippedReason}`
                           : [
                               o.cancelled && "cancelled",
-                              o.suppressed && "stopped",
+                              o.suppressed &&
+                                (o.suppressionScope === "property" ? "stopped for this property" : "stopped"),
                               o.notified ? "notified" : `not notified${o.notifyError ? ` (${o.notifyError})` : ""}`,
                             ]
                               .filter(Boolean)
@@ -345,6 +346,12 @@ function LeadRow({
           {lead.stage || "(stage unknown)"} ·{" "}
           {lead.hasCancelableBooking ? "showing will be cancelled + told the home is gone" : "told the home is gone"}
         </div>
+        {lead.otherOpenInquiries.length > 0 && (
+          <div className="text-[11px] text-sky-700 dark:text-sky-300">
+            Also interested in {lead.otherOpenInquiries.map((o) => o.address).join(", ")} — messages
+            stop for this property only.
+          </div>
+        )}
       </div>
       <input type="checkbox" checked={checked} onChange={onToggle} className="mt-1 shrink-0" />
     </li>

@@ -54,7 +54,7 @@ workflows should read this file first.
 | `PKdaOsoHatbuRTfZ` | Missed Access Code Sweep | Hourly. Reconciles Cal Bookings -> Showings and texts staff when a showing has, or will have, no door code. **ACTIVE since 2026-09-15.** `n8n/missed-code-sweep.json`. |
 | `87TEvHQzAv5rnuMT` | Funnel Daily Snapshot | Daily 23:30 UTC. One POST to the dashboard, which appends a `Funnel_Snapshots` row. Computes NOTHING itself and reads no Sheet. **ACTIVE since 2026-09-17.** |
 | `W6PoSadMxnoHwxhG` | Delete Property | Sheets `anyUpdate` poll (**every 5 min**) on the SAME tab → filter `active == "Delete"` → deletes the cal.com event type, the Google resource, and the sheet row. **ACTIVE.** |
-| `3tUbcCzaBqYisAHr` | Property Leased Notify | Webhook `property-leased-notify`. One item per call — invoked by the dashboard's own paced `leased-execute` loop, not a poll. Sends the "this home is gone" SMS + email for Item 07, 3b, greets the lead by first name, and logs every send to FUB. **ACTIVE, live-tested 2026-09-25 and 2026-09-26 (first name). Copy CLIENT-APPROVED 2026-09-28.** |
+| `3tUbcCzaBqYisAHr` | Property Leased Notify | Webhook `property-leased-notify`. One item per call — invoked by the dashboard's own paced `leased-execute` loop, not a poll. Sends the "this home is gone" SMS + email for Item 07, 3b, greets the lead by first name, and logs every send to FUB, plus a FUB task for Nicole per lead (`PROPERTY_LEASED_TASK_MARKER`). **ACTIVE, live-tested 2026-09-25 and 2026-09-26 (first name). Copy CLIENT-APPROVED 2026-09-28.** |
 | `w8VkzN2V9TLFReXw` | No Response Follow-Up | Hourly. Part 5 — 2nd ID/booking reminder → Nicole phone-call task → +4d send-off SMS/email (checks `Outreach_Suppression`) → +1d No Response Trash tag + move to Cold. **ACTIVE since 2026-10-27**, go-forward only: `followup_start_at` was moved to the activation moment (the build-time value had gone stale and would have pulled in a 60-person backlog), `followup_enabled` TRUE. `node scripts/n8n-activate-no-response-followup.mjs [--revert --apply]`, backup `n8n/BEFORE-followup-activation/`. Copy CLIENT-APPROVED 2026-09-28. **Fixed the same day, before any flow could close:** a closed (responded/cancelled) flow let the SAME 2nd reminder open a new one next tick, i.e. a fresh Nicole task every few days for leads who had verified — `FOLLOWUP_RETRIGGER_MARKER`, `node scripts/n8n-fix-followup-retrigger.mjs [--revert --apply]`, backup `n8n/BEFORE-followup-retrigger/`. |
 
 ### Funnel Daily Snapshot — `87TEvHQzAv5rnuMT` (2026-09-16, ACTIVE since 2026-09-17)
@@ -1780,6 +1780,45 @@ own Cal.com link is the live test.
 > needs a way to create that new inquiry — open, not yet built; see the
 > "Moving a lead to a new property" note below Part 6 in
 > `docs/scope-outreach-control.md`.
+
+## A property leases — scoped stop + Nicole task — item D (2026-10-28)
+
+**D(a), dashboard (`LEASED_SCOPED_SUPPRESSION_MARKER`, `leased-property-execute.ts`).**
+The leased action used to write one person-wide `all` row per lead, silencing their
+other homes too. Now, per lead: **no other open inquiry** → one `all` row (unchanged);
+**another open inquiry** → four rows **keyed to the leased property**, scopes
+`cal_link`, `booking_nudges`, `cal_reminders_previsit`, `cal_reminders_postvisit`.
+
+> **Not `all` + property_key.** The Identity Gate, Identity Reminders, Identity
+> Restart and No Response Follow-Up checks ignore `property_key`, so that row would
+> still stop ID verification person-wide. Only those four scopes are checked with a
+> property. **Residue, accepted:** the follow-up's booking-track send-off checks
+> `booking_nudges` with no property, so a scoped row still stops that one message.
+
+"Open" (`isOpenElsewhere`, `leased-property-repository.ts`): another property, by
+`person_id` only, `match_status = matched`, `link_sent` not `skipped_*`, property in
+Properties and not `occupied`. Every doubt reads as closed, i.e. person-wide, i.e.
+quieter. The dialog shows "Also interested in …" per lead. Rows are written by
+`stopOutreachScopes` in **one** append + one audit row. Four `stopOutreach` calls
+would cost ~20 Sheets requests per lead on the bucket n8n shares. Live-tested
+2026-10-28 on synthetic leads (real code via jiti, notify webhook intercepted, 16
+assertions, rows deleted).
+
+**D(b), n8n (`PROPERTY_LEASED_TASK_MARKER`, `3tUbcCzaBqYisAHr`).** `Build Messages` →
+`Build Leased Task` → `FUB - Create Leased Task`, a third parallel branch beside
+`Has Phone?`/`Has Email?`. Shape and due date copied from `LEAD_CANCEL_MARKER`.
+Title = `property_leased_task_name` (approved: "Property leased - offer other homes")
++ `": <address>"`. No task (logged) for a non-digit person id or a missing
+`fub_nicole_user_id`. One task per notified lead, `booked` or `general`.
+
+```bash
+node scripts/property-leased-task-setup.mjs [--apply]
+node scripts/n8n-add-property-leased-task.mjs [--apply] [--revert --apply] [--emit-js <dir>]
+node scripts/property-leased-task-verify.mjs [--js <dir>]     # 26 live (16 with --js)
+```
+Backup `n8n/BEFORE-property-leased-task/`. Applied 2026-10-28; ET-date and id checks
+confirmed red under mutation. **Live-tested 2026-10-28**, execution 75243: test contact 2652 with no phone or email, so only the task branch ran. FUB task 10741 was created on Nicole, Follow Up, due the ET date, then deleted. D(c), the new
+notice copy, is Settings cell edits only and is waiting on the client.
 
 ## Per-category booking notifications (B, built 2026-09-01, APPLIED)
 

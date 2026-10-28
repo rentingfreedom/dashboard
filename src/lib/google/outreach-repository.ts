@@ -1,4 +1,4 @@
-import { readSheet, appendRow, updateSpecificColumns, rowsToObjects } from "./sheets-client";
+import { readSheet, appendRow, appendRows, updateSpecificColumns, rowsToObjects } from "./sheets-client";
 import { writeAuditLog } from "./audit-repository";
 import { invalidateInFlightCache } from "./in-flight-repository";
 import { SEQUENCE_KEYS, type SequenceKey, suppressionFor, type SuppressionRow } from "@/lib/metrics/in-flight";
@@ -98,6 +98,65 @@ export async function stopOutreach(input: StopOutreachInput, actor: string): Pro
     property_key: values.property_key,
     before_json: "",
     after_json: JSON.stringify(values),
+    source: "dashboard",
+    notes: input.reason ?? "",
+  });
+
+  invalidateInFlightCache();
+}
+
+/**
+ * stopOutreach for several scopes at once: one row per scope, written in ONE
+ * append, with ONE audit row. Calling stopOutreach once per scope costs ~5
+ * Sheets requests each (read, append, audit), on the bucket n8n shares; the
+ * leased-property action writes four rows per lead and runs over many leads.
+ */
+export async function stopOutreachScopes(
+  input: Omit<StopOutreachInput, "scope"> & { scopes: SuppressionScope[] },
+  actor: string
+): Promise<void> {
+  if (!input.scopes.length) throw new Error("stopOutreachScopes needs at least one scope.");
+  const rows = await readSheet(SUPPRESSION);
+  const { headers } = rowsToObjects(rows);
+  if (!headers.length) {
+    throw new Error(
+      `${SUPPRESSION} has no headers — run scripts/outreach-suppression-setup.mjs --apply`
+    );
+  }
+
+  const now = new Date().toISOString();
+  const base: Record<string, string> = {
+    person_id: String(input.personId ?? "").trim(),
+    reason: input.reason ?? "",
+    set_by: actor,
+    set_at: now,
+    expires_at: input.expiresAt ?? "",
+    notes: input.notes ?? "",
+    phone: input.phone ?? "",
+    email: input.email ?? "",
+    property_key: input.propertyKey ?? "",
+  };
+  if (!base.person_id && !base.phone && !base.email) {
+    throw new Error("A suppression needs at least one of person_id, phone or email to match on.");
+  }
+
+  await appendRows(
+    SUPPRESSION,
+    input.scopes.map((scope) => {
+      const values: Record<string, string> = { ...base, scope };
+      return headers.map((h) => values[h] ?? "");
+    })
+  );
+
+  await writeAuditLog({
+    timestamp: now,
+    actor,
+    action: "outreach.stopped",
+    entity_type: "lead",
+    entity_id: base.person_id || base.phone || base.email,
+    property_key: base.property_key,
+    before_json: "",
+    after_json: JSON.stringify({ ...base, scopes: input.scopes }),
     source: "dashboard",
     notes: input.reason ?? "",
   });

@@ -6,18 +6,18 @@
  * 1. CANCEL any live, future, still-`scheduled` showing — via `cancelBooking`,
  *    the same Cal.com call A-2 and the outreach table's Stop dialog already
  *    use.
- * 2. SUPPRESS every future automated sequence — via `stopOutreach`
- *    (`scope: "all"`), the same suppression tab every other lead-facing send
- *    path already reads.
+ * 2. SUPPRESS future automated outreach — via `stopOutreachScopes`, the same
+ *    suppression tab every other lead-facing send path already reads. How
+ *    wide depends on the lead (LEASED_SCOPED_SUPPRESSION_MARKER, below).
  * 3. NOTIFY the lead that the home is gone — POSTs to a NEW n8n webhook,
  *    `RentingFreedom Production - Property Leased Notify`
  *    (`scripts/n8n-create-property-leased-notify.mjs`), built for this and
  *    live-tested end to end on 2026-09-25 (both `messageState` branches, real
  *    Twilio + Gmail sends, verified via the execution's own node output —
  *    `status: "queued"` with no `error_code`, and a real Gmail message id
- *    with a `SENT` label). **The copy is still a DRAFT**, not yet reviewed by
- *    the client — good enough to prove the pipeline, not to send to a real
- *    lead; see `scripts/property-leased-setup.mjs`. If the webhook call ever
+ *    with a `SENT` label). Copy client-approved 2026-09-28; the same
+ *    workflow also creates a FUB task for Nicole per lead
+ *    (PROPERTY_LEASED_TASK_MARKER). If the webhook call ever
  *    fails (workflow deactivated, credential revoked, etc.) it is reported
  *    per lead as `notifyError` rather than thrown — cancel and suppress still
  *    happen and are NOT rolled back, because a lead whose booking is
@@ -62,7 +62,7 @@
 import { getLeasedPropertyPlan, type LeasedPropertyLead } from "./leased-property-repository";
 import { cancelBooking } from "@/lib/cal/client";
 import { markCancelledByStaff } from "./cal-bookings-repository";
-import { stopOutreach } from "./outreach-repository";
+import { stopOutreachScopes, type SuppressionScope } from "./outreach-repository";
 import { writeAuditLog } from "./audit-repository";
 
 const N8N_BASE = process.env.N8N_BASE_URL ?? "https://automation.rentingfreedom.com";
@@ -73,10 +73,34 @@ export const LEASED_EXECUTE_CHUNK = 4;
 /** Between leads within one call. Cancel + suppress are direct API calls, not Sheets-quota-heavy on this side; conservative pacing is still the house default (see release-stranded.ts) for whatever the notify webhook costs once built. */
 const PACE_MS = 6000;
 
+/**
+ * LEASED_SCOPED_SUPPRESSION_MARKER (item D(a), 2026-10-28). A lead with no
+ * other open inquiry gets one person-wide `all` row, the original behaviour:
+ * nothing is left to contact them about. A lead who still has one gets one row
+ * per PROPERTY-AWARE scope, scoped to the leased property, so their other homes
+ * and their ID verification carry on.
+ *
+ * Not `scope: "all"` + property_key: the identity, identity-reminder and
+ * No Response Follow-Up checks ignore property_key entirely, so that row would
+ * still stop ID verification for the whole person. Only the scopes below are
+ * checked with a property by n8n (sweep, inquiry flow, booking nudges, Cal
+ * reminders). Known residue, accepted: the No Response Follow-Up booking-track
+ * send-off checks `booking_nudges` with no property, so a scoped row still
+ * suppresses that one message person-wide.
+ */
+const LEASED_PROPERTY_SCOPES: SuppressionScope[] = [
+  "cal_link",
+  "booking_nudges",
+  "cal_reminders_previsit",
+  "cal_reminders_postvisit",
+];
+
 export interface LeasedExecuteOutcome {
   personId: string;
   cancelled: boolean;
   suppressed: boolean;
+  /** "person" = one person-wide `all` row; "property" = scoped to the leased property. */
+  suppressionScope: "person" | "property" | null;
   notified: boolean;
   notifyError: string | null;
   skippedReason: string | null;
@@ -110,6 +134,7 @@ export async function executeLeasedPropertyChunk(
         personId,
         cancelled: false,
         suppressed: false,
+        suppressionScope: null,
         notified: false,
         notifyError: null,
         skippedReason: "No longer has an open inquiry on this property.",
@@ -125,6 +150,7 @@ export async function executeLeasedPropertyChunk(
         personId,
         cancelled: false,
         suppressed: false,
+        suppressionScope: null,
         notified: false,
         notifyError: null,
         skippedReason: `Trashed (${lead.trashTag ?? "no tag"}) — already blocked on every send path.`,
@@ -136,6 +162,7 @@ export async function executeLeasedPropertyChunk(
         personId,
         cancelled: false,
         suppressed: false,
+        suppressionScope: null,
         notified: false,
         notifyError: null,
         skippedReason: "Now reads as the likely tenant — refusing to message them.",
@@ -195,11 +222,18 @@ async function actOnOne(
   }
 
   let suppressed = false;
+  const scoped = lead.otherOpenInquiries.length > 0;
+  const suppressionScope: LeasedExecuteOutcome["suppressionScope"] = scoped ? "property" : "person";
+  console.log(
+    `[leased-execute] ${lead.personId}: suppression ${suppressionScope}` +
+      (scoped ? ` (still open: ${lead.otherOpenInquiries.map((o) => o.propertyKey).join(", ")})` : "")
+  );
   try {
-    await stopOutreach(
+    await stopOutreachScopes(
       {
         personId: lead.personId,
-        scope: "all",
+        scopes: scoped ? LEASED_PROPERTY_SCOPES : ["all"],
+        propertyKey: scoped ? propertyKey : undefined,
         reason: `Property leased: ${propertyAddress}`,
         phone: lead.phone,
         email: lead.email,
@@ -236,5 +270,13 @@ async function actOnOne(
     console.error(`[leased-execute] notify failed for ${lead.personId}:`, notifyError);
   }
 
-  return { personId: lead.personId, cancelled, suppressed, notified, notifyError, skippedReason: null };
+  return {
+    personId: lead.personId,
+    cancelled,
+    suppressed,
+    suppressionScope: suppressed ? suppressionScope : null,
+    notified,
+    notifyError,
+    skippedReason: null,
+  };
 }

@@ -32,7 +32,7 @@
  * read used everywhere else in this dashboard).
  */
 import { readSheet, rowsToObjects } from "./sheets-client";
-import { getPropertyByKey } from "./properties-repository";
+import { listProperties } from "./properties-repository";
 import type { Property } from "@/lib/types";
 import type { InquiryRow, BookingRow } from "@/lib/metrics/funnel";
 import { parseTime } from "@/lib/metrics/funnel";
@@ -81,6 +81,12 @@ export interface LeasedPropertyLead {
   messageState: LeasedMessageState;
   /** Pre-checked unless trashed or the likely tenant. */
   defaultIncluded: boolean;
+  /**
+   * Other properties this lead still has an OPEN inquiry on (see
+   * `isOpenElsewhere`). Empty = this was their only one, so their outreach is
+   * stopped person-wide; non-empty = it is stopped for this property only.
+   */
+  otherOpenInquiries: { propertyKey: string; address: string }[];
 }
 
 export interface LeasedPropertyPlan {
@@ -92,10 +98,10 @@ export interface LeasedPropertyPlan {
   doorLoopError: string | null;
 }
 
-async function readInquiriesFor(propertyKey: string): Promise<InquiryRow[]> {
+/** Every Inquiries row, all properties — the leased one is filtered by the caller. */
+async function readAllInquiries(): Promise<InquiryRow[]> {
   const objs = await objectsOf(INQUIRIES);
   return objs
-    .filter((o) => String(o.property_key ?? "").trim() === propertyKey)
     .map((o) =>
       pick<InquiryRow>(o, [
         "person_id",
@@ -156,15 +162,52 @@ async function resolveTenantSignal(
   }
 }
 
+/**
+ * Does this Inquiries row, on ANOTHER property, still count as something the
+ * lead may hear from us about? Decides whether a leased lead's suppression is
+ * person-wide or scoped to the leased property (see leased-property-execute.ts).
+ *
+ * Doubt resolves to "not open": that direction writes a person-wide stop, i.e.
+ * the lead hears LESS, never more. So a `skipped_*` row (trash, stage, test,
+ * outreach-suppressed, all recorded non-sends), an unmatched row, a property
+ * missing from Properties, and an occupied property all count as closed.
+ */
+function isOpenElsewhere(row: InquiryRow, leasedKey: string, propsByKey: Map<string, Property>): boolean {
+  const key = String(row.property_key ?? "").trim();
+  if (!key || key === leasedKey) return false;
+  if (norm(row.match_status) !== "matched") return false;
+  if (norm(row.link_sent).startsWith("skipped_")) return false;
+  const prop = propsByKey.get(key);
+  if (!prop) return false;
+  return norm(prop.status) !== "occupied";
+}
+
 export async function getLeasedPropertyPlan(propertyKey: string): Promise<LeasedPropertyPlan> {
-  const property = await getPropertyByKey(propertyKey);
+  const properties = await listProperties();
+  const propsByKey = new Map(properties.map((p) => [p.property_key, p]));
+  const property = propsByKey.get(propertyKey);
   if (!property) throw new Error(`Unknown property ${propertyKey}`);
 
-  const [inquiries, bookings, tenantSignal] = await Promise.all([
-    readInquiriesFor(propertyKey),
+  const [allInquiries, bookings, tenantSignal] = await Promise.all([
+    readAllInquiries(),
     readBookings(),
     resolveTenantSignal(property),
   ]);
+  const inquiries = allInquiries.filter((r) => String(r.property_key ?? "").trim() === propertyKey);
+
+  // Other open inquiries per person, deduped by property. Keyed on person_id
+  // only: a phone/email arm could pull in a different FUB person sharing a
+  // number (every test contact shares Andrew's), and over-matching here means
+  // NOT stopping someone person-wide — the wrong direction to err in.
+  const openElsewhere = new Map<string, Map<string, string>>();
+  for (const row of allInquiries) {
+    const id = String(row.person_id ?? "").trim();
+    if (!id || !isOpenElsewhere(row, propertyKey, propsByKey)) continue;
+    const key = String(row.property_key).trim();
+    const props = openElsewhere.get(id) ?? new Map<string, string>();
+    props.set(key, propsByKey.get(key)?.street_address || row.property_address || key);
+    openElsewhere.set(id, props);
+  }
 
   // One row per PERSON — a lead may have inquired more than once on the same
   // property historically; only one message goes out. Later rows win for
@@ -257,6 +300,9 @@ export async function getLeasedPropertyPlan(propertyKey: string): Promise<Leased
       bookingStart: hasCancelableBooking ? booking!.start_time : null,
       messageState: hasCancelableBooking ? "booked" : "general",
       defaultIncluded: !trashed && !likelyTenant,
+      otherOpenInquiries: [...(openElsewhere.get(personId) ?? new Map<string, string>())].map(
+        ([key, address]) => ({ propertyKey: key, address })
+      ),
     });
   }
 

@@ -72,6 +72,25 @@ export async function appendRow(tabName: string, row: string[]): Promise<number>
   return match ? parseInt(match[1]) : -1;
 }
 
+/**
+ * Append several rows in ONE request. Same caveats as appendRow. Use it where
+ * one action writes a known set of rows, so the action costs one Sheets
+ * request rather than one per row.
+ */
+export async function appendRows(tabName: string, rows: string[][]): Promise<void> {
+  if (!rows.length) return;
+  const sheets = getSheetsClient();
+  const spreadsheetId = getSpreadsheetId();
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: `${tabName}!A1`,
+    valueInputOption: "USER_ENTERED",
+    insertDataOption: "INSERT_ROWS",
+    requestBody: { values: rows },
+  });
+}
+
 /** Convert a 1-based column number to A1 letter notation (1→A, 27→AA, etc.) */
 function columnToLetter(col: number): string {
   let result = "";
